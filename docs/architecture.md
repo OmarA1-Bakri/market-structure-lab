@@ -55,3 +55,16 @@ run writes:
 
 The artifact writer is intentionally small. It records outputs; it does not schedule jobs, optimize
 strategies, or own research logic.
+
+## Auction engine
+
+Use `src.auction.AuctionEngine` for candle-by-candle deterministic state updates. The first engine
+version builds an OHLCV-derived volume profile on each update and exposes:
+
+- point of control
+- value area low/high
+- close location relative to value
+
+The current volume-profile assumption is deliberately simple and auditable: without trade-level
+data, each candle's volume is distributed equally across every price bin touched by its low-high
+range. Replace this only when better source data is available and covered by regression tests.

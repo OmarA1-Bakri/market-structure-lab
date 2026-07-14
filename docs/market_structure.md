@@ -16,3 +16,16 @@ Reference notes for market-structure concepts, data definitions, and modeling as
 
 These definitions should become deterministic code in `src/` before probabilistic models or
 strategy research are introduced.
+
+## Current deterministic state model
+
+`src.auction.AuctionLocation` classifies the latest close as one of:
+
+- below value
+- lower value
+- point of control
+- upper value
+- above value
+
+These states are intentionally simple. They provide the first transition-analysis vocabulary before
+more complex acceptance, rejection, balance, and imbalance features are introduced.

@@ -21,8 +21,8 @@ Database
 
 Profiles
 
-- build volume profile engine
-- build value area engine
+- build deterministic OHLCV-derived volume profile engine
+- build deterministic value area engine
 - detect HVN/LVN regions
 
 Structure
@@ -32,6 +32,7 @@ Structure
 
 State Modelling
 
+- classify deterministic close location relative to value
 - model market state transitions
 - evaluate probabilistic state models
 
