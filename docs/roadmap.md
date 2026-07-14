@@ -23,11 +23,12 @@ Profiles
 
 - build deterministic OHLCV-derived volume profile engine
 - build deterministic value area engine
-- detect HVN/LVN regions
+- detect local HVN/LVN regions
 
 Structure
 
 - build auction structure summaries
+- compare value migration between profiles
 - track persistent nodes over time
 
 State Modelling

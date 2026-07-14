@@ -29,3 +29,19 @@ strategy research are introduced.
 
 These states are intentionally simple. They provide the first transition-analysis vocabulary before
 more complex acceptance, rejection, balance, and imbalance features are introduced.
+
+## Current structural features
+
+`src.structure.detect_profile_nodes` detects local HVNs and LVNs from adjacent price-bin volume.
+Endpoints and flat ties are ignored until wider plateau rules are explicitly researched.
+
+`src.structure.compare_value_migration` compares two profiles and classifies value migration as:
+
+- lower
+- overlapping lower
+- overlapping
+- overlapping higher
+- higher
+
+This gives transition-analysis code a deterministic vocabulary for value migration before any
+probabilistic modelling is introduced.

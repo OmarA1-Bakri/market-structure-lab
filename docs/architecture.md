@@ -68,3 +68,16 @@ version builds an OHLCV-derived volume profile on each update and exposes:
 The current volume-profile assumption is deliberately simple and auditable: without trade-level
 data, each candle's volume is distributed equally across every price bin touched by its low-high
 range. Replace this only when better source data is available and covered by regression tests.
+
+## Structure layer
+
+Use `src.structure` for deterministic features built from volume profiles. The first structural
+features are:
+
+- local high-volume and low-volume nodes
+- point-of-control migration between profiles
+- value-area midpoint migration between profiles
+- value-area overlap width
+
+These functions are intentionally deterministic feature primitives. Statistical significance and
+transition probabilities should be estimated in later research modules using these primitives.
