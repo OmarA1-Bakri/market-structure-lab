@@ -93,3 +93,7 @@ P(next_state | current_state)
 
 Rows include support counts, so later research can filter low-observation transitions before
 claiming statistical significance.
+
+Use `src.transitions.test_transition_significance` to compare an observed transition probability
+against the unconditional base rate of the next state. The current implementation is a one-sided
+binomial tail test for enrichment; it does not correct for multiple comparisons.

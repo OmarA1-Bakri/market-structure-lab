@@ -35,6 +35,7 @@ State Modelling
 
 - classify deterministic close location relative to value
 - estimate empirical market state transitions
+- test transition enrichment against unconditional base rates
 - evaluate probabilistic state models
 
 Prediction

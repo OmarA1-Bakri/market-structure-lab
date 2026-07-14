@@ -51,3 +51,7 @@ probabilistic modelling is introduced.
 `src.transitions.estimate_transition_matrix` estimates empirical transition probabilities from any
 deterministic state sequence. It does not smooth, infer hidden states, or fit a probabilistic model.
 Those steps should only be introduced after observed deterministic transitions have enough support.
+
+`src.transitions.test_transition_significance` tests whether one observed transition is enriched
+relative to the next state's unconditional base rate. Multiple-testing correction is still a later
+research concern and should be handled before claiming a broad set of significant opportunities.
