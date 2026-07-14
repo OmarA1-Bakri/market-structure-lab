@@ -1,12 +1,15 @@
 # Market Structure Lab
 
-A lightweight quantitative research platform for exploring cryptocurrency market structure with Python, PostgreSQL, Polars, DuckDB, and Plotly.
+A lightweight quantitative research lab for discovering statistically significant cryptocurrency
+market-structure behavior from OHLCV data.
 
 ## Project goal
 
-The long-term objective is to build a deterministic understanding of market structure before introducing trading logic. The intended sequence is:
+The long-term objective is to build a deterministic understanding of the auction process before
+introducing trading logic. The intended sequence is:
 
-Raw OHLCV data -> Volume profile -> Value area -> HVN/LVN -> Auction structure -> Market state -> Probabilistic state model -> Prediction -> Strategy.
+Raw OHLCV data -> Dataset layer -> Auction engine -> Volume profile -> Value area -> HVN/LVN ->
+Auction structure -> Auction state -> Transition analysis -> Feature discovery -> Strategy research.
 
 ## Repository layout
 
@@ -14,12 +17,13 @@ Raw OHLCV data -> Volume profile -> Value area -> HVN/LVN -> Auction structure -
 - docker/ contains database and Python container setup
 - docs/ contains architecture notes, roadmap, and research questions
 - scripts/ contains operational utilities such as database inspection
-- src/ contains research code organised by pipeline stage
+- src/ contains deterministic research code organised by pipeline stage
 - tests/ contains regression tests for the repository scaffold
 
 ## Environment
 
 This repository uses Python 3.13 and uv. It does not depend on Conda.
+`pyproject.toml` is the single dependency definition.
 
 ### Install dependencies
 
@@ -56,9 +60,41 @@ Inspect the database:
 uv run python scripts/inspect_database.py
 ```
 
+Load candles in research code:
+
+```python
+from src.datasets import load_dataset, load_symbol
+
+btc = load_symbol("BTCUSDT")
+eth = load_dataset(
+    symbol="ETHUSDT",
+    timeframe="1m",
+    start="2025-01-01",
+    end="2025-06-01",
+)
+```
+
+Save reproducible experiment output:
+
+```python
+from src.experiments import ExperimentConfig, save_experiment_result
+
+result = save_experiment_result(
+    config=ExperimentConfig(
+        run_id="value-migration-001",
+        name="Value migration baseline",
+        question="Does value migrate after imbalance?",
+        hypothesis="Accepted upside imbalance shifts later value higher.",
+    ),
+    metrics={"observations": 1250},
+    summary="Initial deterministic baseline.",
+)
+```
+
 ## Research principles
 
 - prefer small, typed, readable functions
 - keep algorithms inside src/
 - keep notebooks exploratory only
 - favour reproducibility over cleverness
+- keep SQL inside dataset modules, not experiments

@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.utils.db_inspection import build_inspection_report, get_connection_url
+from src.utils.db_inspection import build_inspection_report, get_connection_url  # noqa: E402
 
 
 def main() -> None:

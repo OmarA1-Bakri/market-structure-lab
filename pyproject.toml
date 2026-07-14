@@ -7,36 +7,24 @@ name = "market-structure-lab"
 version = "0.1.0"
 description = "Research platform for cryptocurrency market structure analysis"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "duckdb",
-    "numpy",
     "polars",
-    "scipy",
-    "numba",
     "sqlalchemy",
     "psycopg[binary]",
-    "alembic",
-    "scikit-learn",
-    "xgboost",
-    "hmmlearn",
-    "networkx",
     "plotly",
-    "matplotlib",
     "jupyterlab",
     "ipywidgets",
     "python-dotenv",
-    "pydantic",
-    "pydantic-settings",
-    "typer",
-    "tqdm",
-    "rich",
-    "orjson",
     "pytest",
     "pytest-cov",
     "ruff",
-    "mypy",
+    "mypy<2",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

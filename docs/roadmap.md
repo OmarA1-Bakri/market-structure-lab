@@ -1,5 +1,18 @@
 # Roadmap
 
+Repository Readiness
+
+- keep Python pinned to 3.13 through uv
+- keep `pyproject.toml` as the only dependency definition
+- keep notebooks exploratory and production logic in `src/`
+- maintain `docs/RESEARCH_LOG.md` as the lab notebook
+
+Dataset Layer
+
+- expose canonical OHLCV loading through `src.datasets`
+- keep SQL out of experiments and notebooks
+- preserve immutable raw data and return reproducible Polars frames
+
 Database
 
 - provision PostgreSQL locally with Docker
