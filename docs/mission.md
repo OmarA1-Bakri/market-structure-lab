@@ -1,0 +1,1 @@
+Build the most accurate deterministic model of market structure possible, then use it to discover statistically significant trading opportunities.
