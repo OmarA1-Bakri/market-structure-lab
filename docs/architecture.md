@@ -81,3 +81,15 @@ features are:
 
 These functions are intentionally deterministic feature primitives. Statistical significance and
 transition probabilities should be estimated in later research modules using these primitives.
+
+## Transition analysis
+
+Use `src.transitions` to count adjacent observed state transitions and estimate conditional
+probabilities:
+
+```text
+P(next_state | current_state)
+```
+
+Rows include support counts, so later research can filter low-observation transitions before
+claiming statistical significance.

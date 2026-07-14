@@ -45,3 +45,9 @@ Endpoints and flat ties are ignored until wider plateau rules are explicitly res
 
 This gives transition-analysis code a deterministic vocabulary for value migration before any
 probabilistic modelling is introduced.
+
+## Current transition model
+
+`src.transitions.estimate_transition_matrix` estimates empirical transition probabilities from any
+deterministic state sequence. It does not smooth, infer hidden states, or fit a probabilistic model.
+Those steps should only be introduced after observed deterministic transitions have enough support.

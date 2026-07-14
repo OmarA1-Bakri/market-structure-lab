@@ -34,7 +34,7 @@ Structure
 State Modelling
 
 - classify deterministic close location relative to value
-- model market state transitions
+- estimate empirical market state transitions
 - evaluate probabilistic state models
 
 Prediction
