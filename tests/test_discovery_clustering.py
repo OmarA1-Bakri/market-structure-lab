@@ -4,7 +4,12 @@ import math
 
 import pytest
 
-from market_structure_lab.discovery import FeatureMatrix, fit_kmeans, fit_pca
+from market_structure_lab.discovery import (
+    FeatureMatrix,
+    KMeansResult,
+    fit_kmeans,
+    fit_pca,
+)
 
 
 def _matrix(values: tuple[tuple[float, ...], ...]) -> FeatureMatrix:
@@ -15,6 +20,26 @@ def _matrix(values: tuple[tuple[float, ...], ...]) -> FeatureMatrix:
         values=values,
         dropped_null_rows=0,
     )
+
+
+def _assert_consistent_kmeans(values: tuple[tuple[float, ...], ...], result: KMeansResult) -> None:
+    for label, centroid in enumerate(result.centroids):
+        members = tuple(
+            row for row, assignment in zip(values, result.assignments) if assignment == label
+        )
+        assert members
+        means = tuple(
+            math.fsum(row[column] for row in members) / len(members)
+            for column in range(len(centroid))
+        )
+        assert centroid == pytest.approx(means)
+
+    for row, assignment in zip(values, result.assignments):
+        nearest = min(
+            range(len(result.centroids)),
+            key=lambda label: math.dist(row, result.centroids[label]),
+        )
+        assert assignment == nearest
 
 
 def test_pca_exposes_means_canonical_signs_variance_and_scores() -> None:
@@ -70,6 +95,20 @@ def test_kmeans_is_seed_deterministic_and_canonicalizes_cluster_labels() -> None
     assert first.assignments == (1, 0, 1, 0)
     assert first.inertia == pytest.approx(1.0)
     assert 1 <= first.iterations <= 50
+    _assert_consistent_kmeans(values, first)
+
+
+def test_kmeans_fails_loudly_when_iteration_cap_prevents_consistent_result() -> None:
+    values = ((-3.0,), (-3.0,), (-2.0,), (-1.0,), (1.0,))
+
+    with pytest.raises(RuntimeError, match="did not converge"):
+        fit_kmeans(
+            values,
+            clusters=2,
+            seed=0,
+            max_iterations=1,
+            tolerance=0.0,
+        )
 
 
 def test_kmeans_uses_stable_lowest_label_for_equal_distance_ties() -> None:
@@ -77,12 +116,13 @@ def test_kmeans_uses_stable_lowest_label_for_equal_distance_ties() -> None:
         ((-1.0,), (0.0,), (1.0,)),
         clusters=2,
         seed=1,
-        max_iterations=1,
+        max_iterations=2,
         tolerance=0.0,
     )
 
     assert result.centroids == ((-0.5,), (1.0,))
     assert result.assignments == (0, 0, 1)
+    _assert_consistent_kmeans(((-1.0,), (0.0,), (1.0,)), result)
 
 
 def test_kmeans_handles_duplicate_points_without_empty_clusters() -> None:

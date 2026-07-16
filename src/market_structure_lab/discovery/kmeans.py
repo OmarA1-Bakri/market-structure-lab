@@ -54,19 +54,28 @@ def fit_kmeans(
         raise ValueError("tolerance must be a finite non-negative number")
 
     centroids = _initial_centroids(rows, clusters, seed)
-    assignments: tuple[int, ...] = ()
-    iterations = 0
     for iterations in range(1, max_iterations + 1):
         assignments = _assign(rows, centroids)
         updated = _updated_centroids(rows, centroids, assignments, width)
         shift = max(_squared_distance(old, new) for old, new in zip(centroids, updated))
+        updated_assignments = _assign(rows, updated)
         centroids = updated
-        if shift <= tolerance_value * tolerance_value:
-            break
+        if shift <= tolerance_value * tolerance_value and updated_assignments == assignments:
+            return _result(rows, centroids, updated_assignments, iterations)
 
+    raise RuntimeError(
+        f"K-means did not converge to consistent assignments within {max_iterations} iterations"
+    )
+
+
+def _result(
+    rows: tuple[tuple[float, ...], ...],
+    centroids: tuple[tuple[float, ...], ...],
+    assignments: tuple[int, ...],
+    iterations: int,
+) -> KMeansResult:
     canonical_centroids, remapping = _canonical_labels(centroids)
-    final_raw_assignments = _assign(rows, centroids)
-    canonical_assignments = tuple(remapping[label] for label in final_raw_assignments)
+    canonical_assignments = tuple(remapping[label] for label in assignments)
     inertia = math.fsum(
         _squared_distance(row, canonical_centroids[label])
         for row, label in zip(rows, canonical_assignments)
