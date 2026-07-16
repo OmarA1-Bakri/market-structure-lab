@@ -121,6 +121,23 @@ def test_reconciliation_hashes_source_and_dump_rows_canonically() -> None:
     assert record.binance_row_sha256 == dump.row_checksum()
 
 
+def test_absent_optional_dump_fields_do_not_turn_matching_ohlcv_into_a_correction() -> None:
+    unit = ReconciliationWorkUnit.create("BTCUSDT", "1m", 0, 60_000)
+    dump = replace(_dump(0), quote_volume=None, trades=None)
+
+    record = next(
+        reconcile_ordered_rows(
+            work_unit=unit,
+            dump_rows=(dump,),
+            binance_rows=(_source(0, quote_volume=Decimal("999"), trades=999),),
+        )
+    )
+
+    assert record.classification is ReconciliationClass.EXACT_MATCH
+    assert record.differing_fields == ()
+    assert record.dump_row_sha256 != record.binance_row_sha256
+
+
 @pytest.mark.parametrize(
     ("dump_rows", "source_rows", "end_ms", "message"),
     [

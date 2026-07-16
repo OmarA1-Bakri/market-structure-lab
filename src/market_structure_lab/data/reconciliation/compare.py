@@ -187,7 +187,13 @@ def _differing_fields(
     source: RecoveryCandle,
 ) -> tuple[str, ...]:
     return tuple(
-        field for field in _COMPARISON_FIELDS if getattr(dump, field) != getattr(source, field)
+        field
+        for field in _COMPARISON_FIELDS
+        if not (
+            field in ("quote_volume", "trades")
+            and getattr(dump, field) is None
+        )
+        and getattr(dump, field) != getattr(source, field)
     )
 
 
