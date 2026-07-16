@@ -142,6 +142,8 @@ def test_cluster_definition_hash_changes_with_consistent_centroid_definition() -
         ({"description": "MFE and MAE imply a target hit."}, "outcome"),
         ({"description": "A future volatility continuation label."}, "outcome"),
         ({"description": "Institutional whale smart-money support."}, "unsupported"),
+        ({"description": "Next-period PnL reveals winning alpha."}, "outcome"),
+        ({"description": "Market-maker accumulation and large-player support."}, "unsupported"),
     ],
 )
 def test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes(
@@ -193,3 +195,11 @@ def test_catalogue_accepts_two_raw_features_clustered_in_one_projected_component
 
     assert all(len(item.feature_centroid) == 2 for item in behaviours)
     assert all(len(item.feature_distributions) == 2 for item in behaviours)
+
+
+def test_catalogue_allows_neutral_observable_large_volume_language() -> None:
+    behaviours = _catalogue(
+        description="Large volume expansion near observable value-area support."
+    )
+
+    assert behaviours

@@ -116,6 +116,9 @@ def pca_projection_sha256(matrix: FeatureMatrix, projection: PCAProjection) -> s
             for left, right in zip(supplied, expected, strict=True)
         ):
             raise ValueError("PCA scores do not match the frozen projection definition")
+    deterministic = fit_pca(matrix, len(components))
+    if projection != deterministic:
+        raise ValueError("PCA projection must exactly match the deterministic PCA fit")
     payload = {
         "matrix": {
             "row_ids": matrix.row_ids,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+from bisect import bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -11,6 +12,8 @@ from typing import Iterable, Literal, Sequence
 
 _MAX_ROWS = 1_000_000
 _MAX_BOOTSTRAP_ITERATIONS = 10_000
+_MAX_BLOCK_LENGTH = 4_096
+_MAX_BOOTSTRAP_PROBABILITY_SAMPLES = 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +118,8 @@ def estimate_cluster_transitions(
     if iterations > _MAX_BOOTSTRAP_ITERATIONS:
         raise ValueError(f"bootstrap_iterations cannot exceed {_MAX_BOOTSTRAP_ITERATIONS}")
     block_size = _bounded_integer(block_length, "block_length", minimum=1)
+    if block_size > _MAX_BLOCK_LENGTH:
+        raise ValueError(f"block_length cannot exceed {_MAX_BLOCK_LENGTH}")
     confidence = _finite_number(confidence_level, "confidence_level")
     if not 0.0 < confidence < 1.0:
         raise ValueError("confidence_level must be strictly between zero and one")
@@ -133,6 +138,12 @@ def estimate_cluster_transitions(
     pairs = tuple(pair for sequence in transition_sequences for pair in sequence)
     counts = Counter(pairs)
     support = Counter(source for source, _ in pairs)
+    probability_sample_count = len(counts) * iterations
+    if probability_sample_count > _MAX_BOOTSTRAP_PROBABILITY_SAMPLES:
+        raise ValueError(
+            "bootstrap probability storage exceeds "
+            f"{_MAX_BOOTSTRAP_PROBABILITY_SAMPLES} bounded samples"
+        )
     intervals = _bootstrap_intervals(
         transition_sequences,
         counts,
@@ -254,21 +265,40 @@ def _bootstrap_intervals(
 ) -> dict[tuple[int, int], tuple[float, float]]:
     if not counts:
         return {}
-    blocks = tuple(
-        tuple(sequence[start : start + block_length])
+    eligible = tuple(
+        (
+            sequence,
+            min(block_length, len(sequence)),
+            len(sequence) - min(block_length, len(sequence)) + 1,
+        )
         for sequence in sequences
-        for start in range(len(sequence))
+        if sequence
     )
+    cumulative_starts: list[int] = []
+    total_starts = 0
+    for _, _, start_count in eligible:
+        total_starts += start_count
+        cumulative_starts.append(total_starts)
+    if total_starts == 0:
+        raise ValueError("block_length exceeds every available transition sequence")
     target_size = sum(counts.values())
     randomizer = random.Random(seed)
     samples: dict[tuple[int, int], list[float]] = defaultdict(list)
     for _ in range(iterations):
-        sampled: list[tuple[int, int]] = []
-        while len(sampled) < target_size:
-            sampled.extend(randomizer.choice(blocks))
-        selected = sampled[:target_size]
-        replicate = Counter(selected)
-        replicate_support = Counter(source for source, _ in selected)
+        replicate: Counter[tuple[int, int]] = Counter()
+        replicate_support: Counter[int] = Counter()
+        selected_count = 0
+        while selected_count < target_size:
+            flat_start = randomizer.randrange(total_starts)
+            sequence_index = bisect_right(cumulative_starts, flat_start)
+            previous_total = cumulative_starts[sequence_index - 1] if sequence_index else 0
+            sequence, effective_block_length, _ = eligible[sequence_index]
+            start = flat_start - previous_total
+            take = min(effective_block_length, target_size - selected_count)
+            for pair in sequence[start : start + take]:
+                replicate[pair] += 1
+                replicate_support[pair[0]] += 1
+            selected_count += take
         for pair in counts:
             source, _ = pair
             if replicate_support[source]:

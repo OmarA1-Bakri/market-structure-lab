@@ -20,11 +20,14 @@ _MAX_REPRESENTATIVES = 5
 _FORBIDDEN_OUTCOME_TEXT = re.compile(
     r"\b(?:future returns?|forward returns?|MFE|MAE|profit(?:able|ability)?|"
     r"target[- ]hits?|trade outcomes?|future volatility|continuation labels?|"
-    r"reversal labels?)\b",
+    r"reversal labels?|next[- ](?:period|bar|candle|session)|p(?:&|n)l|"
+    r"win(?:ning)?(?: rate)?|alpha|expectancy|payoff|validated edge)\b",
     re.IGNORECASE,
 )
 _FORBIDDEN_NARRATIVE_TEXT = re.compile(
-    r"\b(?:institutional|whales?|smart[- ]money)\b", re.IGNORECASE
+    r"\b(?:institutional|whales?|smart[- ]money|market[- ]makers?|"
+    r"(?:large|big)[- ]players?|liquidity providers?)\b",
+    re.IGNORECASE,
 )
 
 

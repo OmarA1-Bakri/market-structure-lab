@@ -206,6 +206,21 @@ def test_transition_bootstrap_is_seeded_bounded_and_keeps_run_level_caveat() -> 
             assert destination.probability <= destination.confidence_high <= 1.0
 
 
+def test_transition_bootstrap_caps_probability_sample_storage() -> None:
+    rows = tuple(_observation(index, index) for index in range(103))
+
+    with pytest.raises(ValueError, match="bootstrap probability storage"):
+        estimate_cluster_transitions(
+            rows,
+            horizon=1,
+            max_rows=200,
+            seed=0,
+            bootstrap_iterations=10_000,
+            block_length=1,
+            confidence_level=0.9,
+        )
+
+
 def test_transition_input_is_ordered_and_bounded_before_processing() -> None:
     with pytest.raises(ValueError, match="canonical order"):
         _estimate((_observation(1, 1), _observation(0, 0)))
@@ -240,6 +255,7 @@ def test_transition_input_is_ordered_and_bounded_before_processing() -> None:
         {"bootstrap_iterations": 0},
         {"bootstrap_iterations": 10_001},
         {"block_length": 0},
+        {"block_length": 4097},
         {"confidence_level": 0.0},
         {"confidence_level": 1.0},
     ],

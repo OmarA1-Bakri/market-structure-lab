@@ -13,6 +13,7 @@ from market_structure_lab.discovery import (
     fit_kmeans,
     fit_pca,
     fit_projected_kmeans,
+    pca_projection_sha256,
 )
 
 
@@ -89,6 +90,50 @@ def test_projected_kmeans_pins_projection_and_fit_parameters() -> None:
 
     assert result.projection_sha256 is not None
     assert (result.seed, result.max_iterations, result.tolerance) == (7, 50, 1e-12)
+
+
+@pytest.mark.parametrize("forgery", ["means", "components", "variance"])
+def test_projection_hash_rejects_self_consistent_non_pca_evidence(forgery: str) -> None:
+    matrix = _matrix(((0.0, 0.0), (1.0, 2.0), (2.0, 4.0), (4.0, 8.0)))
+    fitted = fit_pca(matrix, 1)
+    means = fitted.means
+    components = fitted.components
+    variance = fitted.explained_variance_ratio
+    if forgery == "means":
+        means = (means[0] + 1.0, means[1])
+    elif forgery == "components":
+        components = ((1.0, 0.0),)
+    else:
+        variance = (0.5,)
+    scores = tuple(
+        tuple(
+            math.fsum(
+                (value - means[column]) * component[column] for column, value in enumerate(row)
+            )
+            for component in components
+        )
+        for row in matrix.values
+    )
+    forged = replace(
+        fitted,
+        means=means,
+        components=components,
+        explained_variance_ratio=variance,
+        scores=scores,
+    )
+
+    with pytest.raises(ValueError, match="deterministic PCA fit"):
+        pca_projection_sha256(matrix, forged)
+
+    with pytest.raises(ValueError, match="deterministic PCA fit"):
+        fit_projected_kmeans(
+            matrix,
+            forged,
+            clusters=2,
+            seed=7,
+            max_iterations=50,
+            tolerance=1e-12,
+        )
 
 
 @pytest.mark.parametrize("components", [0, -1, True, 3])
