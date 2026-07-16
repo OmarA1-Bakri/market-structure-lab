@@ -4,9 +4,10 @@ Evidence date: 2026-07-16
 
 ## Scope
 
-This execution implements the approved data-truth foundation through the early missing-candle
-recovery and canonical snapshot boundary. It does not begin clustering, AI hypothesis generation,
-strategy construction, exchange integration, or live execution.
+This execution implements the approved data-truth foundation, early missing-candle recovery,
+canonical snapshot boundary, deterministic auction representation, and Phase 3 feature/event
+dataset boundary. It does not begin behaviour discovery, clustering, AI hypothesis generation,
+statistical edge validation, strategy construction, exchange integration, or live execution.
 
 ## Foundation delivered
 
@@ -76,7 +77,7 @@ rewritten; verification used the ignored `.venv-ralph` environment via
 `UV_PROJECT_ENVIRONMENT=.venv-ralph`. This implementation introduced no new dependency; the lock
 now matches the existing `pyproject.toml` requirements.
 
-The current implementation verification has produced:
+The foundation and recovery verification produced:
 
 - `uv sync --locked` and `uv lock --check`: passed;
 - unit/regression suite: `108 passed` in the final recovery evidence pass;
@@ -184,5 +185,62 @@ fresh temporary environment.
 - `docker compose config --quiet`, restore-script shell syntax, `git diff --check`, and immutable
   dump SHA-256 verification: passed.
 
-The Phase 2 exit gate is satisfied. Phase 3 feature/event datasets remain intentionally unstarted
-pending explicit approval under the PRD phase gate.
+The Phase 2 exit gate is satisfied.
+
+## Phase 3: feature and event datasets
+
+Phase 3 implements the outcome-blind evidence boundary described by the approved Phase 3 PRD and
+test specification. It consumes Phase 2 snapshots and does not attach forward outcomes or begin
+behaviour discovery.
+
+Delivered evidence contracts:
+
+- `FS-000001`, a canonical hashed registry containing 16 auction-informed and 10 minimally
+  assumptive sequence features with explicit units, history, missing-value, version, category, and
+  leakage metadata;
+- a causal builder bounded to 21 trailing snapshots, exact exclusive-close information cutoffs,
+  hard resets at segment/gap/session/window boundaries, and fail-closed upstream identity checks;
+- exact training-only median/IQR normalisation using bounded on-disk sorted runs and bounded merge
+  buffers, with immutable artifact hashes and no validation/holdout fitting;
+- half-open discovery events with mandatory registry validation, provenance-rich stable IDs,
+  feature-vector hashes, causal prior-history triggers, and source-open versus observable-trigger
+  timestamp separation;
+- fixed, exploratory rolling, UTC session, causal change-point, expansion, value/POC, and prior-zone
+  node event construction without boundary crossing;
+- exact streaming overlap accounting whose memory is proportional to active concurrency rather than
+  the total event collection;
+- bounded deterministic Parquet publication with pinned upstream/code/lock identities, registered
+  schemas, checksums, missing/leakage/overlap evidence, atomic `_SUCCESS`, tamper detection, and
+  content-idempotent repeats.
+
+The public formulas, null rules, event semantics, and operations contract are documented in
+[`FEATURE_EVENT_DATASETS.md`](FEATURE_EVENT_DATASETS.md). Derived publication APIs live at
+`market_structure_lab.data.derived`; keeping them out of the canonical data package root prevents
+fresh-install circular imports.
+
+### Phase 3 verification evidence
+
+The stale root `.venv` remained untouched. Phase 3 verification used the ignored
+`.venv-codex` environment through `UV_PROJECT_ENVIRONMENT=.venv-codex`; builds and installed-wheel
+checks used isolated directories below the operating-system temporary directory.
+
+- Unit/regression suite: `472 passed in 12.41s` in the post-import-fix full pass.
+- Ruff: all repository checks passed.
+- Mypy: no issues in `53` source files.
+- `uv lock --check` resolved the pinned `120` packages without a change; `uv sync --locked` passed.
+- Wheel and source distribution built successfully; a fresh installed-wheel smoke printed
+  `FS-000001 26 change_point DerivedPublicationIdentity`.
+- Feature and event publication tests include fresh-interpreter import, deterministic batching,
+  empty publication, idempotent replay, stale/tampered output, schema leakage, and overlap evidence.
+- Docker daemon `29.4.2` was reachable and `docker compose config --quiet` passed.
+- `bash -n docker/postgres/init/restore_dump.sh` and `pg_restore --list` passed.
+- The dump SHA-256 was rechecked as
+  `1B6BCB39AF41048B53729E9B094F0229163EB6FF6AF9563ADB666C96F5FD4DA4`.
+- Read-only queries against preserved isolated PostgreSQL containers reconfirmed `35,748,117`
+  immutable source candles, `16,480,681` validated supplements, `19,192` terminal gap resolutions,
+  `28,765` completed recovery batches, zero Callscore application tables outside the approved
+  schemas, and zero forbidden Callscore-derived candle columns.
+
+The final Phase 3 sign-off additionally requires the independent architect review, scoped anti-slop
+pass, and post-cleanup repetition of all verification gates. Those results are recorded here only
+after they have run successfully.

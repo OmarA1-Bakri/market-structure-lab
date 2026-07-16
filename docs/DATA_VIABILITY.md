@@ -193,3 +193,29 @@ broader original gap ledger. On XRPUSDT this produces `27` exact remaining holes
 `5,902` absent minutes (largest `600` minutes); the count differs from the `26` non-full original
 ranges because partial recovery can split one original range into multiple holes. No boundary is
 filled, interpolated, or fabricated.
+
+## Downstream feature and event safeguards
+
+Phase 3 does not change source or supplemental candle storage. It consumes only versioned Phase 2
+snapshots and carries the dump-derived dataset identity, auction configuration, profile definition,
+window policy, symbol, timeframe, and exact canonical segment into every feature row and event.
+Identity drift, unexplained gaps, duplicates, or out-of-order observations fail closed; rolling
+history is cleared at every approved boundary.
+
+Feature information cutoffs are the exclusive close of the real source candle. Structural event
+metadata records both the source candle-open timestamp and the later observable trigger timestamp.
+There is no interpolation, forward fill, arbitrary epsilon, synthetic candle, or future/outcome
+field. The registered discovery leakage audit rejects returns or labels that depend on a future
+observation.
+
+Training normalisation uses only a caller-frozen training partition and exact bounded-memory sorted
+runs. Feature/event Parquet outputs are derived artifacts stored separately from immutable source
+and supplemental candles. Their manifests pin upstream identities, registered schemas, code and
+lockfile hashes, partition checksums, missing-value counts, and overlap evidence; repeating an
+identical publication is content-idempotent, while disagreement or tampering is quarantined by a
+fail-closed error.
+
+Read-only verification after Phase 3 reconfirmed the source dump SHA-256 above, `35,748,117`
+immutable source rows, `16,480,681` validated supplements, all `19,192` original gaps terminally
+classified, no supplements on source-conflict symbols, and no restored Callscore application data
+or derived Callscore candle fields.

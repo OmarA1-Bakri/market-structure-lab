@@ -67,7 +67,7 @@ restore procedure when replacing an existing local database.
 
 See [`docs/DATA_VIABILITY.md`](docs/DATA_VIABILITY.md) for the full row-quality and symbol-coverage
 assessment and [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for the exact Phase
-0 and Phase 2 verification evidence.
+0 through Phase 3 verification evidence.
 
 ## Running scripts
 
@@ -181,3 +181,27 @@ profile/version identity, POC, value area, VWAP, location, node zones and persis
 and stable structural event IDs. Canonical JSON serialization and stream hashes provide replay
 evidence. See [`docs/market_structure.md`](docs/market_structure.md) for the exact OHLCV
 approximations and limitations.
+
+## Feature and event datasets
+
+Phase 3 turns immutable auction snapshots into outcome-blind discovery evidence. The audited
+`FS-000001` registry contains 26 causal features: 16 derived from the Phase 2 auction representation
+and 10 minimally assumptive candle-sequence features. Feature rows use the exclusive candle close
+as their information cutoff, preserve every upstream identity, reset at hard boundaries, and never
+interpolate or fill missing observations.
+
+Robust normalisation is fitted only on an explicit training partition with exact bounded-memory
+median/IQR runs. Discovery events use half-open intervals, registered feature vectors observable at
+their cutoff, causal prior-history baselines, stable provenance-rich IDs, and streaming overlap
+evidence. Feature and event publications are atomic, idempotent, checksum-manifested, and written in
+bounded deterministic Parquet parts.
+
+```python
+from market_structure_lab.data.derived import publish_feature_rows
+from market_structure_lab.events import FixedWindowSegmenter, make_event
+from market_structure_lab.features import FeatureBuilder, builtin_feature_registry
+```
+
+See [`docs/FEATURE_EVENT_DATASETS.md`](docs/FEATURE_EVENT_DATASETS.md) for the registered formulas,
+missing-value rules, normalisation contract, event semantics, and publication invariants. Phase 3
+does not attach outcomes, discover behaviours, validate edges, or construct strategies.

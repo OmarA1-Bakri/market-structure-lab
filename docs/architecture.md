@@ -139,6 +139,52 @@ Node smoothing never crosses absent integer bins. Persistence resets when the en
 segment, or window boundary. These functions remain deterministic representation primitives;
 statistical significance and transition probabilities belong to later research stages.
 
+## Feature layer
+
+`market_structure_lab.features` is the audited boundary between deterministic auction snapshots and
+later discovery work. `FeatureRegistry` freezes each feature's family, category, unit, required
+history, missing-value policy, leakage class, and version. `FS-000001` registers 16 auction-informed
+and 10 minimally assumptive sequence features. Registry metadata is canonically hashed; formula or
+contract changes require a new feature-set identity.
+
+`FeatureBuilder` consumes one ordered snapshot stream with a maximum trailing history of 21 rows.
+It rejects symbol/timeframe changes, identity drift, duplicates, ordering errors, and unexplained
+gaps. Canonical segment, gap, session, and window resets clear rolling history. Each feature row is
+observable at the exclusive close of its source candle and carries all upstream dataset, auction,
+profile, window, feature-set, registry, symbol, timeframe, and segment identities.
+
+Training normalisation is an immutable separate artifact. Exact median and IQR statistics are built
+only from a declared half-open training partition using bounded on-disk sorted runs and bounded
+merge passes. Validation and holdout rows cannot fit scales, and transforms neither refit nor fill
+nulls.
+
+## Event layer
+
+`market_structure_lab.events` represents discovery samples as half-open intervals whose information
+cutoff is their exclusive end. Every segmenter and detector receives a `FeatureRegistry`, and every
+event vector must be a registered discovery-safe row observable at that cutoff. Stable IDs cover
+all upstream representation identities, event bounds and kind, trigger version, and feature-vector
+content.
+
+Implemented event sources are fixed non-overlapping windows, explicitly exploratory rolling
+windows, UTC sessions, causal change points, volatility/volume expansion, Phase 2 value-area and POC
+events, and prior-zone node tests/traversals. No event crosses a canonical boundary. Streaming
+overlap accounting requires canonical order and retains only active intervals while reporting exact
+pair, affected-event, concurrency, and kind-pair evidence.
+
+## Derived dataset publication
+
+`market_structure_lab.data.derived` publishes features and events in bounded deterministic Parquet
+parts partitioned by symbol, timeframe, and UTC calendar. A manifest pins dataset, configuration,
+profile, window, feature-set, registry, event/normalizer, code, lockfile, schema, missing/leakage,
+overlap, row-count, time-bound, and part-checksum evidence.
+
+Publication stages atomically and writes `_SUCCESS` only after full verification. Identical repeats
+return the verified result; identity/content disagreements, tampering, stale stages, extra parts,
+duplicates, ordering errors, and unsafe schemas fail closed. The derived API remains in
+`market_structure_lab.data.derived` rather than the canonical data package root to keep the import
+graph acyclic.
+
 ## Transition analysis
 
 Use `market_structure_lab.transitions` to count adjacent observed state transitions and estimate conditional
