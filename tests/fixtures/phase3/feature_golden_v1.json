@@ -1,0 +1,31 @@
+{
+  "case_id": "phase3-two-snapshot-formulas-v1",
+  "expected_second_values": {
+    "auction_location": "point_of_control",
+    "body_range_ratio": 0.4,
+    "close_value_position": 0.5,
+    "inside_value_rate_20": null,
+    "location_dwell_bars": 2,
+    "log_return_1": 0.01980262729617973,
+    "log_volume_ratio_1": 0.6931471805599453,
+    "lower_wick_range_ratio": 0.2,
+    "max_node_persistence_bars": 4,
+    "nearest_hvn_distance_close": 0.00980392156862745,
+    "nearest_lvn_distance_close": -0.00980392156862745,
+    "poc_distance_close": 0.0,
+    "poc_velocity_close_1": 0.02,
+    "poc_volume_share": 0.5,
+    "range_close_fraction": 0.049019607843137254,
+    "realized_volatility_20": null,
+    "return_autocorrelation_1_20": null,
+    "upper_wick_range_ratio": 0.4,
+    "value_area_jaccard_1": 0.2,
+    "value_midpoint_velocity_close_1": 0.02,
+    "value_reentry_rate_20": null,
+    "value_width_close": 0.0196078431372549,
+    "volatility_normalized_return_20": null,
+    "volume_relative_median_20": null,
+    "vwap_distance_close": 0.004901960784313725,
+    "vwap_slope_close_1": 0.015
+  }
+}
