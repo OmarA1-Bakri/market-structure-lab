@@ -5,10 +5,21 @@ from market_structure_lab.discovery.behaviours import (
     FrozenBehaviour,
     freeze_behaviours,
 )
+from market_structure_lab.discovery.evidence import (
+    AIInterpretation,
+    BehaviourEvidencePack,
+)
 from market_structure_lab.discovery.kmeans import KMeansResult, fit_kmeans, fit_projected_kmeans
 from market_structure_lab.discovery.matrix import FeatureMatrix, build_feature_matrix
 from market_structure_lab.discovery.motifs import MotifMatch, discover_motifs
 from market_structure_lab.discovery.pca import PCAProjection, fit_pca, pca_projection_sha256
+from market_structure_lab.discovery.runs import (
+    DiscoveryRunConfig,
+    DiscoveryRunManifest,
+    InterpretationManifest,
+    publish_ai_interpretations,
+    run_discovery,
+)
 from market_structure_lab.discovery.splits import (
     DiscoveryInput,
     FrozenDiscoverySplit,
@@ -34,6 +45,8 @@ from market_structure_lab.discovery.transitions import (
 
 __all__ = [
     "DiscoveryInput",
+    "AIInterpretation",
+    "BehaviourEvidencePack",
     "ClusterObservation",
     "ClusterTransitionEstimate",
     "ClusterTransitionMatrix",
@@ -42,6 +55,9 @@ __all__ = [
     "FeatureMatrix",
     "FrozenBehaviour",
     "FrozenDiscoverySplit",
+    "DiscoveryRunConfig",
+    "DiscoveryRunManifest",
+    "InterpretationManifest",
     "KMeansResult",
     "MotifMatch",
     "PCAProjection",
@@ -62,4 +78,6 @@ __all__ = [
     "freeze_split",
     "make_discovery_input",
     "pca_projection_sha256",
+    "publish_ai_interpretations",
+    "run_discovery",
 ]

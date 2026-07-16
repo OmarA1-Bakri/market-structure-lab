@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+class ExperimentMode(StrEnum):
+    DISCOVERY = "discovery"
+    HYPOTHESIS = "hypothesis"
+    VALIDATION = "validation"
+    STRATEGY = "strategy"
 
 
 @dataclass(frozen=True)
@@ -18,6 +27,13 @@ class ExperimentConfig:
     question: str
     hypothesis: str
     parameters: dict[str, Any] = field(default_factory=dict)
+    mode: ExperimentMode = ExperimentMode.HYPOTHESIS
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, ExperimentMode):
+            raise TypeError("mode must be an ExperimentMode")
+        if self.mode is not ExperimentMode.DISCOVERY and not self.hypothesis.strip():
+            raise ValueError("hypothesis is required outside discovery mode")
 
 
 @dataclass(frozen=True)
@@ -42,7 +58,9 @@ def save_experiment_result(
     (output_dir / "plots").mkdir(exist_ok=True)
     (output_dir / "artifacts").mkdir(exist_ok=True)
 
-    _write_json(output_dir / "config.json", asdict(config))
+    legacy_config = asdict(config)
+    legacy_config.pop("mode")
+    _write_json(output_dir / "config.json", legacy_config)
     _write_json(output_dir / "metrics.json", metrics)
     (output_dir / "summary.md").write_text(f"# {config.name}\n\n{summary.rstrip()}\n")
 
@@ -52,6 +70,20 @@ def save_experiment_result(
     for file_name, content in (artifacts or {}).items():
         _write_named_file(output_dir / "artifacts", file_name, content)
 
+    hashes = {
+        str(path.relative_to(output_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(output_dir.rglob("*"))
+        if path.is_file() and path.name != "manifest.json"
+    }
+    _write_json(
+        output_dir / "manifest.json",
+        {
+            "schema_version": "experiment-manifest-v1",
+            "run_id": config.run_id,
+            "mode": config.mode.value,
+            "artifact_sha256": hashes,
+        },
+    )
     return ExperimentResult(path=output_dir)
 
 

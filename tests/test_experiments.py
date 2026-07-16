@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from market_structure_lab.experiments import ExperimentConfig, save_experiment_result
+from market_structure_lab.experiments import (
+    ExperimentConfig,
+    ExperimentMode,
+    save_experiment_result,
+)
 
 
 def test_save_experiment_result_writes_reproducible_artifact_bundle(tmp_path) -> None:
@@ -113,3 +117,53 @@ def test_save_experiment_result_writes_byte_for_byte_identical_bundles(tmp_path)
     ):
         if first_path.is_file() and second_path.is_file():
             assert first_path.read_bytes() == second_path.read_bytes()
+
+
+def test_experiment_modes_are_versioned_without_requiring_discovery_hypothesis(
+    tmp_path,
+) -> None:
+    result = save_experiment_result(
+        config=ExperimentConfig(
+            run_id="DR-000501",
+            name="Outcome-blind discovery",
+            question="Which feature configurations recur?",
+            hypothesis="",
+            mode=ExperimentMode.DISCOVERY,
+        ),
+        metrics={"behaviours": 2},
+        summary="Discovery run.",
+        root=tmp_path,
+    )
+
+    manifest = json.loads((result.path / "manifest.json").read_text())
+    assert manifest["schema_version"] == "experiment-manifest-v1"
+    assert manifest["mode"] == "discovery"
+    first_manifest = (result.path / "manifest.json").read_bytes()
+    replay = save_experiment_result(
+        config=ExperimentConfig(
+            run_id="DR-000501",
+            name="Outcome-blind discovery",
+            question="Which feature configurations recur?",
+            hypothesis="",
+            mode=ExperimentMode.DISCOVERY,
+        ),
+        metrics={"behaviours": 2},
+        summary="Discovery run.",
+        root=tmp_path,
+    )
+    assert (replay.path / "manifest.json").read_bytes() == first_manifest
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [ExperimentMode.HYPOTHESIS, ExperimentMode.VALIDATION, ExperimentMode.STRATEGY],
+)
+def test_non_discovery_modes_still_require_a_hypothesis(mode: ExperimentMode) -> None:
+    with pytest.raises(ValueError, match="hypothesis"):
+        ExperimentConfig(
+            run_id="mode-test",
+            name="Mode test",
+            question="Question?",
+            hypothesis="",
+            mode=mode,
+        )
