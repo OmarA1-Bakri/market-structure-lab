@@ -4,6 +4,7 @@ import json
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from market_structure_lab.cli import sync_candles
 from market_structure_lab.data.freshness import write_freshness_manifest
@@ -224,5 +225,76 @@ def test_cli_parser_and_package_entry_point_expose_all_scheduler_operations() ->
     parser = sync_candles.build_parser()
     help_text = parser.format_help()
 
-    for operation in ("plan", "run", "report", "health"):
+    for operation in ("plan", "run", "report", "health", "snapshot"):
         assert operation in help_text
+
+
+def test_snapshot_is_an_explicit_checksum_verified_handoff(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    current = _manifest(recovered=True)
+    report = build_freshness_report(
+        current,
+        current,
+        recovery_logical_hash="d" * 64,
+    )
+    paths = write_freshness_artifacts(current, report, tmp_path / "freshness")
+    compatibility = _compatibility()
+    compatibility_path = tmp_path / "compatibility.json"
+    write_manifest(compatibility, compatibility_path)
+    dump = tmp_path / "callscore.dump"
+    dump.write_bytes(b"immutable test dump")
+    calls: dict[str, object] = {}
+
+    class FakeEngine:
+        def connect(self):
+            return nullcontext(object())
+
+        def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(sync_candles, "EXPECTED_DUMP_SHA256", "a" * 64)
+    monkeypatch.setattr(sync_candles, "sha256_file", lambda _path: "a" * 64)
+    monkeypatch.setattr(sync_candles, "create_engine", lambda *_args, **_kwargs: FakeEngine())
+    monkeypatch.setattr(sync_candles, "verify_manifest_identity", lambda *_args, **_kwargs: None)
+
+    def fake_publish(engine, actual_report, **kwargs):
+        calls.update(engine=engine, report=actual_report, **kwargs)
+        return SimpleNamespace(
+            identity=SimpleNamespace(dataset_version=kwargs["dataset_version"]),
+            row_count=123,
+            snapshot_sha256="e" * 64,
+        )
+
+    monkeypatch.setattr(sync_candles, "publish_freshness_snapshot", fake_publish)
+
+    exit_code = sync_candles.main(
+        [
+            "snapshot",
+            "--report",
+            str(paths.report),
+            "--compatibility",
+            str(compatibility_path),
+            "--compatibility-sha256",
+            compatibility.sha256(),
+            "--dump-path",
+            str(dump),
+            "--output-root",
+            str(tmp_path / "snapshots"),
+            "--dataset-version",
+            "canonical-20260716",
+            "--config-version",
+            "freshness-snapshot-v1",
+            "--code-commit",
+            "0123456789abcdef",
+            "--allow-provenance-blocked",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert calls["report"] == report
+    assert calls["dataset_version"] == "canonical-20260716"
+    assert str(calls["policy"]) == "allow_provenance_blocked"
+    assert payload["row_count"] == 123
+    assert payload["freshness_report_sha256"] == report.sha256()

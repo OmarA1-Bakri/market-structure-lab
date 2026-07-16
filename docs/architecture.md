@@ -71,6 +71,21 @@ batch. A PostgreSQL advisory lock serializes recovery publication, and a partial
 only one validated supplement per canonical `(symbol, interval, open_time)` key. Reapplying a
 completed manifest must produce zero new rows and the same logical supplement hash.
 
+## Daily freshness and snapshot handoff
+
+`msl-sync-candles` plans against `market_data.candles_canonical` through an explicit half-open UTC
+cutoff, so internal holes and the missing tail use the same append-only recovery engine. The live
+canonical view becomes current as validated supplements commit; no dump row is updated and
+provenance-blocked symbols produce no fetch requests.
+
+Immutable research snapshots are a separate deliberate operation. A checksum-verified freshness
+report is accepted only when healthy or when the operator explicitly selects the narrowly defined
+provenance-blocked policy. Publication holds the recovery advisory lock, verifies that the report's
+complete logical supplement hash still matches PostgreSQL, streams each sorted symbol through
+`iter_candle_batches`, and reuses `export_partitioned_snapshot`. Its identity pins the dump,
+supplement state, freshness plan/report, compatibility review, cutoff, policy, mapping, config, and
+code commit. This prevents a daily scheduler from silently replacing a frozen research dataset.
+
 ## Experiment artifacts
 
 Use `market_structure_lab.experiments.save_experiment_result` for research runs that need durable evidence. Each

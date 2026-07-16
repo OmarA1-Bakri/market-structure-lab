@@ -218,3 +218,20 @@ Read-only verification after Phase 3 reconfirmed the source dump SHA-256 above, 
 immutable source rows, `16,480,681` validated supplements, all `19,192` original gaps terminally
 classified, no supplements on source-conflict symbols, and no restored Callscore application data
 or derived Callscore candle fields.
+
+## Daily freshness readiness
+
+The daily updater now freezes an explicit last-closed-minute cutoff, reuses the append-only recovery
+ledger, and writes checksum-bearing plans and terminal reports outside Git. A same-cutoff retry is
+idempotent; a later cutoff plans only actual canonical holes; blocked sources are never fetched.
+Daily operation updates the dump-preferred PostgreSQL canonical view. Full immutable Parquet exports
+are created only when a research run deliberately declares a new dataset version.
+
+The compatibility gate has not changed: the validated artifact remains
+`482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2`, and the nine conflicts listed
+above keep the complete 25-symbol universe unhealthy. This is an explicit provenance limitation,
+not an operational failure and not permission to fill or replace those candles. No live network
+freshness run or scheduled automation has yet been executed. A disposable PostgreSQL integration
+profile verified migration reapplication, dump preference, append-only supplements, same/later
+cutoffs, blocked-source no-fetch, advisory locking, and report conservation without touching
+`data/postgres`.

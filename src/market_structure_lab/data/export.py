@@ -34,6 +34,11 @@ class SnapshotIdentity:
     mapping_version: str
     config_version: str
     code_commit: str
+    freshness_report_sha256: str | None = None
+    freshness_manifest_sha256: str | None = None
+    compatibility_manifest_sha256: str | None = None
+    freshness_as_of: str | None = None
+    publication_policy: str | None = None
 
     def __post_init__(self) -> None:
         if not _PATH_COMPONENT.fullmatch(self.dataset_version):
@@ -47,6 +52,48 @@ class SnapshotIdentity:
         for value in (self.mapping_version, self.config_version, self.code_commit):
             if not value:
                 raise ValueError("snapshot identity values must be non-empty")
+        freshness_values = (
+            self.freshness_report_sha256,
+            self.freshness_manifest_sha256,
+            self.compatibility_manifest_sha256,
+            self.freshness_as_of,
+            self.publication_policy,
+        )
+        if any(value is not None for value in freshness_values):
+            if any(value is None for value in freshness_values):
+                raise ValueError("freshness snapshot identity evidence must be complete")
+            for digest in (
+                self.freshness_report_sha256,
+                self.freshness_manifest_sha256,
+                self.compatibility_manifest_sha256,
+            ):
+                if digest is None or not _SHA256.fullmatch(digest):
+                    raise ValueError("freshness identity hashes must be SHA-256 hex digests")
+            object.__setattr__(
+                self,
+                "freshness_report_sha256",
+                cast(str, self.freshness_report_sha256).lower(),
+            )
+            object.__setattr__(
+                self,
+                "freshness_manifest_sha256",
+                cast(str, self.freshness_manifest_sha256).lower(),
+            )
+            object.__setattr__(
+                self,
+                "compatibility_manifest_sha256",
+                cast(str, self.compatibility_manifest_sha256).lower(),
+            )
+            if self.freshness_as_of is None:
+                raise ValueError("freshness snapshot identity requires an as-of cutoff")
+            normalized_as_of = normalize_manifest_timestamp(self.freshness_as_of)
+            if _iso_utc(normalized_as_of) != self.freshness_as_of:
+                raise ValueError("freshness as-of cutoff must use canonical UTC formatting")
+            if self.publication_policy not in {
+                "require_healthy",
+                "allow_provenance_blocked",
+            }:
+                raise ValueError("unsupported freshness snapshot publication policy")
 
 
 @dataclass(frozen=True, slots=True)

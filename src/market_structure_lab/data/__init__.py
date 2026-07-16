@@ -10,6 +10,10 @@ from market_structure_lab.data.freshness import (
     resolve_freshness_cutoff,
     write_freshness_manifest,
 )
+from market_structure_lab.data.freshness_snapshot import (
+    SnapshotPublicationPolicy,
+    publish_freshness_snapshot,
+)
 from market_structure_lab.data.gaps import GapRange, RecoveryManifest
 from market_structure_lab.data.inspection import (
     CandidateMapping,
@@ -58,6 +62,7 @@ __all__ = [
     "SegmentBoundary",
     "SnapshotIdentity",
     "SnapshotManifest",
+    "SnapshotPublicationPolicy",
     "TableInspection",
     "detect_candle_mapping",
     "export_partitioned_snapshot",
@@ -66,6 +71,7 @@ __all__ = [
     "iter_candle_batches",
     "load_candles",
     "load_canonical_gap_boundaries",
+    "publish_freshness_snapshot",
     "render_human",
     "render_json",
     "report_to_dict",

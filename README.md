@@ -69,6 +69,27 @@ See [`docs/DATA_VIABILITY.md`](docs/DATA_VIABILITY.md) for the full row-quality 
 assessment and [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for the exact Phase
 0 through Phase 3 verification evidence.
 
+## Daily candle freshness
+
+`msl-sync-candles` freezes a minute-aligned UTC plan, admits only independently compatible real
+source observations through the append-only supplement ledger, and reports every symbol as current,
+recovered, unresolved, or provenance-blocked. Daily sync updates the dump-preferred PostgreSQL
+canonical view; it does not rewrite the dump or duplicate the full dataset into Parquet every day.
+
+```bash
+uv run msl-sync-candles plan --help
+uv run msl-sync-candles run --help
+uv run msl-sync-candles health --help
+uv run msl-sync-candles snapshot --help
+```
+
+Immutable Parquet snapshots are created deliberately for frozen research runs. Snapshot publication
+requires a checksum-verified freshness report by default; the explicit provenance-blocked policy
+records uneven coverage in the snapshot identity. See
+[`docs/DAILY_CANDLE_FRESHNESS.md`](docs/DAILY_CANDLE_FRESHNESS.md) for commands, exit statuses,
+resume handling, pinned inputs, and storage paths. The current nine source conflicts keep full-
+universe daily health red until new compatibility evidence resolves them.
+
 ## Running scripts
 
 Inspect the database:

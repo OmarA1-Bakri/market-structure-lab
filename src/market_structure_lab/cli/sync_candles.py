@@ -31,6 +31,10 @@ from market_structure_lab.data.freshness_sync import (
     run_freshness_sync,
     write_freshness_artifacts,
 )
+from market_structure_lab.data.freshness_snapshot import (
+    SnapshotPublicationPolicy,
+    publish_freshness_snapshot,
+)
 from market_structure_lab.data.gaps import RecoveryManifest, read_manifest, verify_manifest_identity
 from market_structure_lab.data.migrations import candle_recovery_migration_sql
 from market_structure_lab.data.sources.base import SourceError
@@ -69,6 +73,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     health = commands.add_parser("health", help="emit compact scheduler health JSON")
     health.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    snapshot = commands.add_parser(
+        "snapshot",
+        help="deliberately freeze a verified freshness report as immutable Parquet",
+    )
+    snapshot.add_argument("--report", type=Path, required=True)
+    _add_compatibility_arguments(snapshot)
+    snapshot.add_argument("--dump-path", type=Path, default=Path("data/dumps/callscore.dump"))
+    snapshot.add_argument("--output-root", type=Path, default=Path("data/exports/canonical"))
+    snapshot.add_argument("--dataset-version", required=True)
+    snapshot.add_argument("--config-version", required=True)
+    snapshot.add_argument("--code-commit", required=True)
+    snapshot.add_argument("--batch-size", type=int, default=10_000)
+    snapshot.add_argument(
+        "--allow-provenance-blocked",
+        action="store_true",
+        help="publish only when every non-healthy symbol is explicitly provenance-blocked",
+    )
     return parser
 
 
@@ -81,8 +102,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run(args)
         if args.operation == "report":
             return _report(args)
-        return _health(args)
-    except (OSError, ValueError, SourceError, SQLAlchemyError) as error:
+        if args.operation == "health":
+            return _health(args)
+        return _snapshot(args)
+    except (OSError, RuntimeError, ValueError, SourceError, SQLAlchemyError) as error:
         print(str(error), file=sys.stderr)
         return 1
 
@@ -208,6 +231,69 @@ def _health(args: argparse.Namespace) -> int:
     }
     print(_json(payload))
     return freshness_exit_code(report)
+
+
+def _snapshot(args: argparse.Namespace) -> int:
+    report = read_freshness_report(args.report)
+    compatibility = _read_reviewed_compatibility(
+        args.compatibility,
+        args.compatibility_sha256,
+    )
+    if compatibility.sha256() != report.compatibility_manifest_sha256:
+        raise ValueError("freshness report does not match the reviewed compatibility artifact")
+    if compatibility.source_identity.dump_sha256.lower() != report.dump_sha256:
+        raise ValueError("freshness report and compatibility artifact identify different dumps")
+    if report.dump_sha256 != EXPECTED_DUMP_SHA256:
+        raise ValueError("freshness report does not identify the immutable source dump")
+    actual_dump_sha256 = sha256_file(args.dump_path).lower()
+    if actual_dump_sha256 != report.dump_sha256:
+        raise ValueError("dump SHA-256 does not match the freshness report")
+    policy = (
+        SnapshotPublicationPolicy.ALLOW_PROVENANCE_BLOCKED
+        if args.allow_provenance_blocked
+        else SnapshotPublicationPolicy.REQUIRE_HEALTHY
+    )
+    settings = load_settings()
+    engine = create_engine(settings.database.url)
+    try:
+        with engine.connect() as connection:
+            verify_manifest_identity(
+                connection,
+                compatibility,
+                dump_sha256=actual_dump_sha256,
+                mapping_version=settings.candles.version,
+                schema=settings.candles.schema,
+                table=settings.candles.table,
+            )
+        manifest = publish_freshness_snapshot(
+            engine,
+            report,
+            output_root=args.output_root,
+            dataset_version=args.dataset_version,
+            config_version=args.config_version,
+            code_commit=args.code_commit,
+            policy=policy,
+            batch_size=args.batch_size,
+            settings=settings,
+        )
+    finally:
+        engine.dispose()
+    print(
+        _json(
+            {
+                "dataset_version": manifest.identity.dataset_version,
+                "freshness_report_sha256": report.sha256(),
+                "manifest": str(
+                    args.output_root
+                    / f"dataset_version={manifest.identity.dataset_version}"
+                    / "manifest.json"
+                ),
+                "row_count": manifest.row_count,
+                "snapshot_sha256": manifest.snapshot_sha256,
+            }
+        )
+    )
+    return 0
 
 
 def _read_reviewed_compatibility(path: Path, expected_sha256: str) -> RecoveryManifest:

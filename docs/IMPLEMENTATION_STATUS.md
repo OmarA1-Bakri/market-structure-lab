@@ -260,3 +260,31 @@ checks used isolated directories below the operating-system temporary directory.
 
 The Phase 3 exit gate is satisfied with zero known implementation errors. Phase 4 behaviour
 discovery remains unstarted and requires a separate explicit approval.
+
+## Daily candle freshness implementation
+
+The approved freshness prerequisite is implemented without changing the immutable dump or existing
+research snapshots. `msl-sync-candles` supports frozen planning, dry-run/apply, checksum-bearing
+reports and health, plus an explicit `snapshot` handoff. The handoff checks the report,
+compatibility artifact, dump identity, current logical supplement hash, and publication policy; it
+then streams bounded canonical batches through the existing atomic partitioned exporter.
+
+The default snapshot policy requires every symbol to be `up_to_date` or `recovered`. An explicit
+`allow_provenance_blocked` policy can freeze uneven research coverage only when every exception is
+`provenance_pending`, `source_conflict`, or `source_unavailable`; it does not admit partial,
+provider-absent, failed, or unresolved recovery. The nine existing source conflicts therefore keep
+full-universe scheduler health non-zero and are recorded in any explicitly permitted snapshot.
+
+Implementation verification performed for this slice:
+
+- focused snapshot/CLI/export tests: `22 passed`;
+- disposable PostgreSQL 17 integration: `1 passed`, proving migration reapplication, dump-preferred
+  reads, append-only enforcement, same-cutoff idempotency, later-cutoff-only recovery,
+  blocked-source no-fetch, advisory-lock exclusion, and report conservation;
+- the disposable container used no repository volume and was removed after the test;
+- no live Binance request, production database sync, or automation schedule was executed.
+
+Exact operator commands, paths, status meanings, resumption procedure, compatibility hash, and the
+deliberate snapshot policy are documented in
+[`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md). Repository-wide gates remain to be recorded
+by the integrating verification pass; this section does not claim them in advance.
