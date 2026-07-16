@@ -11,6 +11,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "duckdb",
     "polars",
+    "scipy",
     "sqlalchemy",
     "psycopg[binary]",
     "plotly",
@@ -23,8 +24,12 @@ dependencies = [
     "mypy<2",
 ]
 
+[project.scripts]
+msl-backfill-candles = "market_structure_lab.cli.backfill_candles:main"
+msl-db-inspect = "market_structure_lab.cli.inspect_database:main"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src/market_structure_lab"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
