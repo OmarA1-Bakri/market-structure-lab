@@ -191,9 +191,16 @@ def test_default_postgres_key_stream_matches_generic_manifest_and_uses_indexes(
     assert all("SELECT *" not in query for query in key_stream_queries)
     assert all("lead(" not in query.lower() for query in key_stream_queries)
     assert all("first_value(" not in query.lower() for query in key_stream_queries)
+    assert "SET LOCAL enable_seqscan = off" in statements
+    assert "SET LOCAL enable_bitmapscan = off" in statements
+    assert "SET LOCAL enable_hashjoin = off" in statements
+    assert "SET LOCAL max_parallel_workers_per_gather = 0" in statements
 
     with isolated_postgres.begin() as connection:
         connection.execute(text("SET LOCAL enable_seqscan = off"))
+        connection.execute(text("SET LOCAL enable_bitmapscan = off"))
+        connection.execute(text("SET LOCAL enable_hashjoin = off"))
+        connection.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
         explained = connection.execute(
             text(
                 """

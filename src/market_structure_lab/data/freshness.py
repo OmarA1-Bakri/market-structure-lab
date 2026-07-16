@@ -377,6 +377,10 @@ def _inspect_default_postgres_canonical(
     timeframe: str,
     reviewed_symbols: set[str],
 ) -> tuple[tuple[_ObservedCanonicalSeries, ...], set[str]]:
+    connection.execute(text("SET LOCAL enable_seqscan = off"))
+    connection.execute(text("SET LOCAL enable_bitmapscan = off"))
+    connection.execute(text("SET LOCAL enable_hashjoin = off"))
+    connection.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
     summary_query = text(
         """
 WITH canonical_key AS (
