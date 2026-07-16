@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta, timezone
 from types import MappingProxyType
@@ -119,6 +120,47 @@ def test_linear_quantiles_and_transformation_match_fixture(registry: FeatureRegi
     assert normalizer.transform_values(_row(registry, 10, signal=5.0)) == {"signal": 1.0}
 
 
+def test_external_runs_are_bounded_and_match_exact_in_memory_quantiles(
+    registry: FeatureRegistry,
+) -> None:
+    max_rows_per_run = 3
+    signals = [
+        None if index % 19 == 0 else float(((index * 97) % 211) - 105) + (index % 7) / 10
+        for index in range(257)
+    ]
+    expected_values = sorted(value for value in signals if value is not None)
+
+    def quantile(probability: float) -> float:
+        position = (len(expected_values) - 1) * probability
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return expected_values[lower]
+        weight = position - lower
+        return expected_values[lower] * (1.0 - weight) + expected_values[upper] * weight
+
+    normalizer = fit_robust_normalizer(
+        [_row(registry, index, signal=value) for index, value in enumerate(signals)],
+        registry,
+        _partition(),
+        "dataset-v1",
+        selected_features=("signal",),
+        max_rows_per_run=max_rows_per_run,
+    )
+
+    expected_q25 = quantile(0.25)
+    expected_median = quantile(0.5)
+    expected_q75 = quantile(0.75)
+    assert normalizer.medians == {"signal": expected_median}
+    assert normalizer.iqrs == {"signal": expected_q75 - expected_q25}
+    assert normalizer.fit_row_count == len(signals)
+    assert normalizer.max_rows_per_run == max_rows_per_run
+    assert normalizer.max_buffered_rows == max_rows_per_run
+    assert RobustNormalizer.from_json(normalizer.canonical_json()).canonical_json() == (
+        normalizer.canonical_json()
+    )
+
+
 def test_default_selection_is_numeric_sorted_and_output_is_immutable(
     registry: FeatureRegistry,
 ) -> None:
@@ -233,6 +275,18 @@ def test_fit_rejects_empty_rows_and_invalid_registry_row(registry: FeatureRegist
     invalid = replace(invalid, values={**invalid.values, "signal": "bad"})
     with pytest.raises(TypeError, match="float"):
         fit_robust_normalizer([invalid], registry, _partition(), "dataset-v1")
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+def test_fit_rejects_invalid_run_bound(registry: FeatureRegistry, limit: object) -> None:
+    with pytest.raises(ValueError, match="max_rows_per_run"):
+        fit_robust_normalizer(
+            [_row(registry, 0, signal=1.0)],
+            registry,
+            _partition(),
+            "dataset-v1",
+            max_rows_per_run=limit,  # type: ignore[arg-type]
+        )
 
 
 def test_json_is_byte_stable_round_trips_and_detects_tampering(
