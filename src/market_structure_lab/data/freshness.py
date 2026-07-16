@@ -16,12 +16,14 @@ from sqlalchemy import Connection, text
 from market_structure_lab.data.gaps import (
     GapRange,
     ProvenanceState,
+    RecoveryManifest,
     SourceIdentity,
 )
 
 FRESHNESS_MANIFEST_VERSION = 1
 MINUTE_MS = 60_000
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class FreshnessPlanningStatus(StrEnum):
@@ -128,6 +130,7 @@ class FreshnessManifest:
 
     manifest_version: int
     dump_identity: SourceIdentity
+    compatibility_manifest_sha256: str
     canonical_row_count: int
     as_of: str
     candidate_venue: str
@@ -137,6 +140,13 @@ class FreshnessManifest:
     def __post_init__(self) -> None:
         if self.manifest_version != FRESHNESS_MANIFEST_VERSION:
             raise ValueError(f"unsupported freshness manifest version: {self.manifest_version}")
+        if (
+            not _SHA256.fullmatch(self.compatibility_manifest_sha256)
+            or self.compatibility_manifest_sha256 != self.compatibility_manifest_sha256.lower()
+        ):
+            raise ValueError(
+                "compatibility_manifest_sha256 must be 64 lowercase hexadecimal characters"
+            )
         cutoff = _validate_cutoff(datetime.fromisoformat(self.as_of.replace("Z", "+00:00")))
         if self.as_of != _format_utc(cutoff):
             raise ValueError("freshness manifest as_of must use canonical UTC formatting")
@@ -158,6 +168,7 @@ class FreshnessManifest:
         return {
             "manifest_version": self.manifest_version,
             "dump_identity": asdict(self.dump_identity),
+            "compatibility_manifest_sha256": self.compatibility_manifest_sha256,
             "canonical_row_count": self.canonical_row_count,
             "as_of": self.as_of,
             "candidate_venue": self.candidate_venue,
@@ -202,7 +213,8 @@ def build_freshness_manifest(
     connection: Connection,
     *,
     dump_identity: SourceIdentity,
-    provenance_states: Mapping[str, ProvenanceState],
+    compatibility_manifest: RecoveryManifest,
+    compatibility_manifest_sha256: str,
     as_of: datetime,
     candidate_venue: str = "binance",
     market_type: str = "spot",
@@ -216,6 +228,13 @@ def build_freshness_manifest(
     """Plan exact internal and tail gaps using compact SQL over the canonical view."""
     if timeframe != "1m":
         raise ValueError("daily freshness supports only 1m candles")
+    reviewed_sha = _validate_compatibility_artifact(
+        compatibility_manifest,
+        expected_sha256=compatibility_manifest_sha256,
+        dump_identity=dump_identity,
+        candidate_venue=candidate_venue,
+        market_type=market_type,
+    )
     cutoff = _validate_cutoff(as_of)
     cutoff_ms = _datetime_to_milliseconds(cutoff)
     relation = _qualified_relation(schema, table)
@@ -248,8 +267,9 @@ ORDER BY {symbol}, {interval}
     if not series_rows:
         raise ValueError("no canonical 1m candle series were found")
     canonical_symbols = {str(row["symbol"]) for row in series_rows}
-    if set(provenance_states) != canonical_symbols:
-        raise ValueError("provenance states must cover canonical symbols exactly")
+    compatibility_symbols = {envelope.symbol for envelope in compatibility_manifest.envelopes}
+    if compatibility_symbols != canonical_symbols:
+        raise ValueError("compatibility evidence must cover canonical symbols exactly")
 
     internal_gaps_by_symbol: dict[str, list[GapRange]] = {name: [] for name in canonical_symbols}
     gap_rows = connection.execute(
@@ -329,7 +349,7 @@ ORDER BY symbol, timeframe, start_ms
             )
         )
         missing_minutes = sum(gap.expected_minutes for gap in frozen_ranges)
-        state = provenance_states[name]
+        state = compatibility_manifest.provenance_validation[name]
         status = _planning_status(state, missing_minutes)
         canonical_state = CanonicalSeriesState(
             symbol=name,
@@ -354,6 +374,7 @@ ORDER BY symbol, timeframe, start_ms
     return FreshnessManifest(
         manifest_version=FRESHNESS_MANIFEST_VERSION,
         dump_identity=dump_identity,
+        compatibility_manifest_sha256=reviewed_sha,
         canonical_row_count=sum(plan.canonical_state.row_count for plan in ordered_plans),
         as_of=_format_utc(cutoff),
         candidate_venue=candidate_venue,
@@ -407,6 +428,7 @@ def _manifest_from_dict(raw: Mapping[str, Any]) -> FreshnessManifest:
     return FreshnessManifest(
         manifest_version=int(raw["manifest_version"]),
         dump_identity=SourceIdentity(**raw["dump_identity"]),
+        compatibility_manifest_sha256=str(raw["compatibility_manifest_sha256"]),
         canonical_row_count=int(raw["canonical_row_count"]),
         as_of=str(raw["as_of"]),
         candidate_venue=str(raw["candidate_venue"]),
@@ -427,6 +449,67 @@ def _planning_status(state: ProvenanceState, missing_minutes: int) -> FreshnessP
     if missing_minutes:
         return FreshnessPlanningStatus.FETCH_REQUIRED
     return FreshnessPlanningStatus.UP_TO_DATE
+
+
+def _validate_compatibility_artifact(
+    manifest: RecoveryManifest,
+    *,
+    expected_sha256: str,
+    dump_identity: SourceIdentity,
+    candidate_venue: str,
+    market_type: str,
+) -> str:
+    if not isinstance(manifest, RecoveryManifest):
+        raise TypeError("compatibility_manifest must be a RecoveryManifest")
+    if not _SHA256.fullmatch(expected_sha256):
+        raise ValueError("reviewed compatibility checksum must be a SHA-256 digest")
+    normalized_sha = expected_sha256.lower()
+    if manifest.sha256() != normalized_sha:
+        raise ValueError(
+            "compatibility artifact does not match the reviewed compatibility checksum"
+        )
+    if not _source_identities_match(manifest.source_identity, dump_identity):
+        raise ValueError("compatibility artifact dump identity does not match freshness input")
+    if manifest.candidate_venue != candidate_venue:
+        raise ValueError("compatibility artifact candidate venue does not match freshness input")
+    if manifest.market_type != market_type:
+        raise ValueError("compatibility artifact market type does not match freshness input")
+
+    envelope_symbols: list[str] = []
+    for envelope in manifest.envelopes:
+        if not envelope.symbol:
+            raise ValueError("compatibility artifact contains an empty symbol")
+        if envelope.timeframe != "1m":
+            raise ValueError("compatibility artifact supports only 1m envelopes")
+        if (
+            envelope.first_open_time_ms < 0
+            or envelope.first_open_time_ms % MINUTE_MS
+            or envelope.last_open_time_ms % MINUTE_MS
+            or envelope.last_open_time_ms < envelope.first_open_time_ms
+            or envelope.row_count < 1
+        ):
+            raise ValueError("compatibility artifact contains an invalid observed envelope")
+        envelope_symbols.append(envelope.symbol)
+    if len(set(envelope_symbols)) != len(envelope_symbols):
+        raise ValueError("compatibility artifact contains duplicate symbol envelopes")
+    if set(manifest.provenance_validation) != set(envelope_symbols):
+        raise ValueError("compatibility provenance must cover its symbol envelopes exactly")
+    if not all(
+        isinstance(state, ProvenanceState) for state in manifest.provenance_validation.values()
+    ):
+        raise ValueError("compatibility provenance contains an invalid state")
+    for gap in manifest.gaps:
+        if gap.symbol not in set(envelope_symbols) or gap.timeframe != "1m":
+            raise ValueError("compatibility artifact gap crosses its reviewed symbol set")
+    return normalized_sha
+
+
+def _source_identities_match(left: SourceIdentity, right: SourceIdentity) -> bool:
+    return (
+        left.dump_sha256.lower() == right.dump_sha256.lower()
+        and left.source_row_count == right.source_row_count
+        and left.mapping_version == right.mapping_version
+    )
 
 
 def _planning_reason(status: FreshnessPlanningStatus, missing_minutes: int) -> str:
