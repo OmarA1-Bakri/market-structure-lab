@@ -4,6 +4,7 @@ import math
 
 import pytest
 
+from market_structure_lab.discovery import kmeans as kmeans_module
 from market_structure_lab.discovery import (
     FeatureMatrix,
     KMeansResult,
@@ -137,6 +138,25 @@ def test_kmeans_handles_duplicate_points_without_empty_clusters() -> None:
     assert result.centroids == ((0.0,), (10.0,))
     assert result.assignments == (0, 0, 1, 1)
     assert result.inertia == 0.0
+
+
+def test_kmeans_fails_loudly_if_an_assignment_empties_a_cluster(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        kmeans_module,
+        "_initial_centroids",
+        lambda rows, clusters, seed: ((0.0,), (0.0,)),
+    )
+
+    with pytest.raises(RuntimeError, match="empty cluster"):
+        fit_kmeans(
+            ((0.0,), (10.0,)),
+            clusters=2,
+            seed=0,
+            max_iterations=10,
+            tolerance=0.0,
+        )
 
 
 @pytest.mark.parametrize(

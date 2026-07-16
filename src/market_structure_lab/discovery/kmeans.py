@@ -164,27 +164,17 @@ def _updated_centroids(
         [row for row, assignment in zip(rows, assignments) if assignment == label]
         for label in range(len(centroids))
     ]
-    recovered: set[int] = set()
-    updated: list[tuple[float, ...]] = []
-    for label, cluster_rows in enumerate(members):
-        if cluster_rows:
-            updated.append(
-                tuple(
-                    math.fsum(row[column] for row in cluster_rows) / len(cluster_rows)
-                    for column in range(width)
-                )
-            )
-            continue
-        index = max(
-            (candidate for candidate in range(len(rows)) if candidate not in recovered),
-            key=lambda candidate: (
-                _squared_distance(rows[candidate], centroids[assignments[candidate]]),
-                -candidate,
-            ),
+    if any(not cluster_rows for cluster_rows in members):
+        raise RuntimeError(
+            "K-means encountered an empty cluster; deterministic recovery is not defined"
         )
-        recovered.add(index)
-        updated.append(rows[index])
-    return tuple(updated)
+    return tuple(
+        tuple(
+            math.fsum(row[column] for row in cluster_rows) / len(cluster_rows)
+            for column in range(width)
+        )
+        for cluster_rows in members
+    )
 
 
 def _canonical_labels(
