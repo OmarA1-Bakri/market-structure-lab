@@ -198,7 +198,7 @@ bounded deterministic Parquet parts.
 
 ```python
 from market_structure_lab.data.derived import publish_feature_rows
-from market_structure_lab.events import FixedWindowSegmenter, make_event
+from market_structure_lab.events import make_event, segment_fixed_windows
 from market_structure_lab.features import FeatureBuilder, builtin_feature_registry
 ```
 

@@ -36,8 +36,10 @@ def test_feature_and_derived_modules_import_in_a_fresh_interpreter() -> None:
             "-c",
             (
                 "from market_structure_lab.features import builtin_feature_registry; "
+                "from market_structure_lab.events import make_event, segment_fixed_windows; "
                 "from market_structure_lab.data.derived import DerivedPublicationIdentity; "
                 "assert len(builtin_feature_registry().definitions) == 26; "
+                "assert callable(make_event) and callable(segment_fixed_windows); "
                 "assert DerivedPublicationIdentity.__name__ == 'DerivedPublicationIdentity'"
             ),
         ],
