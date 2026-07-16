@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 
 from market_structure_lab.cli import sync_candles
@@ -9,9 +11,9 @@ from market_structure_lab.data.freshness_sync import (
     build_freshness_report,
     write_freshness_artifacts,
 )
-from market_structure_lab.data.gaps import write_manifest
+from market_structure_lab.data.gaps import ProvenanceState, write_manifest
 
-from test_freshness_sync import _compatibility, _manifest
+from test_freshness_sync import _compatibility, _manifest, _plan
 
 
 def _write_inputs(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -22,6 +24,17 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, str]:
     write_freshness_manifest(freshness, manifest_path)
     write_manifest(compatibility, compatibility_path)
     return manifest_path, compatibility_path, compatibility.sha256()
+
+
+def _blocked_but_gap_complete_manifest():
+    current = _manifest(recovered=True)
+    eth = _plan("ETHUSDT", ProvenanceState.SOURCE_CONFLICT, (0, 120_000), 3, ())
+    symbols = tuple(eth if item.symbol == "ETHUSDT" else item for item in current.symbols)
+    return replace(
+        current,
+        canonical_row_count=sum(item.canonical_state.row_count for item in symbols),
+        symbols=symbols,
+    )
 
 
 def test_run_dry_run_reads_frozen_evidence_without_database_or_source_writes(
@@ -57,6 +70,76 @@ def test_run_dry_run_reads_frozen_evidence_without_database_or_source_writes(
     assert payload["missing_minutes"] == 3
     assert payload["eligible_minutes"] == 1
     assert payload["symbols"] == 3
+
+
+def test_run_dry_run_exits_stale_when_gap_complete_symbol_is_provenance_blocked(
+    tmp_path: Path, capsys
+) -> None:
+    manifest = _blocked_but_gap_complete_manifest()
+    compatibility = _compatibility()
+    manifest_path = tmp_path / "freshness.json"
+    compatibility_path = tmp_path / "compatibility.json"
+    write_freshness_manifest(manifest, manifest_path)
+    write_manifest(compatibility, compatibility_path)
+
+    exit_code = sync_candles.main(
+        [
+            "run",
+            "--manifest",
+            str(manifest_path),
+            "--compatibility",
+            str(compatibility_path),
+            "--compatibility-sha256",
+            compatibility.sha256(),
+        ]
+    )
+
+    assert json.loads(capsys.readouterr().out)["missing_minutes"] == 0
+    assert exit_code == 2
+
+
+def test_plan_exits_stale_when_gap_complete_symbol_is_provenance_blocked(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    manifest = _blocked_but_gap_complete_manifest()
+    compatibility = _compatibility()
+
+    class FakeEngine:
+        def connect(self):
+            return nullcontext(object())
+
+        def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(sync_candles, "EXPECTED_DUMP_SHA256", "a" * 64)
+    monkeypatch.setattr(
+        sync_candles,
+        "_read_reviewed_compatibility",
+        lambda *args: compatibility,
+    )
+    monkeypatch.setattr(sync_candles, "create_engine", lambda *args, **kwargs: FakeEngine())
+    monkeypatch.setattr(sync_candles, "verify_manifest_identity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_candles, "build_freshness_manifest", lambda *args, **kwargs: manifest)
+    monkeypatch.setattr(
+        sync_candles,
+        "_write_plan_artifact",
+        lambda *args: tmp_path / "blocked.plan.json",
+    )
+
+    exit_code = sync_candles.main(
+        [
+            "plan",
+            "--compatibility",
+            str(tmp_path / "compatibility.json"),
+            "--compatibility-sha256",
+            compatibility.sha256(),
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert json.loads(capsys.readouterr().out)["missing_minutes"] == 0
+    assert exit_code == 2
 
 
 def test_apply_rejects_dump_mismatch_before_database_migration_or_source(

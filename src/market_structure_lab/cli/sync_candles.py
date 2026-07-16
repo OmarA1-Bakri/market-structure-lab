@@ -16,6 +16,7 @@ from market_structure_lab.core.config import load_settings
 from market_structure_lab.data.export import sha256_file
 from market_structure_lab.data.freshness import (
     FreshnessManifest,
+    FreshnessPlanningStatus,
     build_freshness_manifest,
     read_freshness_manifest,
     resolve_freshness_cutoff,
@@ -124,7 +125,7 @@ def _plan(args: argparse.Namespace) -> int:
     path = _write_plan_artifact(manifest, args.output_dir)
     payload = _plan_payload(manifest)
     print(_json({"manifest": str(path), "manifest_sha256": manifest.sha256(), **payload}))
-    return 0 if payload["missing_minutes"] == 0 else 2
+    return _planning_exit_code(manifest)
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -140,7 +141,7 @@ def _run(args: argparse.Namespace) -> int:
                 {"dry_run": True, "manifest_sha256": manifest.sha256(), **_plan_payload(manifest)}
             )
         )
-        return 0 if all(not item.missing_ranges for item in manifest.symbols) else 2
+        return _planning_exit_code(manifest)
 
     actual_dump_sha = sha256_file(args.dump_path)
     if manifest.dump_identity.dump_sha256.lower() != EXPECTED_DUMP_SHA256:
@@ -241,6 +242,14 @@ def _plan_payload(manifest: FreshnessManifest) -> dict[str, int]:
             gap.expected_minutes for item in manifest.symbols for gap in item.eligible_ranges
         ),
     }
+
+
+def _planning_exit_code(manifest: FreshnessManifest) -> int:
+    return (
+        0
+        if all(item.status is FreshnessPlanningStatus.UP_TO_DATE for item in manifest.symbols)
+        else 2
+    )
 
 
 def _add_compatibility_arguments(parser: argparse.ArgumentParser) -> None:
