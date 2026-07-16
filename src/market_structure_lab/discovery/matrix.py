@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Sequence
 
-from market_structure_lab.discovery.splits import DiscoveryInput
+from market_structure_lab.discovery.splits import DiscoveryInput, PartitionRole
 from market_structure_lab.features.registry import (
     FeatureRegistry,
     FeatureValueKind,
@@ -23,6 +23,7 @@ class FeatureMatrix:
     feature_names: tuple[str, ...]
     values: tuple[tuple[float, ...], ...]
     dropped_null_rows: int
+    partition_role: PartitionRole | None = None
 
 
 def build_feature_matrix(
@@ -65,6 +66,7 @@ def build_feature_matrix(
         feature_names=selected,
         values=tuple(values),
         dropped_null_rows=dropped,
+        partition_role=input.partition.role,
     )
 
 

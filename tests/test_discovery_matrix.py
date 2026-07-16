@@ -108,6 +108,7 @@ def test_matrix_selects_registered_numeric_features_in_registry_order() -> None:
         "BTCUSDT|1m|2025-01-01T00:01:00Z",
     )
     assert matrix.dropped_null_rows == 0
+    assert matrix.partition_role is PartitionRole.DISCOVERY
 
 
 def test_matrix_drops_whole_rows_with_selected_nulls_and_counts_them() -> None:
