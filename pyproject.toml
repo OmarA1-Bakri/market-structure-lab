@@ -27,6 +27,7 @@ dependencies = [
 [project.scripts]
 msl-backfill-candles = "market_structure_lab.cli.backfill_candles:main"
 msl-db-inspect = "market_structure_lab.cli.inspect_database:main"
+msl-sync-candles = "market_structure_lab.cli.sync_candles:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/market_structure_lab"]
