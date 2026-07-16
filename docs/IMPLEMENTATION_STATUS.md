@@ -5,8 +5,8 @@ Evidence date: 2026-07-16
 ## Scope
 
 This execution implements the approved data-truth foundation, early missing-candle recovery,
-canonical snapshot boundary, deterministic auction representation, and Phase 3 feature/event
-dataset boundary. It does not begin behaviour discovery, clustering, AI hypothesis generation,
+canonical snapshot boundary, deterministic auction representation, Phase 3 feature/event datasets,
+and the Phase 4 outcome-blind discovery MVP. It does not begin Phase 5 outcome attachment,
 statistical edge validation, strategy construction, exchange integration, or live execution.
 
 ## Foundation delivered
@@ -258,8 +258,57 @@ checks used isolated directories below the operating-system temporary directory.
 - Final `git diff --check`: passed. Only preserved user/runtime `.codacy`, `.coverage`, and `.vscode`
   artifacts remain untracked and were not staged.
 
-The Phase 3 exit gate is satisfied with zero known implementation errors. Phase 4 behaviour
-discovery remains unstarted and requires a separate explicit approval.
+The Phase 3 exit gate is satisfied with zero known implementation errors.
+
+## Phase 4: outcome-blind discovery MVP
+
+Phase 4 consumes only frozen Phase 3 feature evidence and keeps the final holdout inaccessible.
+Delivered contracts include:
+
+- canonical chronological discovery/development/final-holdout and optional asset-holdout metadata,
+  with holdout iterables rejected before access;
+- bounded discovery-safe numeric matrices, inspectable deterministic PCA, and seeded canonical
+  K-means;
+- stability across seeds, deterministic subsamples, adjacent development periods, assets, and
+  nearby cluster counts, with unstable definitions retained as `rejected_unstable`;
+- bounded per-boundary motifs and event-level dwell-compressed transition evidence that never
+  crosses symbol, timeframe, segment, gap, session, or non-contiguous boundaries;
+- content-addressed frozen behaviours with complete detector, representative, distribution,
+  stability, frequency/duration, and coverage evidence;
+- frozen AI evidence packs and provenance-complete non-authoritative interpretation records;
+- atomic, canonical, checksum-pinned, idempotent `DR-*` and interpretation publication.
+
+The committed golden fixture uses two symbols, 16 discovery rows, eight development rows, and
+separately frozen holdout metadata with no holdout rows or outcomes. Stable `DR-000601` replays
+byte-identically with two behaviours and manifest SHA-256
+`86d754f5be1c3d0b5e2a9d403a7af9c814231f7679421a560f14dc1bbc65b8f2`. Unstable
+`DR-000602` replays byte-identically with no behaviours and manifest SHA-256
+`cbadd46a15144ce89424b40c0d84687ce99764725b323d4f2f9dbb3b66f9e500`.
+
+The exact frozen interpretation prompt input SHA-256 is
+`dd306e3eea72684c28d3855e924785c805d1c7b0e8d8961736eab9c5fca526e5`; the parent session-model
+response SHA-256 is `d3a180687ff3e630b559f17c2433359bc86d76e301c585e84da6a0a77453ab06`.
+Real publication produced interpretation manifest SHA-256
+`b0370ffee5a3d64ae57fd3e4af798ec98fe00daee70dcb07a2ed08d1b545c53c`. The response proposes
+falsifiable Phase 5 tests and explicitly records fixture/transition/asset/OHLCV limitations. It does
+not claim a validated edge.
+
+Algorithms, caps, replay instructions, artifact formats, Markov-like transition caveats, AI
+non-authority, and the untouched Phase 5 boundary are documented in
+[`DISCOVERY_MVP.md`](DISCOVERY_MVP.md).
+
+Task 6 verification completed:
+
+- golden stable/rejected/interpretation publication: `3 passed`;
+- discovery regression including the golden fixture: `186 passed in 16.56s`;
+- Ruff and formatter: passed for the Task 6 Python test;
+- Mypy: no issues in the 13 discovery/experiment source files;
+- `git diff --check`: passed;
+- immutable dump, interpretation input, and interpretation response hashes matched their pinned
+  values.
+
+Repository-wide Phase 4 exit gates are recorded only after the integrating verification pass; this
+section does not claim them in advance.
 
 ## Daily candle freshness implementation
 

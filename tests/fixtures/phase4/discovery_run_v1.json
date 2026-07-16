@@ -1,0 +1,456 @@
+{
+  "schema_version": "phase4-discovery-fixture-v1",
+  "dataset_snapshot": {
+    "dataset_version": "DS-000601",
+    "sha256": "8be7a8986ce91cff9af10249be029aaeb6893e2fdf7a63ca99115b6ec58b9dc5"
+  },
+  "source_identity": {
+    "config_version": "phase4-golden-config-v1",
+    "profile_version": "phase4-golden-profile-v1",
+    "window_policy_id": "phase4-golden-window-v1"
+  },
+  "registry": {
+    "feature_set_id": "FS-000601",
+    "definitions": [
+      {
+        "name": "auction_location",
+        "definition": "Normalized observable auction location.",
+        "family": "auction",
+        "value_kind": "float",
+        "units": "ratio",
+        "required_prior_observations": 0,
+        "missing_policy": "error",
+        "version": "1.0.0",
+        "leakage_class": "AT_CUTOFF",
+        "allowed_categories": []
+      },
+      {
+        "name": "volume_change",
+        "definition": "Trailing normalized observable volume change.",
+        "family": "sequence",
+        "value_kind": "float",
+        "units": "ratio",
+        "required_prior_observations": 1,
+        "missing_policy": "error",
+        "version": "1.0.0",
+        "leakage_class": "TRAILING_ONLY",
+        "allowed_categories": []
+      }
+    ]
+  },
+  "split": {
+    "split_id": "phase4-golden-split-v1",
+    "discovery": {
+      "role": "discovery",
+      "start": "2025-01-01T00:00:00Z",
+      "end": "2025-01-02T00:00:00Z",
+      "symbols": [
+        "BTCUSDT",
+        "ETHUSDT"
+      ]
+    },
+    "development": {
+      "role": "development",
+      "start": "2025-01-02T00:00:00Z",
+      "end": "2025-01-04T00:00:00Z",
+      "symbols": [
+        "BTCUSDT",
+        "ETHUSDT"
+      ]
+    },
+    "holdout_metadata": {
+      "role": "holdout",
+      "start": "2025-01-04T00:00:00Z",
+      "end": "2025-01-05T00:00:00Z",
+      "symbols": [
+        "BTCUSDT",
+        "ETHUSDT"
+      ]
+    },
+    "asset_holdouts": [
+      "XRPUSDT"
+    ]
+  },
+  "feature_names": [
+    "auction_location",
+    "volume_change"
+  ],
+  "caps": {
+    "max_rows": 32,
+    "max_iterations": 100,
+    "tolerance": 1e-12
+  },
+  "code_commit": "496df7a",
+  "lock_sha256": "a16b349b97b4c265129df59092f69981d9150a131772b8ed9f9ebda28dcaf44b",
+  "discovery_rows": [
+    {
+      "timestamp": "2025-01-01T00:00:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -10.4,
+        "volume_change": -1.04
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:01:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -10.2,
+        "volume_change": -1.02
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:02:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -10.0,
+        "volume_change": -1.0
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:03:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -9.8,
+        "volume_change": -0.98
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:04:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 9.8,
+        "volume_change": 0.98
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:05:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 10.0,
+        "volume_change": 1.0
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:06:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 10.2,
+        "volume_change": 1.02
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:07:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 10.4,
+        "volume_change": 1.04
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:00:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -10.3,
+        "volume_change": -1.03
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:01:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -10.1,
+        "volume_change": -1.01
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:02:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -9.9,
+        "volume_change": -0.99
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:03:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -9.7,
+        "volume_change": -0.97
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:04:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 9.7,
+        "volume_change": 0.97
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:05:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 9.9,
+        "volume_change": 0.99
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:06:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 10.1,
+        "volume_change": 1.01
+      }
+    },
+    {
+      "timestamp": "2025-01-01T00:07:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 10.3,
+        "volume_change": 1.03
+      }
+    }
+  ],
+  "development_rows": [
+    {
+      "timestamp": "2025-01-02T00:00:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -10.1,
+        "volume_change": -1.01
+      }
+    },
+    {
+      "timestamp": "2025-01-02T00:01:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 10.1,
+        "volume_change": 1.01
+      }
+    },
+    {
+      "timestamp": "2025-01-03T00:00:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -9.9,
+        "volume_change": -0.99
+      }
+    },
+    {
+      "timestamp": "2025-01-03T00:01:00Z",
+      "symbol": "BTCUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 9.9,
+        "volume_change": 0.99
+      }
+    },
+    {
+      "timestamp": "2025-01-02T00:00:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -10.0,
+        "volume_change": -1.0
+      }
+    },
+    {
+      "timestamp": "2025-01-02T00:01:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 10.0,
+        "volume_change": 1.0
+      }
+    },
+    {
+      "timestamp": "2025-01-03T00:00:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": -9.8,
+        "volume_change": -0.98
+      }
+    },
+    {
+      "timestamp": "2025-01-03T00:01:00Z",
+      "symbol": "ETHUSDT",
+      "segment_id": 0,
+      "values": {
+        "auction_location": 9.8,
+        "volume_change": 0.98
+      }
+    }
+  ],
+  "event_ids": [
+    "EV-P4-000",
+    "EV-P4-001",
+    "EV-P4-002",
+    "EV-P4-003",
+    "EV-P4-004",
+    "EV-P4-005",
+    "EV-P4-006",
+    "EV-P4-007",
+    "EV-P4-008",
+    "EV-P4-009",
+    "EV-P4-010",
+    "EV-P4-011",
+    "EV-P4-012",
+    "EV-P4-013",
+    "EV-P4-014",
+    "EV-P4-015"
+  ],
+  "durations_seconds": [
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0
+  ],
+  "runs": {
+    "stable": {
+      "run_id": "DR-000601",
+      "pca_components": 1,
+      "clusters": 2,
+      "seeds": [
+        7,
+        11
+      ],
+      "stability_policy": {
+        "minimum_seed_ari": -1.0,
+        "minimum_subsample_ari": -1.0,
+        "maximum_adjacent_js_distance": 1.0,
+        "minimum_asset_coverage": 0.0,
+        "minimum_parameter_perturbation_ari": -1.0
+      },
+      "expected": {
+        "status": "completed",
+        "manifest_sha256": "86d754f5be1c3d0b5e2a9d403a7af9c814231f7679421a560f14dc1bbc65b8f2",
+        "identity_sha256": "cf808253c11204fdc725fe9e8ec18b34ab84970289ff5706c2d8c3bdf2b26b86",
+        "config_sha256": "9c6f31ac2da36907492623132e789d1520186d1e0d98093a348a408c78464918",
+        "behaviour_ids": [
+          "B-AFFBC6438DE4E321",
+          "B-CC5D0EE76718D3E7"
+        ],
+        "artifact_sha256": {
+          "behaviours.json": "5b127335cd2d620660bb1418fa7001164c77e673b252e862d66d54b99c34aab5",
+          "clustering.json": "8230744ae633c244a45d54b010b31e9c6b9b3cd79bfd1380f67cacab6d2321f2",
+          "config.json": "4b097db8aef6e1213599b46054de6a66227bc41faa1ffdc7d4ca968b76cf006d",
+          "metrics.json": "719cc8d42452c4a7fd706a793130fc966292b2ec7ecfe32dd367ab226f0725ff",
+          "motifs.json": "5da2402e81683419ac8e5f01cb943fcbd13799d1a8965c3f177e415652fbe6b1",
+          "projection.json": "e9785313168caeff659231ada06c3ef7d0c732cd3bcc13cc03cd4e0b3f891b43",
+          "stability.json": "6c369e5c863a2714aaa7865ba239e6eb6d864e151c99cf48ef47b07aa6c57622",
+          "summary.md": "4416fc69bc5c4f7f80e8de94a7229a3fbb54689dcbc2cf32334f9ff7b0f4f3ad",
+          "transitions.json": "507d9fb64ce4b6a615647e3bb14e1ba1c185285fed77199e709bb39784ff71bc"
+        },
+        "metrics": {
+          "status": "completed",
+          "discovery_rows": 16,
+          "development_rows": 8,
+          "dropped_null_rows": {
+            "discovery": 0,
+            "development": 0
+          },
+          "behaviours": 2,
+          "motifs": 6,
+          "transitions": 2
+        }
+      }
+    },
+    "rejected": {
+      "run_id": "DR-000602",
+      "pca_components": 1,
+      "clusters": 2,
+      "seeds": [
+        7,
+        11
+      ],
+      "stability_policy": {
+        "minimum_seed_ari": 1.0,
+        "minimum_subsample_ari": 1.0,
+        "maximum_adjacent_js_distance": 0.0,
+        "minimum_asset_coverage": 1.0,
+        "minimum_parameter_perturbation_ari": 1.0
+      },
+      "expected": {
+        "status": "rejected_unstable",
+        "manifest_sha256": "cbadd46a15144ce89424b40c0d84687ce99764725b323d4f2f9dbb3b66f9e500",
+        "identity_sha256": "edf76c9ca23d2fb39ef2c10041cd36961fc5b5b35f0c0f041378e3fa866d88a9",
+        "config_sha256": "c2140865855c1f320bc59457e56f158681cd04ba20ae251895d8818689ca6c8a",
+        "behaviour_ids": [],
+        "artifact_sha256": {
+          "behaviours.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+          "clustering.json": "8230744ae633c244a45d54b010b31e9c6b9b3cd79bfd1380f67cacab6d2321f2",
+          "config.json": "3e33fb60d0fc9d0fe4d659897d614897668e06e67029be933c6eb5b2f59ebd44",
+          "metrics.json": "39617a9910ae2bbecb063d5fe2d3df491011eb60d96cda051e6af5728c4fb0c4",
+          "motifs.json": "5da2402e81683419ac8e5f01cb943fcbd13799d1a8965c3f177e415652fbe6b1",
+          "projection.json": "e9785313168caeff659231ada06c3ef7d0c732cd3bcc13cc03cd4e0b3f891b43",
+          "stability.json": "0ccc8ad028003ba7ff762c8261b407dee9e503801dd29f4bdc3526ab9569573c",
+          "summary.md": "8d87b964312105a50df1d4abc8e2431aa38c0b40dfac9a463ee663ca802d9e30",
+          "transitions.json": "507d9fb64ce4b6a615647e3bb14e1ba1c185285fed77199e709bb39784ff71bc"
+        },
+        "metrics": {
+          "status": "rejected_unstable",
+          "discovery_rows": 16,
+          "development_rows": 8,
+          "dropped_null_rows": {
+            "discovery": 0,
+            "development": 0
+          },
+          "behaviours": 0,
+          "motifs": 6,
+          "transitions": 2
+        }
+      }
+    }
+  },
+  "interpretation_input_sha256": "dd306e3eea72684c28d3855e924785c805d1c7b0e8d8961736eab9c5fca526e5",
+  "interpretation_response_sha256": "d3a180687ff3e630b559f17c2433359bc86d76e301c585e84da6a0a77453ab06",
+  "interpretation_publication": {
+    "expected": {
+      "schema_version": "interpretation-manifest-v1",
+      "run_id": "DR-000601",
+      "behaviour_ids": [
+        "B-AFFBC6438DE4E321",
+        "B-CC5D0EE76718D3E7"
+      ],
+      "identity_sha256": "4ac743c47691b29672adbaa1fd8894250d912f99412c48d55d618fee8bcc72d7",
+      "artifact_sha256": {
+        "evidence.json": "b2d6d03e93f4b1681193069e616cf8eac9a789e040264c9892a5e3c6dfb4c0e5",
+        "interpretations.json": "82f61b86fb86b61236b779810cdba34f1678020c6b777a779fdc2df805bbf4c8"
+      },
+      "manifest_sha256": "b0370ffee5a3d64ae57fd3e4af798ec98fe00daee70dcb07a2ed08d1b545c53c"
+    }
+  }
+}

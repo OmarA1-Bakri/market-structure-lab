@@ -205,6 +205,29 @@ duplicates, ordering errors, and unsafe schemas fail closed. The derived API rem
 `market_structure_lab.data.derived` rather than the canonical data package root to keep the import
 graph acyclic.
 
+## Outcome-blind discovery layer
+
+`market_structure_lab.discovery` is the boundary between frozen Phase 3 evidence and later outcome
+evaluation. `FrozenDiscoverySplit` canonically fixes discovery, development, final-holdout, and
+optional asset-holdout metadata. Fit inputs can contain discovery rows only; development rows are
+admitted only for stability, and holdout iterables are rejected before access.
+
+The baseline remains deliberately inspectable: a capped registered numeric matrix, deterministic
+PCA, seeded canonical K-means, seeded/subsample/adjacent-period/asset/parameter stability evidence,
+bounded motif search, and event-level boundary-aware transitions. Stable definitions become
+content-addressed `FrozenBehaviour` records; unstable definitions remain explicit rejected runs
+with no behaviours.
+
+`run_discovery` stages canonical artifacts and atomically publishes checksum-pinned `DR-*`
+directories. Replay verifies all hashes and returns existing identical content without rewriting it.
+AI interpretation is a separate publication stage. It receives frozen summary evidence only,
+preserves detector fields, uses neutral/inference-labelled language, and records complete
+provider/model/prompt/response provenance. Neither discovery nor interpretation can access Phase 5
+outcomes or the final holdout.
+
+The exact contracts, caps, golden hashes, replay command, and approximation limits are documented
+in [`DISCOVERY_MVP.md`](DISCOVERY_MVP.md).
+
 ## Transition analysis
 
 Use `market_structure_lab.transitions` to count adjacent observed state transitions and estimate conditional

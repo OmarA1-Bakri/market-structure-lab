@@ -230,3 +230,23 @@ from market_structure_lab.features import FeatureBuilder, builtin_feature_regist
 See [`docs/FEATURE_EVENT_DATASETS.md`](docs/FEATURE_EVENT_DATASETS.md) for the registered formulas,
 missing-value rules, normalisation contract, event semantics, and publication invariants. Phase 3
 does not attach outcomes, discover behaviours, validate edges, or construct strategies.
+
+## Outcome-blind discovery MVP
+
+Phase 4 freezes chronological discovery, development, and final-holdout metadata before fitting.
+Registered numeric features enter a bounded matrix, inspectable PCA, deterministic seeded K-means,
+multi-axis stability checks, bounded motifs, and boundary-aware transition summaries. Unstable
+cluster definitions are retained as rejected runs and cannot enter the behaviour catalogue.
+
+Discovery runs publish atomic checksum-pinned `DR-*` bundles. AI may interpret only frozen evidence
+packs and must record complete provenance; it cannot alter detector fields, validate an edge, or
+claim profitability. The final holdout and all future outcomes remain inaccessible until Phase 5.
+
+Replay the committed stable and rejected golden runs with:
+
+```bash
+uv run pytest -q tests/test_phase4_golden.py
+```
+
+See [`docs/DISCOVERY_MVP.md`](docs/DISCOVERY_MVP.md) for algorithms, caps, artifact formats,
+Markov-like transition caveats, the frozen AI interpretation handoff, and the Phase 5 boundary.

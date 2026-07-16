@@ -240,3 +240,28 @@ freshness run or scheduled automation has yet been executed. A disposable Postgr
 profile verified migration reapplication, dump preference, append-only supplements, same/later
 cutoffs, blocked-source no-fetch, advisory locking, and report conservation without touching
 `data/postgres`.
+
+## Phase 4 discovery viability boundary
+
+Phase 4 consumes only immutable Phase 3 feature rows whose dataset, auction configuration, profile,
+window policy, feature set, and registry identities agree. Discovery/development rows are frozen
+separately from final-holdout metadata. The discovery API has no holdout-row input, and no outcome,
+profitability, target, MFE/MAE, or future-volatility field is admitted.
+
+The committed Phase 4 golden fixture is a deterministic software-verification dataset, not sampled
+market evidence and not proof of an edge. It exercises two symbols through real split, matrix, PCA,
+K-means, stability, motif, transition, behaviour, evidence, and artifact APIs. Stable replay pins
+manifest SHA-256 `86d754f5be1c3d0b5e2a9d403a7af9c814231f7679421a560f14dc1bbc65b8f2`;
+the unstable fixture pins
+`cbadd46a15144ce89424b40c0d84687ce99764725b323d4f2f9dbb3b66f9e500` and publishes no
+behaviours.
+
+Transition probabilities are boundary-aware Markov-like conditional summaries, not evidence that
+the market is a stationary first-order Markov process. Adjacent observations remain serially
+dependent; support, dwell compression, block-bootstrap intervals, asset/session breakdowns, and
+later multiple-testing controls remain mandatory.
+
+The frozen interpretation input is derived only from behaviour summaries and transition evidence.
+AI cannot infer participant identity from OHLCV, change a detector, or validate a behaviour. Phase 5
+must attach outcomes under a new approved gate and cannot use the final holdout for selection or
+tuning.
