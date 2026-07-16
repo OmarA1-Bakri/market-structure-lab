@@ -110,9 +110,7 @@ class SnapshotIdentity:
                 {
                     "freshness_report_sha256": self.freshness_report_sha256,
                     "freshness_manifest_sha256": cast(str, self.freshness_manifest_sha256),
-                    "compatibility_manifest_sha256": cast(
-                        str, self.compatibility_manifest_sha256
-                    ),
+                    "compatibility_manifest_sha256": cast(str, self.compatibility_manifest_sha256),
                     "freshness_as_of": cast(str, self.freshness_as_of),
                     "publication_policy": cast(str, self.publication_policy),
                 }
@@ -164,9 +162,7 @@ class SnapshotManifest:
             raise ValueError("snapshot_sha256 must be a SHA-256 hex digest")
 
     def to_json(self) -> str:
-        return json.dumps(
-            self.to_dict(), indent=2, sort_keys=True, separators=(",", ": ")
-        ) + "\n"
+        return json.dumps(self.to_dict(), indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -200,9 +196,7 @@ def export_partitioned_snapshot(
     staging = root / f".dataset_version={identity.dataset_version}.partial"
     staging.mkdir(parents=True, exist_ok=True)
     identity_path = staging / _IDENTITY_NAME
-    identity_json = json.dumps(
-        identity.to_dict(), sort_keys=True, separators=(",", ":")
-    ) + "\n"
+    identity_json = json.dumps(identity.to_dict(), sort_keys=True, separators=(",", ":")) + "\n"
     if identity_path.exists() and identity_path.read_text(encoding="utf-8") != identity_json:
         raise FileExistsError("incomplete dataset version has a different pinned identity")
     if not identity_path.exists():
@@ -226,9 +220,12 @@ def export_partitioned_snapshot(
         symbol, timeframe, date = current_partition
         partition_schema = pl.Schema(cast(Any, {**CANONICAL_SCHEMA, "segment_id": pl.UInt64}))
         frame = pl.DataFrame(current_rows, schema=partition_schema)
-        relative = Path(
-            f"symbol={_safe_component(symbol, 'symbol')}"
-        ) / f"timeframe={_safe_component(timeframe, 'timeframe')}" / f"date={date}" / "part.parquet"
+        relative = (
+            Path(f"symbol={_safe_component(symbol, 'symbol')}")
+            / f"timeframe={_safe_component(timeframe, 'timeframe')}"
+            / f"date={date}"
+            / "part.parquet"
+        )
         destination = staging / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(f".{destination.name}.tmp")
@@ -273,9 +270,7 @@ def export_partitioned_snapshot(
 
     ordered_records = tuple(sorted(records, key=lambda item: item.path))
     expected_paths = {item.path for item in ordered_records}
-    actual_paths = {
-        path.relative_to(staging).as_posix() for path in staging.rglob("*.parquet")
-    }
+    actual_paths = {path.relative_to(staging).as_posix() for path in staging.rglob("*.parquet")}
     unexpected = actual_paths.difference(expected_paths)
     if unexpected:
         raise RuntimeError(f"staging area contains stale partitions: {sorted(unexpected)}")
@@ -344,7 +339,10 @@ def verify_snapshot(directory: str | Path, manifest: SnapshotManifest | None = N
     if active.snapshot_sha256 != expected_snapshot_hash:
         raise ValueError("snapshot manifest logical hash mismatch")
     success_path = root / SUCCESS_NAME
-    if not success_path.is_file() or success_path.read_text(encoding="utf-8").strip() != expected_snapshot_hash:
+    if (
+        not success_path.is_file()
+        or success_path.read_text(encoding="utf-8").strip() != expected_snapshot_hash
+    ):
         raise ValueError("snapshot completion marker is absent or invalid")
     counted_rows = 0
     for partition in active.partitions:

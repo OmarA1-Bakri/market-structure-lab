@@ -68,7 +68,9 @@ def snapshot_to_dict(snapshot: AuctionSnapshot) -> dict[str, Any]:
         ],
         "profile": {
             "allocation_id": profile.allocation_id,
-            "bin_volumes": [[index, volume] for index, volume in sorted(profile.bin_volumes.items())],
+            "bin_volumes": [
+                [index, volume] for index, volume in sorted(profile.bin_volumes.items())
+            ],
             "binning_id": profile.binning_id,
             "poc_index": profile.poc_index,
             "total_volume": profile.total_volume,

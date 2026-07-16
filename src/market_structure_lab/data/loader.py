@@ -196,9 +196,7 @@ def datetime_to_source_epoch(value: datetime, *, mapping: CandleSourceMapping) -
     unit = _timestamp_unit_name(mapping)
     utc_value = value.astimezone(UTC)
     delta = utc_value - datetime(1970, 1, 1, tzinfo=UTC)
-    microseconds = (
-        delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
-    )
+    microseconds = delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
     if unit == "microseconds":
         return microseconds
     milliseconds, remainder = divmod(microseconds, 1_000)

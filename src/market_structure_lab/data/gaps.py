@@ -117,8 +117,7 @@ class RecoveryManifest:
             "envelopes": [asdict(item) for item in self.envelopes],
             "gaps": [asdict(item) for item in self.gaps],
             "provenance_validation": {
-                symbol: str(state)
-                for symbol, state in sorted(self.provenance_validation.items())
+                symbol: str(state) for symbol, state in sorted(self.provenance_validation.items())
             },
         }
 
@@ -294,8 +293,7 @@ def read_manifest(path: Path) -> RecoveryManifest:
         envelopes=tuple(ObservedEnvelope(**item) for item in raw["envelopes"]),
         gaps=tuple(GapRange(**item) for item in raw["gaps"]),
         provenance_validation={
-            symbol: ProvenanceState(state)
-            for symbol, state in raw["provenance_validation"].items()
+            symbol: ProvenanceState(state) for symbol, state in raw["provenance_validation"].items()
         },
     )
 

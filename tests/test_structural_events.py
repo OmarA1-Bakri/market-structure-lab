@@ -13,7 +13,9 @@ from market_structure_lab.auction import (
 from market_structure_lab.profiles import FixedStepBins, UniformAllocation
 
 
-def candle(minute: int, price: float, volume: float = 10.0, *, segment_id: int = 0) -> AuctionCandle:
+def candle(
+    minute: int, price: float, volume: float = 10.0, *, segment_id: int = 0
+) -> AuctionCandle:
     return AuctionCandle(
         timestamp=datetime(2025, 1, 1, tzinfo=UTC) + timedelta(minutes=minute),
         symbol="BTCUSDT",

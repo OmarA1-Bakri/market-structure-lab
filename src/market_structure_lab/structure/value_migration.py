@@ -59,9 +59,7 @@ def compare_value_migration(
     )
 
 
-def _value_references(
-    profile: ProfileSnapshot | VolumeProfile, *, name: str
-) -> _ValueReferences:
+def _value_references(profile: ProfileSnapshot | VolumeProfile, *, name: str) -> _ValueReferences:
     if isinstance(profile, ProfileSnapshot):
         if (
             profile.poc_index is None

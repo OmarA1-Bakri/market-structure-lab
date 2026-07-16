@@ -99,7 +99,9 @@ def test_compatibility_requires_all_fragment_rows_and_100_for_large_sources() ->
     assert not missing.compatible
     assert "insufficient_source_samples:3/4" in missing.mismatches
 
-    insufficient = compare_source_compatibility(dump, list(map(_source, range(0, 240_000, 60_000))), existing_rows=1_000)
+    insufficient = compare_source_compatibility(
+        dump, list(map(_source, range(0, 240_000, 60_000))), existing_rows=1_000
+    )
     assert not insufficient.compatible
     assert "insufficient_dump_samples:4/100" in insufficient.mismatches
 
@@ -153,13 +155,16 @@ def test_interrupted_gap_resumes_after_the_last_completed_batch() -> None:
     )
 
     assert resumed == FetchRequest("BTCUSDT", "1m", 180_000, 300_000)
-    assert resume_fetch_request(
-        gap,
-        RecoveryCheckpoint(
-            next_start_ms=300_000,
-            authoritative_empty=False,
-        ),
-    ) is None
+    assert (
+        resume_fetch_request(
+            gap,
+            RecoveryCheckpoint(
+                next_start_ms=300_000,
+                authoritative_empty=False,
+            ),
+        )
+        is None
+    )
 
 
 def test_resume_checkpoint_must_stay_inside_its_frozen_gap() -> None:

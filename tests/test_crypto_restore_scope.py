@@ -25,9 +25,7 @@ def _manifest_value(key: str) -> str:
 
 def _restore_entries() -> list[str]:
     return [
-        line
-        for line in RESTORE_LIST.read_text().splitlines()
-        if line and not line.startswith(";")
+        line for line in RESTORE_LIST.read_text().splitlines() if line and not line.startswith(";")
     ]
 
 

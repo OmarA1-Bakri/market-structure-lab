@@ -59,10 +59,7 @@ def validate_snapshot_publication(
     mismatched = tuple(
         item
         for item in report.symbols
-        if (
-            item.status in _HEALTHY
-            and item.compatibility_state is not ProvenanceState.COMPATIBLE
-        )
+        if (item.status in _HEALTHY and item.compatibility_state is not ProvenanceState.COMPATIBLE)
         or (
             item.status in _PROVENANCE_BLOCKED
             and item.compatibility_state is not expected_blocked_state[item.status]

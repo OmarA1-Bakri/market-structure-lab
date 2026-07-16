@@ -41,8 +41,7 @@ def test_profile_golden_fixture_locks_integer_bins_and_value_area() -> None:
     binning = FixedStepBins(step=float(definition["step"]), origin=float(definition["origin"]))
     allocation = UniformAllocation()
     candles = [
-        Candle(**{key: float(value) for key, value in row.items()})
-        for row in fixture["candles"]
+        Candle(**{key: float(value) for key, value in row.items()}) for row in fixture["candles"]
     ]
 
     profile = calculate_profile(
@@ -105,9 +104,7 @@ def test_auction_golden_fixture_replays_byte_identically() -> None:
     ]
     assert snapshot_stream_sha256(first) == snapshot_stream_sha256(second)
     assert snapshot_stream_sha256(first) == fixture["expected_snapshot_stream_sha256"]
-    assert [snapshot_stream_sha256([item]) for item in first] == fixture[
-        "expected_snapshot_sha256"
-    ]
+    assert [snapshot_stream_sha256([item]) for item in first] == fixture["expected_snapshot_sha256"]
 
     final = first[-1]
     expected = fixture["expected_final"]

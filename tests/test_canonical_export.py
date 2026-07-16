@@ -165,7 +165,9 @@ def test_export_resumes_an_interrupted_partial_snapshot(tmp_path: Path) -> None:
 
 def test_completed_export_is_idempotent_and_detects_tampering(tmp_path: Path) -> None:
     identity = snapshot_identity("idempotent-v1")
-    first = export_partitioned_snapshot([candle_frame([0])], output_root=tmp_path, identity=identity)
+    first = export_partitioned_snapshot(
+        [candle_frame([0])], output_root=tmp_path, identity=identity
+    )
     second = export_partitioned_snapshot([], output_root=tmp_path, identity=identity)
     assert second == first
 
@@ -185,9 +187,7 @@ def test_export_rejects_duplicate_keys_across_batches(tmp_path: Path) -> None:
 
 
 def test_retained_legacy_snapshot_hash_remains_verifiable() -> None:
-    retained = Path(
-        "data/exports/snapshots/dataset_version=phase0-xrpusdt-20180505-v1"
-    )
+    retained = Path("data/exports/snapshots/dataset_version=phase0-xrpusdt-20180505-v1")
     if not retained.is_dir():
         pytest.skip("retained Phase 0 snapshot is not available")
 

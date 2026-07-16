@@ -36,7 +36,7 @@ def candle_connection():
 
 def test_gap_query_uses_partitioned_lead_and_compact_half_open_ranges() -> None:
     query = build_gap_query(schema=None)
-    assert "lead(\"open_time\")" in query
+    assert 'lead("open_time")' in query
     assert 'PARTITION BY "symbol", "interval"' in query
     assert "open_time + 60000 AS start_ms" in query
     assert "next_open_time AS end_ms" in query

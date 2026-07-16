@@ -61,9 +61,7 @@ class ProfileAccumulator:
         *,
         lower_timeframe_candles: Sequence[Candle] | None = None,
     ) -> BinContribution:
-        contribution = self.contribution(
-            candle, lower_timeframe_candles=lower_timeframe_candles
-        )
+        contribution = self.contribution(candle, lower_timeframe_candles=lower_timeframe_candles)
         self.add_contribution(contribution)
         return contribution
 

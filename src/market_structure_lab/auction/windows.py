@@ -89,15 +89,11 @@ class RollingDuration:
         if duration <= timedelta(0):
             raise ValueError("duration must be positive")
         duration_microseconds = (
-            duration.days * 86_400_000_000
-            + duration.seconds * 1_000_000
-            + duration.microseconds
+            duration.days * 86_400_000_000 + duration.seconds * 1_000_000 + duration.microseconds
         )
         self._duration = duration
         self._active: deque[AuctionCandle] = deque()
-        self._version_id = (
-            f"rolling-duration-v1:microseconds={duration_microseconds}"
-        )
+        self._version_id = f"rolling-duration-v1:microseconds={duration_microseconds}"
 
     @property
     def version_id(self) -> str:
@@ -138,8 +134,7 @@ class FixedWindow:
         self._end = normalized_end
         self._active: list[AuctionCandle] = []
         self._version_id = (
-            f"fixed-window-v1:start={normalized_start.isoformat()};"
-            f"end={normalized_end.isoformat()}"
+            f"fixed-window-v1:start={normalized_start.isoformat()};end={normalized_end.isoformat()}"
         )
 
     @property

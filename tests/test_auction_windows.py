@@ -60,9 +60,7 @@ def test_auction_candle_is_deeply_frozen_and_normalizes_aware_timestamp_to_utc()
         ({"open": -1.0, "low": -2.0}, "non-negative"),
     ],
 )
-def test_auction_candle_rejects_invalid_data(
-    updates: dict[str, object], message: str
-) -> None:
+def test_auction_candle_rejects_invalid_data(updates: dict[str, object], message: str) -> None:
     values: dict[str, object] = {
         "timestamp": datetime(2025, 1, 1, tzinfo=UTC),
         "symbol": "BTCUSDT",
@@ -136,8 +134,7 @@ def test_fixed_window_normalizes_bounds_and_has_stable_version_id() -> None:
     assert policy.start == datetime(2025, 1, 1, tzinfo=UTC)
     assert policy.end == datetime(2025, 1, 1, 1, tzinfo=UTC)
     assert policy.version_id == (
-        "fixed-window-v1:start=2025-01-01T00:00:00+00:00;"
-        "end=2025-01-01T01:00:00+00:00"
+        "fixed-window-v1:start=2025-01-01T00:00:00+00:00;end=2025-01-01T01:00:00+00:00"
     )
 
 

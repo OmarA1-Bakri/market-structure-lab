@@ -46,12 +46,8 @@ def candle(
 
 def test_auction_engine_updates_profile_and_classifies_close_location() -> None:
     auction = auction_engine()
-    first = auction.update(
-        candle(0, open_=100.0, high=102.0, low=100.0, close=100.0, volume=30.0)
-    )
-    second = auction.update(
-        candle(1, open_=101.0, high=104.0, low=101.0, close=104.0, volume=60.0)
-    )
+    first = auction.update(candle(0, open_=100.0, high=102.0, low=100.0, close=100.0, volume=30.0))
+    second = auction.update(candle(1, open_=101.0, high=104.0, low=101.0, close=104.0, volume=60.0))
 
     assert first is not None and second is not None
     assert first.candle_count == 1
@@ -64,9 +60,7 @@ def test_auction_engine_updates_profile_and_classifies_close_location() -> None:
 
 def test_auction_engine_snapshot_is_stable_between_updates() -> None:
     auction = auction_engine()
-    first = auction.update(
-        candle(0, open_=100.0, high=100.0, low=100.0, close=100.0, volume=10.0)
-    )
+    first = auction.update(candle(0, open_=100.0, high=100.0, low=100.0, close=100.0, volume=10.0))
     auction.update(candle(1, open_=105.0, high=105.0, low=105.0, close=105.0, volume=90.0))
 
     assert first is not None

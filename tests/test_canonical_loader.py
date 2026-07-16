@@ -168,7 +168,9 @@ def test_mapping_normalizes_microsecond_source_epochs() -> None:
     )
 
 
-def test_loader_rejects_naive_bounds(candle_engine: Engine, sqlite_mapping: CandleSourceMapping) -> None:
+def test_loader_rejects_naive_bounds(
+    candle_engine: Engine, sqlite_mapping: CandleSourceMapping
+) -> None:
     with pytest.raises(ValueError, match="timezone"):
         load_candles(
             symbol="BTCUSDT",

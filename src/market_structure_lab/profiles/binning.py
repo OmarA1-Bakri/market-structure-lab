@@ -82,9 +82,7 @@ class FixedStepBins:
     def price_for_index(self, index: int) -> float:
         if not isinstance(index, int):
             raise TypeError("index must be an integer")
-        return _decimal_lower_boundary_float(
-            _decimal(self.origin) + _decimal(self.step) * index
-        )
+        return _decimal_lower_boundary_float(_decimal(self.origin) + _decimal(self.step) * index)
 
     # Short aliases are convenient for algorithms that operate only in bin space.
     index = bin_index
@@ -154,9 +152,9 @@ class LogPriceBins:
         _positive_finite(price, name="price")
         with localcontext() as context:
             context.prec = 60
-            raw_index = (
-                _decimal(price) / _decimal(self.anchor_price)
-            ).ln() / (Decimal(1) + _decimal(self.percentage)).ln()
+            raw_index = (_decimal(price) / _decimal(self.anchor_price)).ln() / (
+                Decimal(1) + _decimal(self.percentage)
+            ).ln()
             return int(raw_index.to_integral_value(rounding=ROUND_FLOOR))
 
     def price_for_index(self, index: int) -> float:
@@ -164,9 +162,7 @@ class LogPriceBins:
             raise TypeError("index must be an integer")
         with localcontext() as context:
             context.prec = 60
-            value = _decimal(self.anchor_price) * (
-                Decimal(1) + _decimal(self.percentage)
-            ) ** index
+            value = _decimal(self.anchor_price) * (Decimal(1) + _decimal(self.percentage)) ** index
         return _decimal_lower_boundary_float(value)
 
     index = bin_index
@@ -195,9 +191,7 @@ class TargetCountBins:
             raise ValueError("version must not be empty")
         with localcontext() as context:
             context.prec = 60
-            exact_step = (
-                _decimal(self.high) - _decimal(self.low)
-            ) / Decimal(self.target_count - 1)
+            exact_step = (_decimal(self.high) - _decimal(self.low)) / Decimal(self.target_count - 1)
         public_resolution = max(ulp(self.low), ulp(self.high))
         if exact_step < Decimal.from_float(public_resolution):
             raise ValueError(

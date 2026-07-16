@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 import polars as pl
 from sqlalchemy import Connection, text
 
-from market_structure_lab.data.canonical import empty_candle_frame, normalize_utc, validate_candle_frame
+from market_structure_lab.data.canonical import (
+    empty_candle_frame,
+    normalize_utc,
+    validate_candle_frame,
+)
 
 if TYPE_CHECKING:
     from market_structure_lab.data.gaps import GapRange
@@ -109,9 +113,7 @@ def load_canonical_gap_boundaries(
         raise ValueError("minimum_gap_minutes must be positive")
     preparer = connection.dialect.identifier_preparer
     quoted_table = preparer.quote(table)
-    relation = (
-        f"{preparer.quote_schema(schema)}.{quoted_table}" if schema else quoted_table
-    )
+    relation = f"{preparer.quote_schema(schema)}.{quoted_table}" if schema else quoted_table
     rows = connection.execute(
         text(
             f"""

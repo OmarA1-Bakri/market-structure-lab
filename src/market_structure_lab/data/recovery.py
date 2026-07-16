@@ -152,9 +152,7 @@ class RecoveryCheckpoint:
     authoritative_empty: bool
 
 
-def resume_fetch_request(
-    gap: GapRange, checkpoint: RecoveryCheckpoint
-) -> FetchRequest | None:
+def resume_fetch_request(gap: GapRange, checkpoint: RecoveryCheckpoint) -> FetchRequest | None:
     """Return only the unfinished suffix of a frozen gap."""
     if not gap.start_ms <= checkpoint.next_start_ms <= gap.end_ms:
         raise ValueError("recovery checkpoint lies outside its frozen gap")
@@ -182,7 +180,9 @@ def validate_recovery_batch(
         if len(admitted) == 1_000:
             raise RecoveryValidationError("recovery batch exceeds the bounded 1000-row limit")
         if row.symbol != request.symbol or row.timeframe != request.timeframe:
-            raise RecoveryValidationError("source row crosses its requested symbol/timeframe boundary")
+            raise RecoveryValidationError(
+                "source row crosses its requested symbol/timeframe boundary"
+            )
         if row.open_time_ms % MINUTE_MS:
             raise RecoveryValidationError("source row is not aligned to the one-minute grid")
         if not request.start_ms <= row.open_time_ms < request.end_ms:
@@ -271,9 +271,7 @@ def coalesce_requests(
             and merged_end - prior.start_ms <= maximum_span
         )
         if can_merge:
-            result[-1] = FetchRequest(
-                prior.symbol, prior.timeframe, prior.start_ms, merged_end
-            )
+            result[-1] = FetchRequest(prior.symbol, prior.timeframe, prior.start_ms, merged_end)
         else:
             result.append(item)
     return tuple(result)
@@ -417,7 +415,7 @@ WHERE manifest_sha256=:manifest_sha256 AND status='completed'
             self.connection.execute(
                 text(
                     "SELECT count(*) FROM market_data.candle_supplements "
-                    "WHERE symbol=:symbol AND \"interval\"=:timeframe "
+                    'WHERE symbol=:symbol AND "interval"=:timeframe '
                     "AND open_time>=:start_ms AND open_time<:end_ms "
                     "AND validation_status='validated'"
                 ),
@@ -430,9 +428,7 @@ WHERE manifest_sha256=:manifest_sha256 AND status='completed'
             ).scalar_one()
         )
 
-    def completed_checkpoint(
-        self, run_id: uuid.UUID, gap: GapRange
-    ) -> RecoveryCheckpoint:
+    def completed_checkpoint(self, run_id: uuid.UUID, gap: GapRange) -> RecoveryCheckpoint:
         """Reconstruct the next cursor without retaining completed batch keys."""
         row = self.connection.execute(
             text(
@@ -651,7 +647,9 @@ ORDER BY symbol, "interval", open_time, row_checksum
             ).execution_options(stream_results=True, yield_per=1_000)
         )
         for row in result:
-            digest.update(("\0".join("" if value is None else str(value) for value in row) + "\n").encode())
+            digest.update(
+                ("\0".join("" if value is None else str(value) for value in row) + "\n").encode()
+            )
         return digest.hexdigest()
 
 
@@ -813,7 +811,9 @@ def _recover_gap(
                 )
             published += result
             if result.conflicts:
-                return classify_gap(gap, recovered_minutes=recovered_count(), conflict=True), published
+                return classify_gap(
+                    gap, recovered_minutes=recovered_count(), conflict=True
+                ), published
     except RecoveryValidationError as error:
         with engine.begin() as connection:
             RecoveryRepository(connection).record_batch(
@@ -918,7 +918,10 @@ ORDER BY open_time
         ).mappings()
     )
     return tuple(
-        sorted({row.open_time_ms: row for row in (*distributed, *boundary)}.values(), key=lambda row: row.open_time_ms)
+        sorted(
+            {row.open_time_ms: row for row in (*distributed, *boundary)}.values(),
+            key=lambda row: row.open_time_ms,
+        )
     )
 
 
@@ -954,9 +957,7 @@ def fetch_source_samples(
     return tuple(result)
 
 
-def build_recovery_report(
-    connection: Connection, manifest: RecoveryManifest
-) -> dict[str, object]:
+def build_recovery_report(connection: Connection, manifest: RecoveryManifest) -> dict[str, object]:
     """Build deterministic before/after coverage evidence for one frozen manifest."""
     source_row_count = int(
         connection.execute(text("SELECT count(*) FROM market_data.candles")).scalar_one()
@@ -964,16 +965,20 @@ def build_recovery_report(
     if source_row_count != manifest.source_identity.source_row_count:
         raise ValueError("source row count changed after recovery")
     manifest_sha = manifest.sha256()
-    run = connection.execute(
-        text(
-            """
+    run = (
+        connection.execute(
+            text(
+                """
 SELECT run_id, status, logical_hash
 FROM market_data.candle_recovery_runs
 WHERE manifest_sha256=:manifest_sha
 """
-        ),
-        {"manifest_sha": manifest_sha},
-    ).mappings().one_or_none()
+            ),
+            {"manifest_sha": manifest_sha},
+        )
+        .mappings()
+        .one_or_none()
+    )
     if run is None:
         raise ValueError("no recovery run exists for the frozen manifest")
     resolutions = tuple(
@@ -1139,9 +1144,7 @@ def summarize_recovery_evidence(
         "added_unique_rows": total_added,
         "after_missing_minutes": total_after_missing,
         "coverage_conservation": True,
-        "unresolved_gap_count": sum(
-            int(str(item["unresolved_gap_count"])) for item in symbols
-        ),
+        "unresolved_gap_count": sum(int(str(item["unresolved_gap_count"])) for item in symbols),
         "largest_remaining_gap_minutes": max(
             (int(str(item["largest_remaining_gap_minutes"])) for item in symbols), default=0
         ),
@@ -1164,9 +1167,7 @@ def _validate_values(row: RecoveryCandle) -> None:
         raise RecoveryValidationError("source candle contains negative volume")
     if row.trades is not None and row.trades < 0:
         raise RecoveryValidationError("source candle contains a negative trade count")
-    if row.high < max(row.open, row.low, row.close) or row.low > min(
-        row.open, row.high, row.close
-    ):
+    if row.high < max(row.open, row.low, row.close) or row.low > min(row.open, row.high, row.close):
         raise RecoveryValidationError("source candle violates OHLC relationships")
 
 

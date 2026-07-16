@@ -55,9 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="verify a restored crypto database and apply the idempotent canonical migration",
     )
     _add_compatibility_arguments(bootstrap)
-    bootstrap.add_argument(
-        "--dump-path", type=Path, default=Path("data/dumps/callscore.dump")
-    )
+    bootstrap.add_argument("--dump-path", type=Path, default=Path("data/dumps/callscore.dump"))
 
     plan = commands.add_parser("plan", help="freeze exact canonical gaps at one UTC cutoff")
     _add_compatibility_arguments(plan)

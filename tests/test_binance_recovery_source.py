@@ -56,7 +56,9 @@ class FakeTransport:
         self.headers.append(headers)
         payload = self.responses[url]
         start = int(headers.get("Range", "bytes=0-").split("=")[1].split("-")[0])
-        return self.stream_status, (payload[index : index + chunk_size] for index in range(start, len(payload), chunk_size))
+        return self.stream_status, (
+            payload[index : index + chunk_size] for index in range(start, len(payload), chunk_size)
+        )
 
 
 def test_archive_timestamp_normalization_covers_both_contract_eras() -> None:

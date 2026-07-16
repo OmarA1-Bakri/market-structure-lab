@@ -7,7 +7,11 @@ import pytest
 from market_structure_lab.profiles.allocation import BinContribution, TypicalPriceAllocation
 from market_structure_lab.profiles.binning import FixedStepBins
 from market_structure_lab.profiles.models import Candle, ProfileSnapshot
-from market_structure_lab.profiles.volume import calculate_profile, point_of_control_index, value_area_indices
+from market_structure_lab.profiles.volume import (
+    calculate_profile,
+    point_of_control_index,
+    value_area_indices,
+)
 
 
 def test_point_of_control_tie_prefers_lower_integer_bin() -> None:

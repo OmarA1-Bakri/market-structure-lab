@@ -139,11 +139,14 @@ def test_volatility_factory_uses_positive_scaled_step_and_stable_identifier() ->
 
     assert bins.step == 20.0
     assert bins.version == "volatility-scaled-v1"
-    assert bins.definition_id == volatility_scaled_bins(
-        reference_price=20_000.0,
-        volatility=0.002,
-        multiplier=0.5,
-    ).definition_id
+    assert (
+        bins.definition_id
+        == volatility_scaled_bins(
+            reference_price=20_000.0,
+            volatility=0.002,
+            multiplier=0.5,
+        ).definition_id
+    )
 
 
 @pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])

@@ -180,7 +180,9 @@ def plan_fetch_segments(request: FetchRequest) -> tuple[FetchSegment, ...]:
         next_month = _next_month(cursor)
         if _is_month_start(cursor) and next_month <= end:
             segments.append(
-                FetchSegment("monthly", _to_ms(cursor), _to_ms(next_month), cursor.strftime("%Y-%m"))
+                FetchSegment(
+                    "monthly", _to_ms(cursor), _to_ms(next_month), cursor.strftime("%Y-%m")
+                )
             )
             cursor = next_month
             continue
@@ -236,9 +238,7 @@ class BinanceSpotSource:
                 # to synthesize candles. The public kline endpoint remains authoritative.
                 yield from self._fetch_api(bounded_request)
 
-    def _fetch_archive(
-        self, request: FetchRequest, segment: FetchSegment
-    ) -> Iterator[FetchBatch]:
+    def _fetch_archive(self, request: FetchRequest, segment: FetchSegment) -> Iterator[FetchBatch]:
         assert segment.archive_period is not None
         filename = f"{request.symbol}-{request.timeframe}-{segment.archive_period}.zip"
         url = (
@@ -312,7 +312,10 @@ class BinanceSpotSource:
             payload = self._retry(
                 lambda: self.transport.get_bytes(
                     url,
-                    headers={"Accept": "application/json", "User-Agent": "market-structure-lab/0.1"},
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "market-structure-lab/0.1",
+                    },
                     limit=4_000_000,
                 )
             )
@@ -427,12 +430,16 @@ class BinanceSpotSource:
                 raise
             except SourceRateLimited as error:
                 if attempt == self.retry_policy.attempts:
-                    raise SourceUnavailable("Binance rate limit persisted through retries") from error
+                    raise SourceUnavailable(
+                        "Binance rate limit persisted through retries"
+                    ) from error
                 self._sleep(max(delay, error.retry_after_seconds))
                 delay = min(delay * 2, self.retry_policy.maximum_delay_seconds)
             except (OSError, urllib.error.URLError) as error:
                 if attempt == self.retry_policy.attempts:
-                    raise SourceUnavailable("Binance retrieval exhausted its retry policy") from error
+                    raise SourceUnavailable(
+                        "Binance retrieval exhausted its retry policy"
+                    ) from error
                 self._sleep(delay)
                 delay = min(delay * 2, self.retry_policy.maximum_delay_seconds)
         raise AssertionError("retry loop did not return or raise")
