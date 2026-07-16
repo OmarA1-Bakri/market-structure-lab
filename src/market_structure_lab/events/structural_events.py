@@ -61,9 +61,7 @@ class StructuralEventDetector:
         self._latest_snapshot: AuctionSnapshot | None = None
         self._latest_row: FeatureRow | None = None
 
-    def update(
-        self, snapshot: AuctionSnapshot, row: FeatureRow
-    ) -> tuple[MarketEvent, ...]:
+    def update(self, snapshot: AuctionSnapshot, row: FeatureRow) -> tuple[MarketEvent, ...]:
         validate_observation_pair(snapshot, row)
         self.registry.validate_row(row)
         reset = observation_resets_continuity(
@@ -185,9 +183,7 @@ def _node_zone(node: ProfileNode) -> tuple[float, float]:
     return float(low), float(high)
 
 
-def _validate_structural_timestamp(
-    event: StructuralEvent, snapshot: AuctionSnapshot
-) -> None:
+def _validate_structural_timestamp(event: StructuralEvent, snapshot: AuctionSnapshot) -> None:
     if event.timestamp != snapshot.timestamp:
         raise ValueError("Phase 2 structural event timestamp must match its snapshot")
 

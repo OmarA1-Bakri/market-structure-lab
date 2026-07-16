@@ -67,9 +67,7 @@ class FeatureBuilder:
         prior = [] if reset else list(self._history)
         previous = prior[-1] if prior else None
         dwell = (
-            1
-            if reset or self._last_location is not snapshot.location
-            else self._location_dwell + 1
+            1 if reset or self._last_location is not snapshot.location else self._location_dwell + 1
         )
         values = _feature_values(snapshot, previous, prior, location_dwell=dwell)
         row = FeatureRow(
@@ -198,21 +196,15 @@ def _feature_values(
         "nearest_lvn_distance_close": _nearest_node_distance(
             candle.close, current.nodes, NodeKind.LVN
         ),
-        "max_node_persistence_bars": max(
-            (node.persistence for node in current.nodes), default=0
-        ),
+        "max_node_persistence_bars": max((node.persistence for node in current.nodes), default=0),
         "inside_value_rate_20": _inside_value_rate(snapshots_20),
         "value_reentry_rate_20": _value_reentry_rate(snapshots_20),
         "location_dwell_bars": location_dwell,
         "log_return_1": current_return,
         "range_close_fraction": _ratio(price_range, candle.close),
         "body_range_ratio": _ratio(candle.close - candle.open, price_range),
-        "upper_wick_range_ratio": _ratio(
-            candle.high - max(candle.open, candle.close), price_range
-        ),
-        "lower_wick_range_ratio": _ratio(
-            min(candle.open, candle.close) - candle.low, price_range
-        ),
+        "upper_wick_range_ratio": _ratio(candle.high - max(candle.open, candle.close), price_range),
+        "lower_wick_range_ratio": _ratio(min(candle.open, candle.close) - candle.low, price_range),
         "log_volume_ratio_1": _log_ratio(
             candle.volume,
             None if previous_candle is None else previous_candle.volume,
@@ -259,9 +251,7 @@ def _value_position(close: float, low: float | None, high: float | None) -> floa
     return _ratio(close - low, high - low)
 
 
-def _value_area_jaccard(
-    current: AuctionSnapshot, previous: AuctionSnapshot | None
-) -> float | None:
+def _value_area_jaccard(current: AuctionSnapshot, previous: AuctionSnapshot | None) -> float | None:
     if previous is None:
         return None
     current_low = current.profile.value_area_low_index

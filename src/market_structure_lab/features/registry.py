@@ -91,7 +91,9 @@ class FeatureDefinition:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field} must be non-empty")
         if not isinstance(self.version, str) or _VERSION.fullmatch(self.version) is None:
-            raise ValueError("version must contain only letters, digits, dot, underscore, or hyphen")
+            raise ValueError(
+                "version must contain only letters, digits, dot, underscore, or hyphen"
+            )
         if (
             isinstance(self.required_prior_observations, bool)
             or not isinstance(self.required_prior_observations, int)
@@ -135,9 +137,7 @@ class FeatureDefinition:
 class FeatureRegistry:
     """Immutable feature set identified by a manually allocated decimal ID."""
 
-    def __init__(
-        self, feature_set_id: str, definitions: Iterable[FeatureDefinition]
-    ) -> None:
+    def __init__(self, feature_set_id: str, definitions: Iterable[FeatureDefinition]) -> None:
         if not isinstance(feature_set_id, str) or _FEATURE_SET_ID.fullmatch(feature_set_id) is None:
             raise ValueError("feature_set_id must match FS-######")
         ordered = tuple(sorted(definitions, key=lambda item: item.name))

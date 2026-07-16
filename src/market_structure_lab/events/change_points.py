@@ -143,9 +143,7 @@ class CausalChangePointDetector:
             # No epsilon is injected: when the completed-prior MAD is zero, only an
             # exact departure from the prior median is considered a change.
             triggered = (
-                deviation > 0
-                if mad == 0
-                else deviation / mad >= self.config.robust_threshold
+                deviation > 0 if mad == 0 else deviation / mad >= self.config.robust_threshold
             )
             if triggered:
                 event = make_event(
@@ -182,9 +180,7 @@ class CausalChangePointDetector:
 class ExpansionDetector:
     """Detect volatility or volume expansion against completed prior medians."""
 
-    def __init__(
-        self, config: ExpansionConfig | None = None, *, registry: FeatureRegistry
-    ) -> None:
+    def __init__(self, config: ExpansionConfig | None = None, *, registry: FeatureRegistry) -> None:
         self.config = ExpansionConfig() if config is None else config
         if not isinstance(self.config, ExpansionConfig):
             raise TypeError("config must be an ExpansionConfig")
@@ -222,9 +218,7 @@ class ExpansionDetector:
             else None
         )
         volume_baseline = (
-            float(median(self._volume))
-            if len(self._volume) >= self.config.min_history
-            else None
+            float(median(self._volume)) if len(self._volume) >= self.config.min_history else None
         )
         volatility_expanded = (
             volatility is not None
@@ -244,9 +238,9 @@ class ExpansionDetector:
                 row.timestamp,
                 row.information_cutoff,
                 row,
-                    self.config.trigger_version,
-                    registry=self.registry,
-                    metadata={
+                self.config.trigger_version,
+                registry=self.registry,
+                metadata={
                     "volatility_feature": self.config.volatility_feature,
                     "current_volatility": volatility,
                     "prior_volatility_median": volatility_baseline,
@@ -353,8 +347,4 @@ def _validate_history_config(history_window: int, min_history: int) -> None:
 
 
 def _is_finite_number(value: object) -> bool:
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, (int, float))
-        and isfinite(value)
-    )
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and isfinite(value)

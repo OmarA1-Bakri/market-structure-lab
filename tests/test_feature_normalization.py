@@ -196,9 +196,7 @@ def test_constant_scale_is_one_and_null_remains_null(registry: FeatureRegistry) 
 
 
 @pytest.mark.parametrize("role", [PartitionRole.VALIDATION, PartitionRole.HOLDOUT])
-def test_fit_rejects_nontraining_partition(
-    registry: FeatureRegistry, role: PartitionRole
-) -> None:
+def test_fit_rejects_nontraining_partition(registry: FeatureRegistry, role: PartitionRole) -> None:
     with pytest.raises(ValueError, match="training"):
         fit_robust_normalizer(
             [_row(registry, 0, signal=1.0)], registry, _partition(role), "dataset-v1"

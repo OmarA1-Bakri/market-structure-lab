@@ -213,7 +213,9 @@ def test_feature_row_is_utc_cutoff_bound_and_immutable() -> None:
         row.values["return_1"] = 1.0  # type: ignore[index]
 
 
-@pytest.mark.parametrize("timeframe, seconds", [("1m", 60), ("15m", 900), ("4h", 14_400), ("1d", 86_400)])
+@pytest.mark.parametrize(
+    "timeframe, seconds", [("1m", 60), ("15m", 900), ("4h", 14_400), ("1d", 86_400)]
+)
 def test_feature_row_supports_explicit_timeframe_durations(timeframe: str, seconds: int) -> None:
     item = registry(definition("poc_distance"))
     timestamp = datetime(2025, 1, 1, tzinfo=UTC)

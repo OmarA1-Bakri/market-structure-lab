@@ -315,9 +315,7 @@ def fit_robust_normalizer(
             count = observation_counts[name]
             if count == 0:
                 raise ValueError(f"feature has no non-null training observations: {name}")
-            sorted_path = _merge_to_one_run(
-                run_paths[name], run_directory, name_index=name_index
-            )
+            sorted_path = _merge_to_one_run(run_paths[name], run_directory, name_index=name_index)
             q25, median, q75 = _file_quantiles(sorted_path, count)
             iqr = q75 - q25
             medians[name] = median
@@ -356,9 +354,7 @@ def _flush_runs(
         values.clear()
 
 
-def _merge_to_one_run(
-    paths: list[Path], directory: Path, *, name_index: int
-) -> Path:
+def _merge_to_one_run(paths: list[Path], directory: Path, *, name_index: int) -> Path:
     generation = 0
     current = paths
     while len(current) > 1:

@@ -162,8 +162,7 @@ def test_change_point_prefix_is_invariant_to_future_poison() -> None:
     first_events = tuple(first.update(*item) for item in prefix)
     poisoned = CausalChangePointDetector(config, registry=REGISTRY)
     poisoned_events = tuple(
-        poisoned.update(*item)
-        for item in (*prefix, observation(4, signal=1_000_000.0))
+        poisoned.update(*item) for item in (*prefix, observation(4, signal=1_000_000.0))
     )
 
     assert tuple(
@@ -258,7 +257,9 @@ def test_feature_identity_drift_cannot_reuse_detector_history(field: str) -> Non
 
 def test_expansion_uses_completed_prior_medians_and_documents_zero_baseline() -> None:
     detector = ExpansionDetector(
-        ExpansionConfig(history_window=2, min_history=2, volatility_multiplier=2, volume_multiplier=2),
+        ExpansionConfig(
+            history_window=2, min_history=2, volatility_multiplier=2, volume_multiplier=2
+        ),
         registry=REGISTRY,
     )
     detector.update(*observation(0, volatility=0.0, volume=0.0))
@@ -276,7 +277,9 @@ def test_expansion_uses_completed_prior_medians_and_documents_zero_baseline() ->
 
 def test_volume_expansion_does_not_require_a_populated_volatility_feature() -> None:
     detector = ExpansionDetector(
-        ExpansionConfig(history_window=2, min_history=2, volatility_multiplier=2, volume_multiplier=2),
+        ExpansionConfig(
+            history_window=2, min_history=2, volatility_multiplier=2, volume_multiplier=2
+        ),
         registry=REGISTRY,
     )
     detector.update(*observation(0, volatility=None, volume=10.0))

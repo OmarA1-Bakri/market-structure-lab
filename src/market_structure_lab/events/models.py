@@ -22,6 +22,8 @@ JsonScalar: TypeAlias = str | int | float | bool | None
 
 _EVENT_ID = re.compile(r"^EV-[A-F0-9]{64}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+
+
 class EventKind(StrEnum):
     """Outcome-blind segment and structural-event categories."""
 
@@ -193,9 +195,10 @@ class MarketEvent:
             (self.trigger_version, "trigger_version"),
         ):
             _require_text(text_value, field)
-        if not isinstance(self.registry_sha256, str) or _SHA256.fullmatch(
-            self.registry_sha256
-        ) is None:
+        if (
+            not isinstance(self.registry_sha256, str)
+            or _SHA256.fullmatch(self.registry_sha256) is None
+        ):
             raise ValueError("registry_sha256 must be a lowercase SHA-256 digest")
         if isinstance(self.segment_id, bool) or not isinstance(self.segment_id, int):
             raise TypeError("segment_id must be a non-negative integer")

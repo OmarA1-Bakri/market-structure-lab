@@ -189,10 +189,7 @@ def test_history_windows_become_eligible_at_exact_observations() -> None:
     assert rows[19].values["volume_relative_median_20"] == pytest.approx(20 / 10.5 - 1)
     assert rows[19].values["realized_volatility_20"] is None
     expected_returns = [
-        log(
-            (100.0 + minute + minute % 3)
-            / (100.0 + minute - 1 + (minute - 1) % 3)
-        )
+        log((100.0 + minute + minute % 3) / (100.0 + minute - 1 + (minute - 1) % 3))
         for minute in range(1, 21)
     ]
     expected_volatility = sqrt(sum(value * value for value in expected_returns) / 20)
@@ -238,10 +235,7 @@ def test_zero_denominators_and_undefined_references_remain_null_without_epsilon(
 
 def test_zero_trailing_volatility_and_volume_baseline_remain_null() -> None:
     builder = FeatureBuilder()
-    rows = [
-        builder.update(snapshot(minute, close=100.0, volume=0.0))
-        for minute in range(21)
-    ]
+    rows = [builder.update(snapshot(minute, close=100.0, volume=0.0)) for minute in range(21)]
 
     assert rows[-1].values["realized_volatility_20"] == 0.0
     assert rows[-1].values["volatility_normalized_return_20"] is None
@@ -264,7 +258,12 @@ def test_explicit_reset_events_clear_history_before_current_row(
     builder = FeatureBuilder()
     builder.update(snapshot(0, close=100.0))
     reset_row = builder.update(
-        snapshot(2, close=110.0, event_kinds=(kind,), segment_id=int(kind is StructuralEventKind.SEGMENT_RESET))
+        snapshot(
+            2,
+            close=110.0,
+            event_kinds=(kind,),
+            segment_id=int(kind is StructuralEventKind.SEGMENT_RESET),
+        )
     )
 
     assert reset_row.values["log_return_1"] is None

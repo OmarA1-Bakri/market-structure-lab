@@ -237,9 +237,7 @@ def test_make_event_rejects_nonmatching_cutoff_and_outcome_metadata() -> None:
 def test_fixed_windows_are_full_non_overlapping_and_use_last_row_vector() -> None:
     rows = minute_rows(5)
     events = list(
-        segment_fixed_windows(
-            rows, width=2, trigger_version="fixed-window-v1", registry=REGISTRY
-        )
+        segment_fixed_windows(rows, width=2, trigger_version="fixed-window-v1", registry=REGISTRY)
     )
 
     assert len(events) == 2
@@ -264,9 +262,7 @@ def test_fixed_windows_discard_partial_tail_at_each_segment_boundary() -> None:
     ]
 
     events = list(
-        segment_fixed_windows(
-            rows, width=3, trigger_version="fixed-window-v1", registry=REGISTRY
-        )
+        segment_fixed_windows(rows, width=3, trigger_version="fixed-window-v1", registry=REGISTRY)
     )
 
     assert len(events) == 1
@@ -328,15 +324,16 @@ def test_utc_sessions_reset_at_exact_calendar_boundaries(
 ) -> None:
     rows = [row_at(before), row_at(after)]
     events = list(
-        segment_utc_sessions(
-            rows, unit=unit, trigger_version="utc-session-v1", registry=REGISTRY
-        )
+        segment_utc_sessions(rows, unit=unit, trigger_version="utc-session-v1", registry=REGISTRY)
     )
 
     assert len(events) == 2
     assert [event.metadata["session"] for event in events] == list(label)
     assert all(event.kind is EventKind.UTC_SESSION for event in events)
-    assert [event.end for event in events] == [before + timedelta(minutes=1), after + timedelta(minutes=1)]
+    assert [event.end for event in events] == [
+        before + timedelta(minutes=1),
+        after + timedelta(minutes=1),
+    ]
 
 
 def test_utc_sessions_reset_at_segment_even_within_one_calendar_session() -> None:

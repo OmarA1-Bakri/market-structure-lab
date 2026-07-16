@@ -57,9 +57,7 @@ class FeatureRow:
         _require_utc(self.information_cutoff, "information_cutoff")
         expected_cutoff = self.timestamp + timeframe_duration(self.timeframe)
         if self.information_cutoff != expected_cutoff:
-            raise ValueError(
-                "information_cutoff must equal timestamp plus the timeframe duration"
-            )
+            raise ValueError("information_cutoff must equal timestamp plus the timeframe duration")
         for field in (
             "symbol",
             "timeframe",
