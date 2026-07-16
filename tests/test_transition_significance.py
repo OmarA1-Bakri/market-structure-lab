@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from src.transitions import TransitionSignificance, test_transition_significance
+from market_structure_lab.transitions import TransitionSignificance, transition_significance
 
 
 def test_transition_significance_flags_enriched_transition_against_base_rate() -> None:
-    result = test_transition_significance(
+    result = transition_significance(
         current_state="below_value",
         next_state="point_of_control",
         transition_count=8,
@@ -30,7 +30,7 @@ def test_transition_significance_flags_enriched_transition_against_base_rate() -
 
 
 def test_transition_significance_does_not_flag_low_lift_transition() -> None:
-    result = test_transition_significance(
+    result = transition_significance(
         current_state="upper_value",
         next_state="above_value",
         transition_count=3,
@@ -48,7 +48,7 @@ def test_transition_significance_does_not_flag_low_lift_transition() -> None:
 
 def test_transition_significance_requires_valid_counts() -> None:
     with pytest.raises(ValueError, match="transition_count"):
-        test_transition_significance(
+        transition_significance(
             current_state="a",
             next_state="b",
             transition_count=11,
@@ -58,7 +58,7 @@ def test_transition_significance_requires_valid_counts() -> None:
         )
 
     with pytest.raises(ValueError, match="total_next_state_observations"):
-        test_transition_significance(
+        transition_significance(
             current_state="a",
             next_state="b",
             transition_count=1,

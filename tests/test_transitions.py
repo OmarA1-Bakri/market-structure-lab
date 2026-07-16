@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from src.auction import AuctionLocation
-from src.transitions import Transition, estimate_transition_matrix, observed_transitions
+from market_structure_lab.auction import AuctionLocation
+from market_structure_lab.transitions import (
+    Transition,
+    estimate_transition_matrix,
+    observed_transitions,
+)
 
 
 def test_observed_transitions_counts_adjacent_state_changes() -> None:

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from src.experiments import ExperimentConfig, save_experiment_result
+from market_structure_lab.experiments import ExperimentConfig, save_experiment_result
 
 
 def test_save_experiment_result_writes_reproducible_artifact_bundle(tmp_path) -> None:
@@ -38,8 +38,7 @@ def test_save_experiment_result_writes_reproducible_artifact_bundle(tmp_path) ->
         "transition_probability": 0.62,
     }
     assert (result.path / "summary.md").read_text() == (
-        "# Value migration baseline\n\n"
-        "Initial deterministic value-migration baseline.\n"
+        "# Value migration baseline\n\nInitial deterministic value-migration baseline.\n"
     )
     assert (result.path / "plots" / "value_area.html").read_text() == "<html>plot</html>"
     assert (result.path / "artifacts" / "transitions.json").read_text() == '{"above_value": 12}'
@@ -99,8 +98,12 @@ def test_save_experiment_result_writes_byte_for_byte_identical_bundles(tmp_path)
         root=second_root,
     )
 
-    first_files = sorted(str(path.relative_to(first_result.path)) for path in first_result.path.rglob("*"))
-    second_files = sorted(str(path.relative_to(second_result.path)) for path in second_result.path.rglob("*"))
+    first_files = sorted(
+        str(path.relative_to(first_result.path)) for path in first_result.path.rglob("*")
+    )
+    second_files = sorted(
+        str(path.relative_to(second_result.path)) for path in second_result.path.rglob("*")
+    )
 
     assert first_files == second_files
 

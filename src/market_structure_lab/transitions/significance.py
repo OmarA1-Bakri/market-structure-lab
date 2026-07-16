@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import comb
 
-from src.transitions.matrix import State
+from market_structure_lab.transitions.matrix import State
 
 
 @dataclass(frozen=True)
@@ -19,7 +18,7 @@ class TransitionSignificance:
     significant: bool
 
 
-def test_transition_significance(
+def transition_significance(
     *,
     current_state: State,
     next_state: State,
@@ -42,10 +41,12 @@ def test_transition_significance(
     observed_probability = transition_count / current_state_observations
     base_probability = next_state_base_observations / total_next_state_observations
     lift = observed_probability / base_probability if base_probability > 0 else float("inf")
-    p_value = _binomial_upper_tail(
-        successes=transition_count,
-        trials=current_state_observations,
-        probability=base_probability,
+    p_value = float(
+        _binomial_upper_tail(
+            successes=transition_count,
+            trials=current_state_observations,
+            probability=base_probability,
+        )
     )
 
     return TransitionSignificance(
@@ -86,10 +87,6 @@ def _binomial_upper_tail(*, successes: int, trials: int, probability: float) -> 
     if probability == 1:
         return 1.0
 
-    return sum(
-        comb(trials, observed) * (probability**observed) * ((1 - probability) ** (trials - observed))
-        for observed in range(successes, trials + 1)
-    )
+    from scipy.stats import binom
 
-
-globals()["test_transition_significance"].__test__ = False
+    return binom.sf(successes - 1, trials, probability)
