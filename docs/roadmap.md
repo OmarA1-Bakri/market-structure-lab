@@ -9,7 +9,7 @@ Repository Readiness
 
 Dataset Layer
 
-- expose canonical OHLCV loading through `src.datasets`
+- expose canonical OHLCV loading through `market_structure_lab.datasets`
 - keep SQL out of experiments and notebooks
 - preserve immutable raw data and return reproducible Polars frames
 
@@ -36,6 +36,7 @@ State Modelling
 - classify deterministic close location relative to value
 - estimate empirical market state transitions
 - test transition enrichment against unconditional base rates
+- screen observed transitions with false-discovery-rate correction
 - evaluate probabilistic state models
 
 Prediction

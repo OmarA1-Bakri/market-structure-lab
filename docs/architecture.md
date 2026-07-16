@@ -8,7 +8,7 @@ The repository is organised as a single-engineer quantitative research workspace
 - docker/ hosts local database and development containers
 - docs/ contains the research backlog and project notes
 - scripts/ contains operational scripts for inspection and pipeline setup
-- src/ contains the actual research pipeline code
+- `src/market_structure_lab/` contains the installable research package
 
 ## Processing pipeline
 
@@ -27,11 +27,11 @@ The default research database is named `research`. PostgreSQL is intended to be 
 
 ## Dataset layer
 
-Research code should import from `src.datasets` and should not contain SQL. The first canonical
+Research code should import from `market_structure_lab.datasets` and should not contain SQL. The first canonical
 interface is:
 
 ```python
-from src.datasets import load_dataset, load_symbol
+from market_structure_lab.datasets import load_dataset, load_symbol
 ```
 
 `load_dataset` returns a Polars frame with ordered OHLCV columns:
@@ -42,9 +42,38 @@ timestamp, symbol, timeframe, open, high, low, close, volume
 
 Time windows are half-open: `start <= timestamp < end`.
 
+The data layer is the only package allowed to know source tables or columns. Configuration maps the
+reviewed `market_data.candles` dump fields into canonical UTC OHLCV. After the recovery migration,
+`market_data.candles_canonical` publishes a dump-preferred union: immutable restored rows always win,
+and only independently validated append-only supplements can fill absent keys.
+
+Large reads use `market_structure_lab.data.loader.iter_candle_batches`, which executes a server-side
+ordered query and yields validated Polars frames with a configurable maximum batch size. Snapshot
+exports partition by dataset version, symbol, timeframe, and UTC date; each completed snapshot has
+an atomic success marker and a deterministic manifest containing source identities, row counts,
+time bounds, and partition hashes.
+
+Material gaps are converted to explicit segment boundaries. The data layer derives these boundaries
+from the post-recovery `candles_canonical` series, so a partially recovered original range becomes
+only its exact remaining hole or holes. Downstream profile and transition code must not cross those
+boundaries.
+
+## Recovery ledger
+
+Missing-candle recovery is separate from the immutable restore. A frozen manifest pins the dump
+hash, source row count, mapping version, observed envelopes, exact internal gaps, recovery cutoff,
+and per-symbol provenance decision. Binance Spot archive files are accepted only after their
+published SHA-256 checksums pass; REST residual responses are content-hashed. Every gap receives a
+terminal ledger classification, including source conflicts and authoritative provider absence.
+
+Recovery tables are append-only and the command resumes each gap after its last completed bounded
+batch. A PostgreSQL advisory lock serializes recovery publication, and a partial unique index permits
+only one validated supplement per canonical `(symbol, interval, open_time)` key. Reapplying a
+completed manifest must produce zero new rows and the same logical supplement hash.
+
 ## Experiment artifacts
 
-Use `src.experiments.save_experiment_result` for research runs that need durable evidence. Each
+Use `market_structure_lab.experiments.save_experiment_result` for research runs that need durable evidence. Each
 run writes:
 
 - `config.json`
@@ -58,33 +87,61 @@ strategies, or own research logic.
 
 ## Auction engine
 
-Use `src.auction.AuctionEngine` for candle-by-candle deterministic state updates. The first engine
-version builds an OHLCV-derived volume profile on each update and exposes:
+Use `market_structure_lab.auction.AuctionEngine` for candle-by-candle deterministic state updates.
+The engine accepts exactly one ordered symbol/timeframe stream and requires explicit binning,
+allocation, window, dataset-version, and configuration-version inputs. Its default gap policy fails
+closed; the alternative resets state at the hard boundary. A segment-ID change always resets state,
+and UTC session policies reset at their declared day, Monday-start week, or month boundary.
 
-- point of control
-- value area low/high
-- close location relative to value
+The profile accumulator stores volume under integer bin indices and supports exact additive removal
+of cached candle contributions. Rolling bar-count and duration policies therefore remain bounded
+without recomputing the full window. Fixed half-open UTC ranges and UTC day/week/month sessions are
+also available. Unbounded cumulative state is not an engine default or implicit fallback.
 
-The current volume-profile assumption is deliberately simple and auditable: without trade-level
-data, each candle's volume is distributed equally across every price bin touched by its low-high
-range. Replace this only when better source data is available and covered by regression tests.
+Each frozen `AuctionSnapshot` records the active timestamps and candle count together with:
+
+- the integer-bin profile, POC, contiguous POC-outward value area, and VWAP;
+- close location relative to value;
+- HVN/LVN zones, prominence, width, and consecutive-window persistence;
+- value migration and stable structural reset, POC-migration, breakout, and re-entry events;
+- dataset, config, binning, allocation, profile-definition, window, symbol, timeframe, and segment
+  identities.
+
+`market_structure_lab.auction.canonical_snapshot_json` and
+`market_structure_lab.auction.snapshot_stream_sha256` serialize and hash ordered snapshots for
+deterministic replay evidence. The engine never inspects a future candle.
+
+## Profile representation
+
+`market_structure_lab.profiles` separates bin definitions, volume allocation, profile calculation,
+and window membership. Supported bin definitions are exchange tick size, fixed linear step,
+constant-percentage/log price, a target-count definition frozen to a supplied range, and a
+volatility-scaled definition frozen to supplied reference values.
+
+OHLCV cannot provide exact volume-at-price. Allocation models are therefore explicit and versioned:
+uniform touched-bin, typical-price, and triangular-to-close are approximations. Lower-timeframe
+reconstruction consumes only supplied real constituent candles; it does not interpolate or invent
+observations. Exact trade-price allocation remains unavailable because the restored tick relation
+contains no observations.
 
 ## Structure layer
 
-Use `src.structure` for deterministic features built from volume profiles. The first structural
-features are:
+Use `market_structure_lab.structure` for deterministic features built from volume profiles. Current
+structural primitives include:
 
-- local high-volume and low-volume nodes
+- contiguous high-volume and low-volume node zones with optional within-segment smoothing,
+  prominence, width, representative prices, and persistence
 - point-of-control migration between profiles
 - value-area midpoint migration between profiles
 - value-area overlap width
 
-These functions are intentionally deterministic feature primitives. Statistical significance and
-transition probabilities should be estimated in later research modules using these primitives.
+Node smoothing never crosses absent integer bins. Persistence resets when the engine crosses a gap,
+segment, or window boundary. These functions remain deterministic representation primitives;
+statistical significance and transition probabilities belong to later research stages.
 
 ## Transition analysis
 
-Use `src.transitions` to count adjacent observed state transitions and estimate conditional
+Use `market_structure_lab.transitions` to count adjacent observed state transitions and estimate conditional
 probabilities:
 
 ```text
@@ -94,6 +151,10 @@ P(next_state | current_state)
 Rows include support counts, so later research can filter low-observation transitions before
 claiming statistical significance.
 
-Use `src.transitions.test_transition_significance` to compare an observed transition probability
+Use `market_structure_lab.transitions.transition_significance` to compare an observed transition probability
 against the unconditional base rate of the next state. The current implementation is a one-sided
 binomial tail test for enrichment; it does not correct for multiple comparisons.
+
+Use `market_structure_lab.transitions.screen_transition_enrichment` when testing many observed transitions at once.
+It applies Benjamini-Hochberg false-discovery-rate correction and returns only significant
+candidates that meet the configured support threshold.

@@ -29,7 +29,7 @@ This repository uses Python 3.13 and uv. It does not depend on Conda.
 
 ```bash
 uv venv
-uv sync
+uv sync --locked
 ```
 
 ## Docker
@@ -40,7 +40,8 @@ Start PostgreSQL and pgAdmin:
 docker compose up -d
 ```
 
-The database is configured to restore the provided dump into a dedicated research database named `research`.
+The database is configured to restore reviewed cryptocurrency market data into a dedicated research
+database named `research`.
 
 ## Restoring the database
 
@@ -50,20 +51,39 @@ The dump file is expected at:
 data/dumps/callscore.dump
 ```
 
-The PostgreSQL container will attempt to restore it automatically during initialization.
+The source archive is immutable and contains unrelated Callscore application data. During fresh
+database initialization, the restore process verifies the archive size and SHA-256, then restores
+only the raw `candles` and `ticks` objects listed in
+`docker/postgres/init/crypto_only_restore.list`. It excludes creator, calls, videos, agents,
+workflows, signals, positions, strategies, quarantine tables, and reproducible materialized views.
+
+The approved objects are moved into the `market_data` schema. Callscore-derived candle columns
+(`regime`, `confidence`, `returns`, `volatility`, and `volume_ratio`) are removed from the restored
+copy so downstream research starts from source market fields. The original dump is never modified.
+
+PostgreSQL initialization scripts run only when `data/postgres` is empty. This project never deletes
+or reinitializes an existing database directory automatically; use a separately approved fresh
+restore procedure when replacing an existing local database.
+
+See [`docs/DATA_VIABILITY.md`](docs/DATA_VIABILITY.md) for the full row-quality and symbol-coverage
+assessment and [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for the exact Phase
+0 and Phase 2 verification evidence.
 
 ## Running scripts
 
 Inspect the database:
 
 ```bash
-uv run python scripts/inspect_database.py
+uv run msl-db-inspect --quick
+
+# Exact row-quality and gap inspection (slower)
+uv run msl-db-inspect --full --json data/exports/manifests/database-inspection-full.json
 ```
 
 Load candles in research code:
 
 ```python
-from src.datasets import load_dataset, load_symbol
+from market_structure_lab.datasets import load_dataset, load_symbol
 
 btc = load_symbol("BTCUSDT")
 eth = load_dataset(
@@ -77,7 +97,7 @@ eth = load_dataset(
 Save reproducible experiment output:
 
 ```python
-from src.experiments import ExperimentConfig, save_experiment_result
+from market_structure_lab.experiments import ExperimentConfig, save_experiment_result
 
 result = save_experiment_result(
     config=ExperimentConfig(
@@ -94,7 +114,70 @@ result = save_experiment_result(
 ## Research principles
 
 - prefer small, typed, readable functions
-- keep algorithms inside src/
+- keep algorithms inside `src/market_structure_lab/`
 - keep notebooks exploratory only
 - favour reproducibility over cleverness
-- keep SQL inside dataset modules, not experiments
+- keep source-specific SQL inside data modules, not experiments
+
+## Missing-candle recovery
+
+Recovery is an explicit, auditable stage. It plans exact internal gaps, validates Binance Spot
+compatibility independently for each symbol, downloads checksum-pinned source observations, and
+writes validated rows to append-only supplemental storage. It never mutates the restored dump rows,
+and incompatible symbols remain quarantined with a terminal reason.
+
+```bash
+uv run msl-backfill-candles plan --help
+uv run msl-backfill-candles validate --help
+uv run msl-backfill-candles fetch --help
+uv run msl-backfill-candles report --help
+```
+
+The frozen recovery manifest, immutable dump identity, source checksums, completed bounded-batch
+checkpoints, per-gap classifications, and logical supplement hash make interrupted runs resumable
+and repeated runs idempotent. `market_structure_lab.data.load_canonical_gap_boundaries` derives the
+exact remaining hard boundaries from the post-recovery canonical series; downstream sequence work
+must assign segment IDs from those boundaries rather than reuse broader pre-recovery gaps.
+
+## Deterministic auction reconstruction
+
+Phase 2 reconstructs bounded, replayable auction state from canonical candles. Price-volume maps
+use integer bin indices internally; prices are exposed only at public boundaries. Every engine must
+receive an explicit window policy, allocation-model version, bin definition, dataset version, and
+configuration version. There is no implicit unbounded cumulative profile.
+
+```python
+from datetime import UTC, datetime
+
+from market_structure_lab.auction import AuctionCandle, AuctionEngine, RollingBars
+from market_structure_lab.profiles import FixedStepBins, UniformAllocation
+
+engine = AuctionEngine(
+    binning=FixedStepBins(step=0.50),
+    allocation=UniformAllocation(),
+    window_policy=RollingBars(max_bars=1_440),
+    dataset_version="canonical-v1",
+    config_version="auction-v1",
+)
+snapshot = engine.update(
+    AuctionCandle(
+        timestamp=datetime(2025, 1, 1, tzinfo=UTC),
+        symbol="BTCUSDT",
+        timeframe="1m",
+        open=93_500.0,
+        high=93_501.0,
+        low=93_499.5,
+        close=93_500.5,
+        volume=12.0,
+        segment_id=0,
+    )
+)
+```
+
+Available bounded policies include rolling bar count, rolling duration, a fixed half-open UTC
+range, and UTC day/week/month sessions. A material gap is rejected by default or may be configured
+to reset the stream; a changed canonical segment always resets it. Snapshots are frozen and include
+profile/version identity, POC, value area, VWAP, location, node zones and persistence, migration,
+and stable structural event IDs. Canonical JSON serialization and stream hashes provide replay
+evidence. See [`docs/market_structure.md`](docs/market_structure.md) for the exact OHLCV
+approximations and limitations.
