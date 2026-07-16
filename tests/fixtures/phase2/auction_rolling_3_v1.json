@@ -1,0 +1,35 @@
+{
+  "fixture_version": "auction-rolling-3-v1",
+  "symbol": "BTCUSDT",
+  "timeframe": "1m",
+  "start": "2025-01-01T00:00:00Z",
+  "profile": {
+    "binning": {"type": "fixed-step", "step": "1.0", "origin": "0.0"},
+    "allocation_id": "uniform-touched-v1",
+    "value_area_fraction": "0.70"
+  },
+  "window": {"type": "rolling-bars", "max_bars": 3},
+  "expected_snapshot_stream_sha256": "6ce85846132da118bc5cd0d73c1e37eea13a0cd3b55eaa170f336944b38a79b1",
+  "expected_snapshot_sha256": [
+    "0338273dc2181a68f619334d695b810b2ccfb869477b469207ef3fd565b81c42",
+    "8d967c2df5915a9929370d2c30d4939561ed2468a8ad14e11822fa6284894d8b",
+    "f6e52d67096e00cc1ae2ff8cf1c04fc24ba458a5c93864b0dd8e37b94e07dd68",
+    "db635d00f0387cc9b57dad24a42a48adc90d0623e6b9966acbc542ea47e88a9e"
+  ],
+  "candles": [
+    {"minute": 0, "price": "100", "volume": "100"},
+    {"minute": 1, "price": "101", "volume": "20"},
+    {"minute": 2, "price": "102", "volume": "30"},
+    {"minute": 3, "price": "103", "volume": "40"}
+  ],
+  "expected_final": {
+    "bin_volumes": [[101, "20"], [102, "30"], [103, "40"]],
+    "total_volume": "90",
+    "poc_index": 103,
+    "value_area_low_index": 102,
+    "value_area_high_index": 103,
+    "vwap": "102.22222222222223",
+    "location": "point_of_control",
+    "active_minutes": [1, 2, 3]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "fixture_version": "phase2-representation-cases-v1",
+  "allocation_cases": [
+    {
+      "model": "typical-price-v1",
+      "candle": {"open": 100, "high": 103, "low": 100, "close": 102, "volume": 20},
+      "expected_bin_volumes": [[101, 20]],
+      "expected_numerator": 2033.3333333333335
+    },
+    {
+      "model": "triangular-close-v1",
+      "candle": {"open": 100, "high": 104, "low": 100, "close": 103, "volume": 55},
+      "expected_bin_volumes": [
+        [100, 6.111111111111111],
+        [101, 9.166666666666666],
+        [102, 12.222222222222221],
+        [103, 15.277777777777779],
+        [104, 12.222222222222221]
+      ],
+      "expected_numerator": 5628.333333333333
+    }
+  ],
+  "sparse_tie_value_area": {
+    "bin_volumes": [[0, 1], [2, 5], [4, 1]],
+    "poc_index": 2,
+    "target_volume": 6,
+    "expected": [2, 4]
+  },
+  "plateau_nodes": {
+    "bin_volumes": [[0, 10], [1, 40], [2, 40], [3, 10], [4, 5], [5, 5], [6, 20]],
+    "min_prominence": 5,
+    "expected": [
+      {"kind": "hvn", "start_index": 1, "end_index": 2, "representative_index": 1, "prominence": 30},
+      {"kind": "lvn", "start_index": 4, "end_index": 5, "representative_index": 4, "prominence": 5}
+    ]
+  },
+  "utc_day_boundary": {
+    "before": "2025-01-01T23:59:00Z",
+    "after": "2025-01-02T00:00:00Z",
+    "expected_before_window_id": "utc-day-window-v1:session=2025-01-01",
+    "expected_after_window_id": "utc-day-window-v1:session=2025-01-02"
+  }
+}

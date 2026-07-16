@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.profiles import Candle, build_volume_profile
+from market_structure_lab.profiles import Candle, build_volume_profile
 
 
 def test_build_volume_profile_allocates_candle_volume_across_touched_price_bins() -> None:

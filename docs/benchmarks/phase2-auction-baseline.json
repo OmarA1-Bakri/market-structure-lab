@@ -1,0 +1,82 @@
+{
+  "correctness": {
+    "incremental_vs_full_recomputation": {
+      "absolute_float_tolerance": 1e-12,
+      "checked_snapshots": 512,
+      "status": "passed",
+      "window_bars": 1440
+    },
+    "input_sha256": "3a8127988b56f0b1a2e873143aac22c58284e651b4b1fe66bd24b021dfeda6d4",
+    "repetition_hashes_identical": true,
+    "snapshot_stream_sha256": "d879aa0010852ed9c6ca24ee1d5d217458459dffcc7091833ec5219d302a0e3f"
+  },
+  "environment": {
+    "logical_cpu_count": 16,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "python": "3.13.13",
+    "python_implementation": "CPython"
+  },
+  "execution": {
+    "argv": [
+      "python",
+      "benchmarks/benchmark_auction.py",
+      "--count",
+      "100000",
+      "--repetitions",
+      "1",
+      "--equivalence-count",
+      "512",
+      "--window-bars",
+      "1440",
+      "--output",
+      "docs/benchmarks/phase2-auction-baseline.json"
+    ],
+    "environment": {
+      "PYTHONPATH": "src"
+    }
+  },
+  "generated_at_utc": "2026-07-16T01:26:37.468722+00:00",
+  "results": {
+    "repetitions": [
+      {
+        "active_window_max": 1440,
+        "chunk_latency_ms_per_1000": {
+          "maximum": 3997.0066,
+          "median": 1794.02295,
+          "minimum": 846.3238,
+          "p95": 3336.3747,
+          "sample_count": 100
+        },
+        "elapsed_engine_seconds": 191.0485076,
+        "snapshot_stream_sha256": "d879aa0010852ed9c6ca24ee1d5d217458459dffcc7091833ec5219d302a0e3f",
+        "throughput_candles_per_second": 523.4272764347938
+      }
+    ],
+    "summary": {
+      "active_window_max": 1440,
+      "chunk_p95_ms_per_1000_median": 3336.3747,
+      "memory_measurement_candles": 5000,
+      "peak_tracemalloc_bytes": 1075304,
+      "peak_tracemalloc_mebibytes": 1.0254898071289062,
+      "throughput_candles_per_second_median": 523.4272764347938,
+      "throughput_candles_per_second_minimum": 523.4272764347938
+    }
+  },
+  "schema_version": "phase2-auction-benchmark-v1",
+  "workload": {
+    "allocation": "benchmark-uniform-touched-v1",
+    "binning": "benchmark-fixed-step-v1:step=0.1:origin=0",
+    "chunk_size": 1000,
+    "count": 100000,
+    "input_generation_timed": false,
+    "memory_measurement_count": 5000,
+    "memory_pass_separate_from_throughput": true,
+    "repetitions": 1,
+    "seed": 20260716,
+    "snapshot_hashing_timed": false,
+    "symbol": "BTCUSDT",
+    "timeframe": "1m",
+    "window_bars": 1440
+  }
+}

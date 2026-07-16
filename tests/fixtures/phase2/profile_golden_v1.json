@@ -1,0 +1,20 @@
+{
+  "fixture_version": "profile-golden-v1",
+  "binning": {"type": "fixed-step", "step": "1.0", "origin": "0.0"},
+  "allocation_id": "uniform-touched-v1",
+  "value_area_fraction": "0.70",
+  "candles": [
+    {"open": "100", "high": "102", "low": "100", "close": "101", "volume": "30"},
+    {"open": "101", "high": "103", "low": "101", "close": "102", "volume": "60"}
+  ],
+  "expected": {
+    "bin_volumes": [[100, "10"], [101, "30"], [102, "30"], [103, "20"]],
+    "total_volume": "90",
+    "poc_index": 101,
+    "value_area_low_index": 101,
+    "value_area_high_index": 103,
+    "point_of_control": "101.0",
+    "value_area_low": "101.0",
+    "value_area_high": "103.0"
+  }
+}

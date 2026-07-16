@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
-from src.profiles import VolumeProfile
+from market_structure_lab.profiles.models import ProfileSnapshot
+from market_structure_lab.profiles.volume import VolumeProfile
 
 
-class ValueMigrationDirection(str, Enum):
+class ValueMigrationDirection(StrEnum):
     LOWER = "lower"
     OVERLAPPING_LOWER = "overlapping_lower"
     OVERLAPPING = "overlapping"
@@ -29,7 +30,10 @@ class _ValueReferences:
     value_area_high: float
 
 
-def compare_value_migration(previous: VolumeProfile, current: VolumeProfile) -> ValueMigration:
+def compare_value_migration(
+    previous: ProfileSnapshot | VolumeProfile,
+    current: ProfileSnapshot | VolumeProfile,
+) -> ValueMigration:
     """Compare value-area migration between two deterministic profiles."""
     previous_refs = _value_references(previous, name="previous")
     current_refs = _value_references(current, name="current")
@@ -46,14 +50,31 @@ def compare_value_migration(previous: VolumeProfile, current: VolumeProfile) -> 
     )
 
     return ValueMigration(
-        direction=_direction(previous_refs, current_refs, midpoint_change=midpoint_change, overlap=overlap),
+        direction=_direction(
+            previous_refs, current_refs, midpoint_change=midpoint_change, overlap=overlap
+        ),
         point_of_control_change=poc_change,
         value_area_midpoint_change=midpoint_change,
         value_area_overlap=overlap,
     )
 
 
-def _value_references(profile: VolumeProfile, *, name: str) -> _ValueReferences:
+def _value_references(
+    profile: ProfileSnapshot | VolumeProfile, *, name: str
+) -> _ValueReferences:
+    if isinstance(profile, ProfileSnapshot):
+        if (
+            profile.poc_index is None
+            or profile.value_area_low_index is None
+            or profile.value_area_high_index is None
+        ):
+            raise ValueError(f"{name} profile must contain POC and value-area references")
+        return _ValueReferences(
+            point_of_control=profile.binning.price_for_index(profile.poc_index),
+            value_area_low=profile.binning.price_for_index(profile.value_area_low_index),
+            value_area_high=profile.binning.price_for_index(profile.value_area_high_index),
+        )
+
     if (
         profile.point_of_control is None
         or profile.value_area_low is None
