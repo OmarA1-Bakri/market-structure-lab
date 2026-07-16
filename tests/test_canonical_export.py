@@ -182,3 +182,13 @@ def test_export_rejects_duplicate_keys_across_batches(tmp_path: Path) -> None:
             output_root=tmp_path,
             identity=snapshot_identity("duplicate-v1"),
         )
+
+
+def test_retained_legacy_snapshot_hash_remains_verifiable() -> None:
+    retained = Path(
+        "data/exports/snapshots/dataset_version=phase0-xrpusdt-20180505-v1"
+    )
+    if not retained.is_dir():
+        pytest.skip("retained Phase 0 snapshot is not available")
+
+    verify_snapshot(retained)

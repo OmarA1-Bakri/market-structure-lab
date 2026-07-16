@@ -225,8 +225,90 @@ def test_cli_parser_and_package_entry_point_expose_all_scheduler_operations() ->
     parser = sync_candles.build_parser()
     help_text = parser.format_help()
 
-    for operation in ("plan", "run", "report", "health", "snapshot"):
+    for operation in ("bootstrap", "plan", "run", "report", "health", "snapshot"):
         assert operation in help_text
+
+
+def test_bootstrap_is_idempotent_and_does_not_fetch_source(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    compatibility = _compatibility()
+    compatibility_path = tmp_path / "compatibility.json"
+    write_manifest(compatibility, compatibility_path)
+    dump = tmp_path / "callscore.dump"
+    dump.write_bytes(b"immutable test dump")
+    calls = {"migrations": 0}
+
+    class MigrationConnection:
+        def execute(self, _statement) -> None:
+            calls["migrations"] += 1
+
+    class FakeEngine:
+        def connect(self):
+            return nullcontext(object())
+
+        def begin(self):
+            return nullcontext(MigrationConnection())
+
+        def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(sync_candles, "EXPECTED_DUMP_SHA256", "a" * 64)
+    monkeypatch.setattr(sync_candles, "sha256_file", lambda _path: "a" * 64)
+    monkeypatch.setattr(sync_candles, "create_engine", lambda *_args, **_kwargs: FakeEngine())
+    monkeypatch.setattr(sync_candles, "verify_manifest_identity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        sync_candles,
+        "BinanceSpotSource",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("source fetched")),
+    )
+
+    arguments = [
+        "bootstrap",
+        "--compatibility",
+        str(compatibility_path),
+        "--compatibility-sha256",
+        compatibility.sha256(),
+        "--dump-path",
+        str(dump),
+    ]
+    first = sync_candles.main(arguments)
+    first_payload = json.loads(capsys.readouterr().out)
+    second = sync_candles.main(arguments)
+    second_payload = json.loads(capsys.readouterr().out)
+
+    assert first == second == 0
+    assert first_payload == second_payload
+    assert first_payload["status"] == "ready"
+    assert calls["migrations"] == 2
+
+
+def test_bootstrap_rejects_dump_mismatch_before_database_open(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    dump = tmp_path / "callscore.dump"
+    dump.write_bytes(b"wrong dump")
+    monkeypatch.setattr(sync_candles, "sha256_file", lambda _path: "f" * 64)
+    monkeypatch.setattr(
+        sync_candles,
+        "create_engine",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("database opened")),
+    )
+
+    exit_code = sync_candles.main(
+        [
+            "bootstrap",
+            "--compatibility",
+            str(tmp_path / "compatibility.json"),
+            "--compatibility-sha256",
+            "a" * 64,
+            "--dump-path",
+            str(dump),
+        ]
+    )
+
+    assert exit_code == 1
+    assert "dump SHA-256" in capsys.readouterr().err
 
 
 def test_snapshot_is_an_explicit_checksum_verified_handoff(

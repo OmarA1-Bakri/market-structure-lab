@@ -227,6 +227,11 @@ idempotent; a later cutoff plans only actual canonical holes; blocked sources ar
 Daily operation updates the dump-preferred PostgreSQL canonical view. Full immutable Parquet exports
 are created only when a research run deliberately declares a new dataset version.
 
+The operator must run the explicit idempotent `msl-sync-candles bootstrap` command once after a
+deliberate crypto-only restore. It verifies the immutable dump and reviewed source identity before
+applying the append-only migration. Scheduled daily runs start at `plan` and never initialize
+`data/postgres` implicitly.
+
 The compatibility gate has not changed: the validated artifact remains
 `482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2`, and the nine conflicts listed
 above keep the complete 25-symbol universe unhealthy. This is an explicit provenance limitation,

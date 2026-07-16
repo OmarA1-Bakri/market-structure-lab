@@ -27,14 +27,25 @@ settings and are never printed by the CLI.
 PowerShell example (replace the compatibility path with the retained reviewed artifact):
 
 ```powershell
-$compatibility = "data/exports/manifests/binance-spot-compatibility.json"
+$compatibility = "data/exports/manifests/recovery-callscore-20260714-validated.json"
 $compatibilitySha = "482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2"
+
+uv run msl-sync-candles bootstrap `
+  --compatibility $compatibility `
+  --compatibility-sha256 $compatibilitySha `
+  --dump-path data/dumps/callscore.dump
 
 uv run msl-sync-candles plan `
   --compatibility $compatibility `
   --compatibility-sha256 $compatibilitySha `
   --output-dir data/exports/freshness
 ```
+
+`bootstrap` is the explicit first-use step after a reviewed crypto-only restore. It verifies the
+dump, compatibility artifact, restored row count, and mapping before idempotently applying the
+existing append-only recovery migration. It does not fetch candles, rerun the restore, or mutate
+restored rows. Repeating it is safe. Daily runs start at `plan`; they do not bootstrap storage
+implicitly.
 
 The plan freezes the last fully closed UTC minute when `--as-of` is omitted. Record the emitted
 `manifest` path, inspect its totals, and verify the exact write set without network or database

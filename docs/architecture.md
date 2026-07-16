@@ -73,6 +73,10 @@ completed manifest must produce zero new rows and the same logical supplement ha
 
 ## Daily freshness and snapshot handoff
 
+After a deliberate crypto-only restore, the explicit idempotent `msl-sync-candles bootstrap`
+operation verifies dump and compatibility identities before applying the existing append-only
+recovery migration. It performs no source fetch and is never invoked implicitly by the scheduler.
+
 `msl-sync-candles` plans against `market_data.candles_canonical` through an explicit half-open UTC
 cutoff, so internal holes and the missing tail use the same append-only recovery engine. The live
 canonical view becomes current as validated supplements commit; no dump row is updated and

@@ -95,6 +95,30 @@ class SnapshotIdentity:
             }:
                 raise ValueError("unsupported freshness snapshot publication policy")
 
+    def to_dict(self) -> dict[str, str]:
+        """Preserve the original identity shape for pre-freshness snapshots."""
+        payload = {
+            "dataset_version": self.dataset_version,
+            "dump_sha256": self.dump_sha256,
+            "recovery_sha256": self.recovery_sha256,
+            "mapping_version": self.mapping_version,
+            "config_version": self.config_version,
+            "code_commit": self.code_commit,
+        }
+        if self.freshness_report_sha256 is not None:
+            payload.update(
+                {
+                    "freshness_report_sha256": self.freshness_report_sha256,
+                    "freshness_manifest_sha256": cast(str, self.freshness_manifest_sha256),
+                    "compatibility_manifest_sha256": cast(
+                        str, self.compatibility_manifest_sha256
+                    ),
+                    "freshness_as_of": cast(str, self.freshness_as_of),
+                    "publication_policy": cast(str, self.publication_policy),
+                }
+            )
+        return payload
+
 
 @dataclass(frozen=True, slots=True)
 class PartitionRecord:
@@ -140,7 +164,20 @@ class SnapshotManifest:
             raise ValueError("snapshot_sha256 must be a SHA-256 hex digest")
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+        return json.dumps(
+            self.to_dict(), indent=2, sort_keys=True, separators=(",", ": ")
+        ) + "\n"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "identity": self.identity.to_dict(),
+            "row_count": self.row_count,
+            "min_timestamp": self.min_timestamp,
+            "max_timestamp": self.max_timestamp,
+            "partitions": [asdict(item) for item in self.partitions],
+            "snapshot_sha256": self.snapshot_sha256,
+        }
 
 
 def export_partitioned_snapshot(
@@ -163,7 +200,9 @@ def export_partitioned_snapshot(
     staging = root / f".dataset_version={identity.dataset_version}.partial"
     staging.mkdir(parents=True, exist_ok=True)
     identity_path = staging / _IDENTITY_NAME
-    identity_json = json.dumps(asdict(identity), sort_keys=True, separators=(",", ":")) + "\n"
+    identity_json = json.dumps(
+        identity.to_dict(), sort_keys=True, separators=(",", ":")
+    ) + "\n"
     if identity_path.exists() and identity_path.read_text(encoding="utf-8") != identity_json:
         raise FileExistsError("incomplete dataset version has a different pinned identity")
     if not identity_path.exists():
@@ -243,7 +282,7 @@ def export_partitioned_snapshot(
 
     manifest_without_hash: dict[str, Any] = {
         "schema_version": 1,
-        "identity": asdict(identity),
+        "identity": identity.to_dict(),
         "row_count": total_rows,
         "min_timestamp": _iso_utc(minimum) if minimum else None,
         "max_timestamp": _iso_utc(maximum) if maximum else None,
@@ -295,7 +334,7 @@ def verify_snapshot(directory: str | Path, manifest: SnapshotManifest | None = N
         raise ValueError("unsupported snapshot manifest schema")
     payload: dict[str, Any] = {
         "schema_version": active.schema_version,
-        "identity": asdict(active.identity),
+        "identity": active.identity.to_dict(),
         "row_count": active.row_count,
         "min_timestamp": active.min_timestamp,
         "max_timestamp": active.max_timestamp,

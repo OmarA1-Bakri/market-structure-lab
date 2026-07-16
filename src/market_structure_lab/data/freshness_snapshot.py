@@ -21,6 +21,7 @@ from market_structure_lab.data.freshness_sync import (
     FreshnessReport,
     FreshnessRunStatus,
 )
+from market_structure_lab.data.gaps import ProvenanceState
 from market_structure_lab.data.loader import canonical_view_mapping, iter_candle_batches
 from market_structure_lab.data.recovery import (
     RECOVERY_ADVISORY_LOCK_NAME,
@@ -50,6 +51,29 @@ def validate_snapshot_publication(
     """Fail closed unless each symbol satisfies the selected publication policy."""
     if not report.coverage_conserved:
         raise ValueError("freshness report does not conserve planned coverage")
+    expected_blocked_state = {
+        FreshnessRunStatus.PROVENANCE_PENDING: ProvenanceState.PENDING,
+        FreshnessRunStatus.SOURCE_CONFLICT: ProvenanceState.SOURCE_CONFLICT,
+        FreshnessRunStatus.SOURCE_UNAVAILABLE: ProvenanceState.SOURCE_UNAVAILABLE,
+    }
+    mismatched = tuple(
+        item
+        for item in report.symbols
+        if (
+            item.status in _HEALTHY
+            and item.compatibility_state is not ProvenanceState.COMPATIBLE
+        )
+        or (
+            item.status in _PROVENANCE_BLOCKED
+            and item.compatibility_state is not expected_blocked_state[item.status]
+        )
+    )
+    if mismatched:
+        statuses = ", ".join(
+            f"{item.symbol}:{item.compatibility_state.value}/{item.status.value}"
+            for item in mismatched
+        )
+        raise ValueError(f"freshness status and compatibility evidence disagree: {statuses}")
     admitted = _HEALTHY
     if policy is SnapshotPublicationPolicy.ALLOW_PROVENANCE_BLOCKED:
         admitted = _HEALTHY | _PROVENANCE_BLOCKED

@@ -81,6 +81,27 @@ def test_snapshot_publication_requires_healthy_report_by_default() -> None:
 
 @pytest.mark.parametrize(
     "status",
+    [FreshnessRunStatus.SOURCE_CONFLICT, FreshnessRunStatus.SOURCE_UNAVAILABLE],
+)
+def test_provenance_policy_rejects_recovery_failures_for_compatible_sources(
+    status: FreshnessRunStatus,
+) -> None:
+    report = _report(
+        _symbol_report(
+            status=status,
+            provenance=ProvenanceState.COMPATIBLE,
+        )
+    )
+
+    with pytest.raises(ValueError, match="compatibility evidence disagree"):
+        validate_snapshot_publication(
+            report,
+            SnapshotPublicationPolicy.ALLOW_PROVENANCE_BLOCKED,
+        )
+
+
+@pytest.mark.parametrize(
+    "status",
     [
         FreshnessRunStatus.PARTIALLY_RECOVERED,
         FreshnessRunStatus.PROVIDER_ABSENT,

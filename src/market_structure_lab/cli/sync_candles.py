@@ -50,6 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="operation", required=True)
 
+    bootstrap = commands.add_parser(
+        "bootstrap",
+        help="verify a restored crypto database and apply the idempotent canonical migration",
+    )
+    _add_compatibility_arguments(bootstrap)
+    bootstrap.add_argument(
+        "--dump-path", type=Path, default=Path("data/dumps/callscore.dump")
+    )
+
     plan = commands.add_parser("plan", help="freeze exact canonical gaps at one UTC cutoff")
     _add_compatibility_arguments(plan)
     plan.add_argument("--as-of", help="minute-aligned UTC replay cutoff (default: current minute)")
@@ -96,6 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.operation == "bootstrap":
+            return _bootstrap(args)
         if args.operation == "plan":
             return _plan(args)
         if args.operation == "run":
@@ -108,6 +119,46 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError, SourceError, SQLAlchemyError) as error:
         print(str(error), file=sys.stderr)
         return 1
+
+
+def _bootstrap(args: argparse.Namespace) -> int:
+    """Apply only the reviewed append-only migration after immutable identity checks."""
+    actual_dump_sha256 = sha256_file(args.dump_path).lower()
+    if actual_dump_sha256 != EXPECTED_DUMP_SHA256:
+        raise ValueError("dump SHA-256 does not match the immutable source archive")
+    compatibility = _read_reviewed_compatibility(
+        args.compatibility,
+        args.compatibility_sha256,
+    )
+    if compatibility.source_identity.dump_sha256.lower() != actual_dump_sha256:
+        raise ValueError("reviewed compatibility identifies a different source dump")
+    settings = load_settings()
+    engine = create_engine(settings.database.url)
+    try:
+        with engine.connect() as connection:
+            verify_manifest_identity(
+                connection,
+                compatibility,
+                dump_sha256=actual_dump_sha256,
+                mapping_version=settings.candles.version,
+                schema=settings.candles.schema,
+                table=settings.candles.table,
+            )
+        with engine.begin() as connection:
+            connection.execute(text(candle_recovery_migration_sql()))
+    finally:
+        engine.dispose()
+    print(
+        _json(
+            {
+                "compatibility_manifest_sha256": compatibility.sha256(),
+                "dump_sha256": actual_dump_sha256,
+                "migration": "0001_candle_recovery",
+                "status": "ready",
+            }
+        )
+    )
+    return 0
 
 
 def _plan(args: argparse.Namespace) -> int:

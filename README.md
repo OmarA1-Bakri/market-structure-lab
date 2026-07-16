@@ -77,11 +77,15 @@ recovered, unresolved, or provenance-blocked. Daily sync updates the dump-prefer
 canonical view; it does not rewrite the dump or duplicate the full dataset into Parquet every day.
 
 ```bash
+uv run msl-sync-candles bootstrap --help
 uv run msl-sync-candles plan --help
 uv run msl-sync-candles run --help
 uv run msl-sync-candles health --help
 uv run msl-sync-candles snapshot --help
 ```
+
+`bootstrap` is an explicit, idempotent first-use step for a deliberately restored crypto-only
+database. Daily jobs begin with `plan`; they never initialize storage implicitly.
 
 Immutable Parquet snapshots are created deliberately for frozen research runs. Snapshot publication
 requires a checksum-verified freshness report by default; the explicit provenance-blocked policy

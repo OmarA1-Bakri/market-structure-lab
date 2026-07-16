@@ -265,7 +265,10 @@ discovery remains unstarted and requires a separate explicit approval.
 
 The approved freshness prerequisite is implemented without changing the immutable dump or existing
 research snapshots. `msl-sync-candles` supports frozen planning, dry-run/apply, checksum-bearing
-reports and health, plus an explicit `snapshot` handoff. The handoff checks the report,
+reports and health, an explicit idempotent `bootstrap`, plus a separate `snapshot` handoff.
+Bootstrap verifies the immutable dump, reviewed compatibility evidence, restored row identity, and
+mapping before applying the append-only recovery migration; daily jobs never initialize storage.
+The snapshot handoff checks the report,
 compatibility artifact, dump identity, current logical supplement hash, and publication policy; it
 then streams bounded canonical batches through the existing atomic partitioned exporter.
 
@@ -277,7 +280,7 @@ full-universe scheduler health non-zero and are recorded in any explicitly permi
 
 Implementation verification performed for this slice:
 
-- focused snapshot/CLI/export tests: `22 passed`;
+- focused snapshot/CLI/export tests: `28 passed`;
 - disposable PostgreSQL 17 integration: `1 passed`, proving migration reapplication, dump-preferred
   reads, append-only enforcement, same-cutoff idempotency, later-cutoff-only recovery,
   blocked-source no-fetch, advisory-lock exclusion, and report conservation;
