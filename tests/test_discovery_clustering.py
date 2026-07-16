@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -8,8 +9,10 @@ from market_structure_lab.discovery import kmeans as kmeans_module
 from market_structure_lab.discovery import (
     FeatureMatrix,
     KMeansResult,
+    PartitionRole,
     fit_kmeans,
     fit_pca,
+    fit_projected_kmeans,
 )
 
 
@@ -20,6 +23,7 @@ def _matrix(values: tuple[tuple[float, ...], ...]) -> FeatureMatrix:
         feature_names=tuple(f"feature_{index}" for index in range(width)),
         values=values,
         dropped_null_rows=0,
+        partition_role=PartitionRole.DISCOVERY,
     )
 
 
@@ -59,6 +63,32 @@ def test_pca_exposes_means_canonical_signs_variance_and_scores() -> None:
         sum(score[index] for score in projection.scores) for index in range(2)
     ) == pytest.approx((0.0, 0.0), abs=1e-14)
     assert projection.scores[0][0] < projection.scores[-1][0]
+
+
+@pytest.mark.parametrize(
+    "role",
+    [None, PartitionRole.DEVELOPMENT, PartitionRole.HOLDOUT],
+)
+def test_pca_rejects_non_discovery_matrix_provenance(role: PartitionRole | None) -> None:
+    with pytest.raises(ValueError, match="discovery.*provenance"):
+        fit_pca(replace(_matrix(((1.0,), (2.0,))), partition_role=role), 1)
+
+
+def test_projected_kmeans_pins_projection_and_fit_parameters() -> None:
+    matrix = _matrix(((0.0, 0.0), (0.0, 1.0), (10.0, 10.0), (10.0, 11.0)))
+    projection = fit_pca(matrix, 1)
+
+    result = fit_projected_kmeans(
+        matrix,
+        projection,
+        clusters=2,
+        seed=7,
+        max_iterations=50,
+        tolerance=1e-12,
+    )
+
+    assert result.projection_sha256 is not None
+    assert (result.seed, result.max_iterations, result.tolerance) == (7, 50, 1e-12)
 
 
 @pytest.mark.parametrize("components", [0, -1, True, 3])

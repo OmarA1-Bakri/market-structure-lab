@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 from dataclasses import dataclass
 
 from scipy.linalg import svd
 
 from market_structure_lab.discovery.matrix import FeatureMatrix
+from market_structure_lab.discovery.splits import PartitionRole
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +28,8 @@ def fit_pca(matrix: FeatureMatrix, n_components: int) -> PCAProjection:
 
     if not isinstance(matrix, FeatureMatrix):
         raise TypeError("matrix must be a FeatureMatrix")
+    if matrix.partition_role is not PartitionRole.DISCOVERY:
+        raise ValueError("PCA fit requires discovery partition provenance")
     rows, width = _validated_values(matrix)
     if isinstance(n_components, bool) or not isinstance(n_components, int):
         raise ValueError("n_components must be a positive integer")
@@ -67,6 +72,70 @@ def fit_pca(matrix: FeatureMatrix, n_components: int) -> PCAProjection:
     )
 
 
+def pca_projection_sha256(matrix: FeatureMatrix, projection: PCAProjection) -> str:
+    """Validate and hash a discovery matrix together with its PCA evidence."""
+
+    if not isinstance(matrix, FeatureMatrix):
+        raise TypeError("matrix must be a FeatureMatrix")
+    if matrix.partition_role is not PartitionRole.DISCOVERY:
+        raise ValueError("PCA projection requires discovery partition provenance")
+    rows, width = _validated_values(matrix)
+    if not isinstance(projection, PCAProjection):
+        raise TypeError("projection must be a PCAProjection")
+    if len(projection.means) != width or not projection.components:
+        raise ValueError("PCA projection dimensions do not match its source matrix")
+    means = tuple(_finite(value, "PCA mean") for value in projection.means)
+    components = tuple(
+        tuple(_finite(value, "PCA component") for value in component)
+        for component in projection.components
+    )
+    if any(len(component) != width for component in components):
+        raise ValueError("PCA component width does not match its source matrix")
+    variance = tuple(
+        _finite(value, "PCA explained variance") for value in projection.explained_variance_ratio
+    )
+    if len(variance) != len(components) or any(value < 0.0 or value > 1.0 for value in variance):
+        raise ValueError("PCA explained variance must match components and use [0, 1]")
+    if not 0.0 < math.fsum(variance) <= 1.0 + 1e-12:
+        raise ValueError("PCA explained variance total must be in (0, 1]")
+    expected_scores = tuple(
+        tuple(
+            math.fsum(
+                (value - means[column]) * component[column] for column, value in enumerate(row)
+            )
+            for component in components
+        )
+        for row in rows
+    )
+    scores = tuple(tuple(_finite(value, "PCA score") for value in row) for row in projection.scores)
+    if len(scores) != len(expected_scores) or any(len(row) != len(components) for row in scores):
+        raise ValueError("PCA scores do not match source matrix dimensions")
+    for supplied, expected in zip(scores, expected_scores, strict=True):
+        if any(
+            not math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-12)
+            for left, right in zip(supplied, expected, strict=True)
+        ):
+            raise ValueError("PCA scores do not match the frozen projection definition")
+    payload = {
+        "matrix": {
+            "row_ids": matrix.row_ids,
+            "feature_names": matrix.feature_names,
+            "values": rows,
+            "partition_role": matrix.partition_role.value,
+        },
+        "projection": {
+            "means": means,
+            "components": components,
+            "explained_variance_ratio": variance,
+            "scores": scores,
+        },
+    }
+    canonical = json.dumps(
+        payload, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _validated_values(matrix: FeatureMatrix) -> tuple[tuple[tuple[float, ...], ...], int]:
     if not matrix.values:
         raise ValueError("PCA requires a non-empty matrix")
@@ -98,3 +167,12 @@ def _canonical_component(component: tuple[float, ...]) -> tuple[float, ...]:
     if component[pivot] < 0.0:
         return tuple(-value for value in component)
     return component
+
+
+def _finite(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (float, int)):
+        raise TypeError(f"{label} must be numeric")
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"{label} must be finite")
+    return numeric

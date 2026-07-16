@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
+
+from market_structure_lab.discovery.matrix import FeatureMatrix
+from market_structure_lab.discovery.pca import PCAProjection, pca_projection_sha256
 
 _MAX_ROWS = 1_000_000
 _MAX_FEATURES = 10_000
@@ -20,6 +23,10 @@ class KMeansResult:
     assignments: tuple[int, ...]
     inertia: float
     iterations: int
+    seed: int
+    max_iterations: int
+    tolerance: float
+    projection_sha256: str | None = None
 
 
 def fit_kmeans(
@@ -61,7 +68,15 @@ def fit_kmeans(
         updated_assignments = _assign(rows, updated)
         centroids = updated
         if shift <= tolerance_value * tolerance_value and updated_assignments == assignments:
-            return _result(rows, centroids, updated_assignments, iterations)
+            return _result(
+                rows,
+                centroids,
+                updated_assignments,
+                iterations,
+                seed,
+                max_iterations,
+                tolerance_value,
+            )
 
     raise RuntimeError(
         f"K-means did not converge to consistent assignments within {max_iterations} iterations"
@@ -73,6 +88,9 @@ def _result(
     centroids: tuple[tuple[float, ...], ...],
     assignments: tuple[int, ...],
     iterations: int,
+    seed: int,
+    max_iterations: int,
+    tolerance: float,
 ) -> KMeansResult:
     canonical_centroids, remapping = _canonical_labels(centroids)
     canonical_assignments = tuple(remapping[label] for label in assignments)
@@ -85,7 +103,32 @@ def _result(
         assignments=canonical_assignments,
         inertia=inertia,
         iterations=iterations,
+        seed=seed,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
     )
+
+
+def fit_projected_kmeans(
+    matrix: FeatureMatrix,
+    projection: PCAProjection,
+    *,
+    clusters: int,
+    seed: int,
+    max_iterations: int,
+    tolerance: float,
+) -> KMeansResult:
+    """Fit K-means only on a reviewed discovery PCA projection."""
+
+    projection_digest = pca_projection_sha256(matrix, projection)
+    result = fit_kmeans(
+        projection.scores,
+        clusters=clusters,
+        seed=seed,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+    )
+    return replace(result, projection_sha256=projection_digest)
 
 
 def _validated_values(

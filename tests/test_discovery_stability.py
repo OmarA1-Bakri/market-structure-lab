@@ -9,10 +9,11 @@ from market_structure_lab.discovery import (
     FeatureMatrix,
     PartitionRole,
     StabilityPolicy,
+    StabilityReport,
     adjusted_rand_index,
     evaluate_cluster_stability,
-    fit_kmeans,
     fit_pca,
+    fit_projected_kmeans,
 )
 
 
@@ -40,8 +41,9 @@ def _stability_fixture():
         tuple((value,) for value in (-10.2, -9.8, 9.8, 10.2, -10.1, -9.9, 9.9, 10.1)),
     )
     projection = fit_pca(discovery, 1)
-    clustering = fit_kmeans(
-        projection.scores,
+    clustering = fit_projected_kmeans(
+        discovery,
+        projection,
         clusters=2,
         seed=17,
         max_iterations=100,
@@ -124,6 +126,7 @@ def test_stability_evaluation_records_seed_subsample_period_asset_and_perturbati
         base_result=clustering,
         symbols=symbols,
         periods=periods,
+        period_order=("2025-02", "2025-03"),
         seeds=(3, 11, 29),
         subsample_fraction=0.75,
         policy=policy,
@@ -135,6 +138,7 @@ def test_stability_evaluation_records_seed_subsample_period_asset_and_perturbati
         base_result=clustering,
         symbols=symbols,
         periods=periods,
+        period_order=("2025-02", "2025-03"),
         seeds=(3, 11, 29),
         subsample_fraction=0.75,
         policy=policy,
@@ -160,6 +164,7 @@ def test_stability_evaluation_rejects_when_a_frozen_threshold_fails() -> None:
         base_result=clustering,
         symbols=symbols,
         periods=periods,
+        period_order=("2025-02", "2025-03"),
         seeds=(3, 11),
         subsample_fraction=0.75,
         policy=StabilityPolicy(
@@ -185,8 +190,9 @@ def test_stability_evaluation_uses_stratified_subsamples_with_duplicate_points()
         ((-10.0,), (10.0,), (-10.0,), (10.0,)),
     )
     projection = fit_pca(discovery, 1)
-    clustering = fit_kmeans(
-        projection.scores,
+    clustering = fit_projected_kmeans(
+        discovery,
+        projection,
         clusters=2,
         seed=17,
         max_iterations=100,
@@ -200,6 +206,7 @@ def test_stability_evaluation_uses_stratified_subsamples_with_duplicate_points()
         base_result=clustering,
         symbols=("BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"),
         periods=("p1", "p1", "p2", "p2"),
+        period_order=("p1", "p2"),
         seeds=(0,),
         subsample_fraction=0.5,
         policy=StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
@@ -219,6 +226,7 @@ def test_stability_evaluation_requires_discovery_and_development_provenance() ->
             base_result=clustering,
             symbols=symbols,
             periods=periods,
+            period_order=("2025-02", "2025-03"),
             seeds=(3,),
             subsample_fraction=0.75,
             policy=StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
@@ -236,6 +244,7 @@ def test_stability_evaluation_rejects_nonfinite_projection_evidence() -> None:
             base_result=clustering,
             symbols=symbols,
             periods=periods,
+            period_order=("2025-02", "2025-03"),
             seeds=(3,),
             subsample_fraction=0.75,
             policy=StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
@@ -263,6 +272,7 @@ def test_stability_evaluation_rejects_invalid_identity_lengths_and_bounds(
         "base_result": clustering,
         "symbols": symbols,
         "periods": periods,
+        "period_order": ("2025-02", "2025-03"),
         "seeds": (3, 11),
         "subsample_fraction": 0.75,
         "policy": StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
@@ -283,9 +293,74 @@ def test_stability_evaluation_groups_reappearing_period_labels_across_assets() -
         base_result=clustering,
         symbols=symbols,
         periods=("p1", "p1", "p2", "p2", "p1", "p1", "p2", "p2"),
+        period_order=("p1", "p2"),
         seeds=(3,),
         subsample_fraction=0.75,
         policy=StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
     )
 
     assert math.isfinite(report.adjacent_js_distance)
+
+
+def test_stability_requires_explicit_complete_chronological_period_vocabulary() -> None:
+    discovery, development, projection, clustering, symbols, periods = _stability_fixture()
+
+    with pytest.raises(ValueError, match="period_order"):
+        evaluate_cluster_stability(
+            discovery=discovery,
+            development=development,
+            projection=projection,
+            base_result=clustering,
+            symbols=symbols,
+            periods=periods,
+            period_order=("2025-02",),
+            seeds=(3,),
+            subsample_fraction=0.75,
+            policy=StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
+        )
+
+
+def test_stability_report_derives_acceptance_from_its_frozen_policy() -> None:
+    report = StabilityReport(
+        policy=StabilityPolicy(1.0, 1.0, 0.0, 1.0, 1.0),
+        seed_ari=(1.0,),
+        subsample_ari=(1.0,),
+        adjacent_js_distance=0.0,
+        asset_coverage=1.0,
+        parameter_perturbation_ari=(0.5,),
+    )
+
+    assert not report.accepted
+    with pytest.raises(TypeError, match="init=False"):
+        replace(report, accepted=True)
+
+
+@pytest.mark.parametrize("field", ["centroids", "assignments", "inertia"])
+def test_stability_rejects_inconsistent_base_kmeans_evidence(field: str) -> None:
+    discovery, development, projection, clustering, symbols, periods = _stability_fixture()
+    if field == "centroids":
+        bad = replace(
+            clustering,
+            centroids=((clustering.centroids[0][0] - 1.0,), clustering.centroids[1]),
+        )
+    elif field == "assignments":
+        bad = replace(
+            clustering,
+            assignments=(1 - clustering.assignments[0],) + clustering.assignments[1:],
+        )
+    else:
+        bad = replace(clustering, inertia=clustering.inertia + 1.0)
+
+    with pytest.raises(ValueError, match="centroid|nearest|inertia"):
+        evaluate_cluster_stability(
+            discovery=discovery,
+            development=development,
+            projection=projection,
+            base_result=bad,
+            symbols=symbols,
+            periods=periods,
+            period_order=("2025-02", "2025-03"),
+            seeds=(3,),
+            subsample_fraction=0.75,
+            policy=StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
+        )

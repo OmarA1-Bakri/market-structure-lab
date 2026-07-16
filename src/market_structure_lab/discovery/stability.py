@@ -5,13 +5,13 @@ from __future__ import annotations
 import math
 import random
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Sequence
 
 from market_structure_lab.discovery.kmeans import KMeansResult, fit_kmeans
 from market_structure_lab.discovery.matrix import FeatureMatrix
-from market_structure_lab.discovery.pca import PCAProjection
+from market_structure_lab.discovery.pca import PCAProjection, pca_projection_sha256
 from market_structure_lab.discovery.splits import PartitionRole
 
 _MAX_ITERATIONS = 100
@@ -75,14 +75,17 @@ class StabilityPolicy:
 class StabilityReport:
     """Complete evidence used to accept or reject a cluster definition."""
 
+    policy: StabilityPolicy
     seed_ari: tuple[float, ...]
     subsample_ari: tuple[float, ...]
     adjacent_js_distance: float
     asset_coverage: float
     parameter_perturbation_ari: tuple[float, ...]
-    accepted: bool
+    accepted: bool = field(init=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.policy, StabilityPolicy):
+            raise TypeError("policy must be a StabilityPolicy")
         _require_metric_tuple(self.seed_ari, "seed_ari", -1.0, 1.0)
         _require_metric_tuple(self.subsample_ari, "subsample_ari", -1.0, 1.0)
         _require_bounded(
@@ -98,8 +101,7 @@ class StabilityReport:
             -1.0,
             1.0,
         )
-        if not isinstance(self.accepted, bool):
-            raise TypeError("accepted must be a bool")
+        object.__setattr__(self, "accepted", _meets_policy(self, self.policy))
 
 
 def evaluate_cluster_stability(
@@ -110,6 +112,7 @@ def evaluate_cluster_stability(
     base_result: KMeansResult,
     symbols: Sequence[str],
     periods: Sequence[str],
+    period_order: Sequence[str],
     seeds: Sequence[int],
     subsample_fraction: float,
     policy: StabilityPolicy,
@@ -131,15 +134,14 @@ def evaluate_cluster_stability(
     if not isinstance(policy, StabilityPolicy):
         raise TypeError("policy must be a StabilityPolicy")
 
+    projection_digest = pca_projection_sha256(discovery, projection)
     scores = _validated_projection(projection, discovery_rows, feature_width)
-    cluster_count = _validated_clustering(base_result, scores)
+    cluster_count = _validated_clustering(base_result, scores, projection_digest)
     development_scores = _project(development_rows, projection.means, projection.components)
     development_labels = _assign(development_scores, base_result.centroids)
     symbol_values = _validated_names(symbols, len(development_rows), "symbols")
     period_values = _validated_names(periods, len(development_rows), "periods")
-    ordered_periods = _period_order(period_values)
-    if len(ordered_periods) < 2:
-        raise ValueError("periods must contain at least two adjacent periods")
+    ordered_periods = _validated_period_order(period_order, period_values)
     seed_values = _validated_seeds(seeds)
     fraction = _validated_fraction(subsample_fraction)
 
@@ -177,20 +179,13 @@ def evaluate_cluster_stability(
         cluster_count,
         seed_values[0],
     )
-    accepted = (
-        min(seed_ari) >= policy.minimum_seed_ari
-        and min(subsample_ari) >= policy.minimum_subsample_ari
-        and adjacent_js_distance <= policy.maximum_adjacent_js_distance
-        and asset_coverage >= policy.minimum_asset_coverage
-        and min(parameter_perturbation_ari) >= policy.minimum_parameter_perturbation_ari
-    )
     return StabilityReport(
+        policy=policy,
         seed_ari=seed_ari,
         subsample_ari=subsample_ari,
         adjacent_js_distance=adjacent_js_distance,
         asset_coverage=asset_coverage,
         parameter_perturbation_ari=parameter_perturbation_ari,
-        accepted=accepted,
     )
 
 
@@ -274,11 +269,17 @@ def _validated_projection(
     return supplied_scores
 
 
-def _validated_clustering(result: KMeansResult, scores: tuple[tuple[float, ...], ...]) -> int:
+def _validated_clustering(
+    result: KMeansResult,
+    scores: tuple[tuple[float, ...], ...],
+    projection_digest: str,
+) -> int:
     if not isinstance(result, KMeansResult):
         raise TypeError("base_result must be a KMeansResult")
     if not result.centroids:
         raise ValueError("base_result must contain centroids")
+    if result.projection_sha256 != projection_digest:
+        raise ValueError("base_result must come from the reviewed PCA projection")
     width = len(scores[0])
     centroids = tuple(
         tuple(_require_finite(value, "cluster centroid") for value in centroid)
@@ -293,7 +294,31 @@ def _validated_clustering(result: KMeansResult, scores: tuple[tuple[float, ...],
         raise ValueError("base_result assignment references an unknown centroid")
     if set(labels) != set(range(len(centroids))):
         raise ValueError("every base_result centroid must have assigned rows")
-    if not math.isfinite(result.inertia) or result.inertia < 0.0:
+    if centroids != tuple(sorted(centroids)):
+        raise ValueError("base_result centroids must use canonical label ordering")
+    for label, centroid in enumerate(centroids):
+        members = tuple(
+            row for row, assignment in zip(scores, labels, strict=True) if assignment == label
+        )
+        expected = tuple(
+            math.fsum(row[column] for row in members) / len(members) for column in range(width)
+        )
+        if any(
+            not math.isclose(value, mean, rel_tol=1e-12, abs_tol=1e-12)
+            for value, mean in zip(centroid, expected, strict=True)
+        ):
+            raise ValueError("base_result centroid must equal its assigned-row mean")
+    if labels != _assign(scores, centroids):
+        raise ValueError("base_result assignments must use nearest-centroid canonical ties")
+    expected_inertia = math.fsum(
+        math.fsum((left - right) ** 2 for left, right in zip(row, centroids[label], strict=True))
+        for row, label in zip(scores, labels, strict=True)
+    )
+    if (
+        not math.isfinite(result.inertia)
+        or result.inertia < 0.0
+        or not math.isclose(result.inertia, expected_inertia, rel_tol=1e-12, abs_tol=1e-12)
+    ):
         raise ValueError("base_result inertia must be finite and non-negative")
     if (
         isinstance(result.iterations, bool)
@@ -301,6 +326,16 @@ def _validated_clustering(result: KMeansResult, scores: tuple[tuple[float, ...],
         or result.iterations < 1
     ):
         raise ValueError("base_result iterations must be a positive integer")
+    if isinstance(result.seed, bool) or not isinstance(result.seed, int):
+        raise TypeError("base_result seed must be an integer")
+    if (
+        isinstance(result.max_iterations, bool)
+        or not isinstance(result.max_iterations, int)
+        or result.max_iterations < result.iterations
+    ):
+        raise ValueError("base_result max_iterations must cover its iterations")
+    if not math.isfinite(result.tolerance) or result.tolerance < 0.0:
+        raise ValueError("base_result tolerance must be finite and non-negative")
     return len(centroids)
 
 
@@ -343,8 +378,17 @@ def _validated_names(values: Sequence[str], expected: int, label: str) -> tuple[
     return names
 
 
-def _period_order(periods: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(periods))
+def _validated_period_order(
+    period_order: Sequence[str], periods: tuple[str, ...]
+) -> tuple[str, ...]:
+    if isinstance(period_order, (str, bytes)) or not isinstance(period_order, Sequence):
+        raise TypeError("period_order must be an explicit chronological sequence")
+    order = tuple(period_order)
+    if len(order) < 2 or any(not isinstance(value, str) or not value.strip() for value in order):
+        raise ValueError("period_order must contain at least two named chronological periods")
+    if len(set(order)) != len(order) or set(order) != set(periods):
+        raise ValueError("period_order must uniquely and completely cover periods")
+    return order
 
 
 def _validated_seeds(seeds: Sequence[int]) -> tuple[int, ...]:
@@ -510,3 +554,13 @@ def _require_finite(value: object, label: str) -> float:
     if not math.isfinite(numeric):
         raise ValueError(f"{label} must be finite")
     return numeric
+
+
+def _meets_policy(report: StabilityReport, policy: StabilityPolicy) -> bool:
+    return (
+        min(report.seed_ari) >= policy.minimum_seed_ari
+        and min(report.subsample_ari) >= policy.minimum_subsample_ari
+        and report.adjacent_js_distance <= policy.maximum_adjacent_js_distance
+        and report.asset_coverage >= policy.minimum_asset_coverage
+        and min(report.parameter_perturbation_ari) >= policy.minimum_parameter_perturbation_ari
+    )
