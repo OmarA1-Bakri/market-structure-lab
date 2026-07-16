@@ -130,15 +130,18 @@ and atomically writes `automation/latest.json`.
 Runner exits are narrower than the underlying health command:
 
 - exit `0`: all reviewed symbols are current;
-- exit `2`: the only non-healthy statuses are exactly the `source_conflict` symbols derived from the
-  pinned compatibility artifact, those symbols inserted no rows, and every compatible symbol is
-  current;
+- exit `2`: every non-current symbol has terminal evidence: either a `source_conflict` derived from
+  the pinned compatibility artifact, or a compatible-symbol `provider_absent`, `non_trading`, or
+  `partially_recovered` result with explicit remaining ranges;
 - exit `1`: Docker, database, lock, checksum, network, coverage, report-identity, or unexpected
   symbol-status failure.
 
-Thus the current nine reviewed conflicts remain an alert, while `fetch_failed`, `provider_absent`,
-`partially_recovered`, `unresolved`, a missing expected conflict, or any stale compatible symbol is
-an operational failure. The runner records no credentials or connection URLs.
+Thus the current nine reviewed conflicts and any explicitly terminal compatible-symbol coverage
+limits remain alerts. The runner archives their terminal report and removes the pending cutoff so
+the next daily invocation can plan a newer tail. `fetch_failed`, `unresolved`,
+`source_unavailable`, a missing expected conflict, or an internally inconsistent status is an
+operational failure that preserves the pending manifest for retry. The runner records no
+credentials or connection URLs.
 
 `scripts/register_daily_candle_refresh.ps1` defines the Windows Task Scheduler handoff. The reviewed
 default is daily at 07:15 local time, running PowerShell 7 with `-NoProfile -NonInteractive`, starting

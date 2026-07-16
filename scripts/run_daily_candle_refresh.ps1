@@ -312,6 +312,7 @@ function Get-TerminalClassification {
     $observedConflicts = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
     )
+    $terminalLimits = [System.Collections.Generic.List[string]]::new()
     foreach ($symbol in @($ApplyPayload.symbols)) {
         $name = [string]$symbol.symbol
         if ($expected.Contains($name)) {
@@ -323,25 +324,50 @@ function Get-TerminalClassification {
             [void]$observedConflicts.Add($name)
             continue
         }
-        if ($symbol.status -notin @("up_to_date", "recovered") -or
-            -not [bool]$symbol.current_through_cutoff -or
-            [int64]$symbol.after_missing_minutes -ne 0) {
-            throw "compatible symbol $name has unexpected terminal status '$($symbol.status)'"
+        if ($symbol.status -in @("up_to_date", "recovered")) {
+            if (-not [bool]$symbol.current_through_cutoff -or
+                [int64]$symbol.after_missing_minutes -ne 0) {
+                throw "compatible symbol $name reports current status with missing minutes"
+            }
+            continue
         }
+        if ($symbol.status -in @("provider_absent", "non_trading", "partially_recovered")) {
+            if ([bool]$symbol.current_through_cutoff -or
+                [int64]$symbol.after_missing_minutes -le 0) {
+                throw "compatible symbol $name has a terminal limit without missing minutes"
+            }
+            $terminalLimits.Add("$name`:$($symbol.status)")
+            continue
+        }
+        throw "compatible symbol $name has unexpected terminal status '$($symbol.status)'"
     }
     if (-not $observedConflicts.SetEquals($expected)) {
         throw "terminal report does not contain exactly the reviewed source conflicts"
     }
-    if ($ExpectedConflicts.Count -eq 0) {
+    if ($ExpectedConflicts.Count -eq 0 -and $terminalLimits.Count -eq 0) {
         if ($HealthExitCode -ne 0 -or -not [bool]$HealthPayload.current) {
             throw "health is non-current despite a fully healthy reviewed universe"
         }
-        return [pscustomobject]@{ ExitCode = 0; Classification = "current" }
+        return [pscustomobject]@{
+            ExitCode = 0
+            Classification = "current"
+            TerminalLimits = @()
+        }
     }
     if ($HealthExitCode -ne 2 -or [bool]$HealthPayload.current) {
-        throw "health did not alert for the reviewed provenance conflicts"
+        throw "health did not alert for terminal candle coverage limits"
     }
-    return [pscustomobject]@{ ExitCode = 2; Classification = "expected_provenance_conflicts" }
+    $classification = if ($terminalLimits.Count) {
+        "terminal_data_limits"
+    }
+    else {
+        "expected_provenance_conflicts"
+    }
+    return [pscustomobject]@{
+        ExitCode = 2
+        Classification = $classification
+        TerminalLimits = @($terminalLimits)
+    }
 }
 
 $script:ResolvedProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
@@ -374,6 +400,7 @@ $status = [ordered]@{
     manifest_sha256 = $null
     report_sha256 = $null
     started_at = [DateTimeOffset]::UtcNow.ToString("O")
+    terminal_limits = @()
 }
 
 try {
@@ -424,6 +451,7 @@ try {
 
     $status.classification = $classification.Classification
     $status.report_sha256 = [string]$apply.Payload.report_sha256
+    $status.terminal_limits = @($classification.TerminalLimits)
     $status.completed_at = [DateTimeOffset]::UtcNow.ToString("O")
     Remove-Item -LiteralPath $script:PendingPath -Force
     Write-AtomicJson -Path (Join-Path $script:ResolvedStateDir "latest.json") -Value $status

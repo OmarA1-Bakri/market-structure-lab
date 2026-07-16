@@ -286,6 +286,26 @@ def test_runner_returns_operational_failure_for_unexpected_compatible_status(
     assert (workspace["root"] / "data/exports/freshness/automation/pending.json").exists()
 
 
+@pytest.mark.parametrize("status", ["provider_absent", "non_trading", "partially_recovered"])
+def test_runner_advances_after_terminal_compatible_coverage_limit(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    workspace = _workspace(tmp_path, {"statuses": {"XRPUSDT": status}})
+
+    result = _run(workspace)
+
+    assert result.returncode == 2, result.stderr
+    latest = json.loads(
+        (workspace["root"] / "data/exports/freshness/automation/latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert latest["classification"] == "terminal_data_limits"
+    assert latest["terminal_limits"] == [f"XRPUSDT:{status}"]
+    assert not (workspace["root"] / "data/exports/freshness/automation/pending.json").exists()
+
+
 def test_runner_returns_zero_when_reviewed_universe_is_fully_current(tmp_path: Path) -> None:
     workspace = _workspace(
         tmp_path,
