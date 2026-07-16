@@ -224,12 +224,14 @@ The stale root `.venv` remained untouched. Phase 3 verification used the ignored
 `.venv-codex` environment through `UV_PROJECT_ENVIRONMENT=.venv-codex`; builds and installed-wheel
 checks used isolated directories below the operating-system temporary directory.
 
-- Unit/regression suite: `472 passed in 12.41s` in the post-import-fix full pass.
+- Post-deslop unit/regression suite: `473 passed in 15.74s`.
 - Ruff: all repository checks passed.
+- Ruff formatter: all `20` Phase 3-touched Python files already formatted after the scoped cleanup.
 - Mypy: no issues in `53` source files.
 - `uv lock --check` resolved the pinned `120` packages without a change; `uv sync --locked` passed.
-- Wheel and source distribution built successfully; a fresh installed-wheel smoke printed
-  `FS-000001 26 change_point DerivedPublicationIdentity`.
+- Post-deslop wheel and source distribution built successfully; a fresh installed-wheel smoke
+  printed `FS-000001 26 change_point True True DerivedPublicationIdentity`, including both
+  documented event callables.
 - Feature and event publication tests include fresh-interpreter import, deterministic batching,
   empty publication, idempotent replay, stale/tampered output, schema leakage, and overlap evidence.
 - Docker daemon `29.4.2` was reachable and `docker compose config --quiet` passed.
@@ -240,7 +242,21 @@ checks used isolated directories below the operating-system temporary directory.
   immutable source candles, `16,480,681` validated supplements, `19,192` terminal gap resolutions,
   `28,765` completed recovery batches, zero Callscore application tables outside the approved
   schemas, and zero forbidden Callscore-derived candle columns.
+- The exact 100,000-candle Phase 2 benchmark regression wrote only to a temporary file. Its schema
+  and complete correctness block match the pinned baseline: input SHA-256
+  `3a8127988b56f0b1a2e873143aac22c58284e651b4b1fe66bd24b021dfeda6d4`, snapshot-stream SHA-256
+  `d879aa0010852ed9c6ca24ee1d5d217458459dffcc7091833ec5219d302a0e3f`, `512` incremental/full
+  comparisons passed at absolute tolerance `1e-12`, repetitions were identical, and maximum active
+  candles remained `1,440`. Timing is not an acceptance threshold.
+- Independent architect review: approved after `135` focused tests and adversarial checks of
+  punctuation-hidden future metadata, identity drift, cutoffs, boundary resets, bounded
+  normalisation, event identity, structural observability, overlap, publication, package imports,
+  and Phase 4 exclusion.
+- Mandatory anti-slop pass: the architect found no blocking overengineering; scoped Ruff formatting
+  changed only `12` Phase 3-owned files, removed irregular indentation and formatting drift, and
+  retained `130` focused passing tests before the complete post-cleanup gate above.
+- Final `git diff --check`: passed. Only preserved user/runtime `.codacy`, `.coverage`, and `.vscode`
+  artifacts remain untracked and were not staged.
 
-The final Phase 3 sign-off additionally requires the independent architect review, scoped anti-slop
-pass, and post-cleanup repetition of all verification gates. Those results are recorded here only
-after they have run successfully.
+The Phase 3 exit gate is satisfied with zero known implementation errors. Phase 4 behaviour
+discovery remains unstarted and requires a separate explicit approval.
