@@ -39,9 +39,46 @@ _FORBIDDEN_NARRATIVE_TEXT = re.compile(
     r"operators?|desks?|flow|money)|dealers?|specialists?)\b",
     re.IGNORECASE,
 )
-_APPROVED_NEUTRAL_EVIDENCE_TEXT = re.compile(
-    r"\b(?:neutral|observable|outcome[- ]blind|auction|frozen[- ]features?)\b",
-    re.IGNORECASE,
+_DESCRIPTION_GRAMMAR = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*(?: [A-Za-z]+(?:-[A-Za-z]+)*)*\.")
+_DESCRIPTION_VOCABULARY = frozenset(
+    {
+        "a",
+        "and",
+        "another",
+        "auction",
+        "auction-shape",
+        "behaviour",
+        "behaviours",
+        "configuration",
+        "configurations",
+        "description",
+        "different",
+        "evidence",
+        "expansion",
+        "feature",
+        "features",
+        "frozen",
+        "group",
+        "grouping",
+        "groups",
+        "large",
+        "near",
+        "neutral",
+        "observable",
+        "observed",
+        "of",
+        "outcome-blind",
+        "outcomes",
+        "recurring",
+        "state",
+        "structure",
+        "support",
+        "the",
+        "two",
+        "value-area",
+        "volume",
+        "without",
+    }
 )
 
 
@@ -394,8 +431,15 @@ def _validate_description(value: str) -> None:
         raise ValueError("description must not contain outcome or profitability fields")
     if _FORBIDDEN_NARRATIVE_TEXT.search(value):
         raise ValueError("description must not contain unsupported participant narratives")
-    if _APPROVED_NEUTRAL_EVIDENCE_TEXT.search(value) is None:
-        raise ValueError("description must contain an approved neutral evidence marker")
+    if _DESCRIPTION_GRAMMAR.fullmatch(value) is None:
+        raise ValueError(
+            "description must use neutral vocabulary, canonical grammar, and neutral evidence terms"
+        )
+    tokens = tuple(token.lower() for token in value[:-1].split(" "))
+    if any(token not in _DESCRIPTION_VOCABULARY for token in tokens):
+        raise ValueError(
+            "description must use neutral vocabulary, canonical grammar, and neutral evidence terms"
+        )
 
 
 def _require_unique_names(

@@ -180,6 +180,14 @@ def test_cluster_definition_hash_changes_with_consistent_centroid_definition() -
             },
             "outcome",
         ),
+        (
+            {"description": ("Observable state promises wealth from hedge-fund accumulation.")},
+            "neutral vocabulary",
+        ),
+        (
+            {"description": ("Neutral structure guarantees riches through coordinated funds.")},
+            "neutral vocabulary",
+        ),
     ],
 )
 def test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes(
