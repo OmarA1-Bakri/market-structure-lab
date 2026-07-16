@@ -12,14 +12,13 @@ The repository is organised as a single-engineer quantitative research workspace
 
 ## Processing pipeline
 
-1. Preserve raw OHLCV data in PostgreSQL or DuckDB
-2. Load candles through the canonical dataset layer
-3. Update auction state candle by candle
-4. Build volume profiles and value areas
-5. Detect HVN/LVN regions and auction structure
-6. Track deterministic auction states
-7. Estimate state-transition probabilities
-8. Use statistically significant structure as the basis for later strategy work
+1. Preserve immutable raw OHLCV and publish canonical quality evidence
+2. Reconstruct deterministic auction state candle by candle
+3. Publish versioned causal features and structural events
+4. Discover recurring behaviours without outcomes
+5. Let AI interpret frozen evidence and propose falsifiable theories
+6. Validate frozen candidates on untouched data under statistical controls
+7. Promote only robust cost-adjusted edges into strategies and portfolios
 
 ## Database layout
 
@@ -82,6 +81,16 @@ cutoff, so internal holes and the missing tail use the same append-only recovery
 canonical view becomes current as validated supplements commit; no dump row is updated and
 provenance-blocked symbols produce no fetch requests.
 
+The PostgreSQL planner uses one aggregate summary and a lag-only ordered key scan per symbol. Both
+operate on narrow `(symbol, interval, open_time)` keys and merge the dump with validated supplements
+while excluding dump collisions. Transaction-local planner controls keep this path on index-only
+merge scans and prevent sequential/hash/sort plans from creating unbounded temporary spills.
+
+The unattended Windows runner requires an existing `data/postgres/PG_VERSION`, holds a host lock
+for the workflow, and relies on the recovery advisory lock for publication. It atomically preserves
+`pending.json` across retryable failures and advances `latest.json` only for a terminal report. It
+never bootstraps, snapshots, deletes volumes, or reinitializes PostgreSQL.
+
 Immutable research snapshots are a separate deliberate operation. A checksum-verified freshness
 report is accepted only when healthy or when the operator explicitly selects the narrowly defined
 provenance-blocked policy. Publication holds the recovery advisory lock, verifies that the report's
@@ -92,8 +101,10 @@ code commit. This prevents a daily scheduler from silently replacing a frozen re
 
 ## Experiment artifacts
 
-Use `market_structure_lab.experiments.save_experiment_result` for research runs that need durable evidence. Each
-run writes:
+Use `market_structure_lab.experiments.save_experiment_result` for small generic research records.
+Canonical Phase 4 discovery uses checksum-pinned `DR-*` publication with frozen detector,
+stability, motif, transition, representative, and interpretation evidence. The generic writer
+writes:
 
 - `config.json`
 - `metrics.json`
@@ -103,6 +114,11 @@ run writes:
 
 The artifact writer is intentionally small. It records outputs; it does not schedule jobs, optimize
 strategies, or own research logic.
+
+Daily PostgreSQL freshness does not automatically create a research dataset. Real Phase 4 market
+experiments begin only after a deliberate immutable candle snapshot and Phase 3 feature/event
+publication. Phase 4 transitions are boundary-aware, event-level and dwell-compressed; they are
+Markov-like conditional summaries, not proof of a stationary first-order Markov process.
 
 ## Auction engine
 

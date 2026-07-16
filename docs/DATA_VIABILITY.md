@@ -5,10 +5,10 @@ Assessment date: 2026-07-16
 ## Verdict
 
 The dump is **conditionally viable for cryptocurrency market-structure research**. Candle rows are
-unique, minute-aligned, numerically valid, and externally spot-checked against Binance. The dataset
-is not a continuous 18-symbol, two-year panel: it contains 25 symbols with materially different
-date ranges and gaps. Canonical datasets must select contiguous per-symbol windows and must never
-bridge gaps or symbol boundaries.
+unique, minute-aligned, and numerically valid. Independent Binance Spot compatibility checks passed
+for 16 symbols and failed closed for nine. The dataset is not a continuous 18-symbol, two-year
+panel: it contains 25 symbols with materially different date ranges and gaps. Canonical datasets
+must select contiguous per-symbol windows and must never bridge gaps or symbol boundaries.
 
 ## Archive identity
 
@@ -91,8 +91,9 @@ is highly fragmented. Other symbols remain usable only after contiguous-window s
 
 ## Required safeguards
 
-- Use `market_data.candles` as the authoritative current source; recompute higher timeframes and all
-  research features deterministically.
+- Treat `market_data.candles` as the immutable dump authority and
+  `market_data.candles_canonical` as the dump-preferred research/live source; recompute higher
+  timeframes and all research features deterministically.
 - Map `open_time` from epoch milliseconds to UTC and `interval` to canonical `timeframe`.
 - Preserve the dump hash, source row ID, mapping version, and dataset version in snapshot manifests.
 - Split every sequence at material gaps; never create profiles or transitions across gaps or symbols.
@@ -138,7 +139,7 @@ The baseline manifest SHA-256 is
 `befbf514ead328e14320cd6097ce28663c652bc9136115d344fa6714023d826d`; the validated manifest
 SHA-256 is `482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2`.
 
-## Post-recovery coverage
+## Frozen 2026-07-14 post-recovery baseline
 
 The completed frozen-manifest run added `16,480,681` unique, validated observations without
 changing the `35,748,117` immutable dump rows. Combined canonical rows are `52,228,798` of
@@ -219,7 +220,7 @@ immutable source rows, `16,480,681` validated supplements, all `19,192` original
 classified, no supplements on source-conflict symbols, and no restored Callscore application data
 or derived Callscore candle fields.
 
-## Daily freshness readiness
+## Durable daily freshness evidence
 
 The daily updater now freezes an explicit last-closed-minute cutoff, reuses the append-only recovery
 ledger, and writes checksum-bearing plans and terminal reports outside Git. A same-cutoff retry is
@@ -232,14 +233,33 @@ deliberate crypto-only restore. It verifies the immutable dump and reviewed sour
 applying the append-only migration. Scheduled daily runs start at `plan` and never initialize
 `data/postgres` implicitly.
 
-The compatibility gate has not changed: the validated artifact remains
-`482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2`, and the nine conflicts listed
-above keep the complete 25-symbol universe unhealthy. This is an explicit provenance limitation,
-not an operational failure and not permission to fill or replace those candles. No live network
-freshness run or scheduled automation has yet been executed. A disposable PostgreSQL integration
-profile verified migration reapplication, dump preference, append-only supplements, same/later
-cutoffs, blocked-source no-fetch, advisory locking, and report conservation without touching
-`data/postgres`.
+The first durable live cutoff was `2026-07-16T11:23:00Z`, frozen by plan SHA-256
+`754d49560efccbe6ac40d23b5b190fa6c791c352951da35ac1c6aff6e40981d2`. Run
+`5ba02c00-c622-41fb-b6c5-1ef960825f88` admitted `8,567,720` checksum-pinned observations in `9,750`
+completed bounded batches, with zero failed batches. Its logical supplement hash is
+`cfaba512a869075336f27136a6792cb3d07246c8b4e6656a7c08e52dda59189d`.
+
+The durable database now contains `25,048,401` validated supplements and `60,796,518` canonical
+rows while the immutable dump remains `35,748,117` rows. The checksum-bearing report SHA-256 is
+`d518e9ca850a2c06338da84f2ef921c8efe2ed3f50c52f5a37375ff54678d210`. It conserves
+`16,298,974 - 8,567,720 = 7,731,254` absent minutes:
+
+| Terminal status | Symbols | Remaining minutes |
+|---|---:|---:|
+| recovered | 4 | 0 |
+| partially recovered | 3 | 793,050 |
+| provider absent | 9 | 27,911 |
+| source conflict | 9 | 6,910,293 |
+
+The 16 compatible symbols therefore retain `820,961` explicit missing minutes; none are interpolated
+or fabricated. The nine conflicts remain quarantined, and existing dump rows always win. Health
+returns exit `2` by design. Reapplying the identical 170-gap recovery manifest inserted zero rows,
+kept `25,048,401` validated supplements, and returned the same run ID and logical hash.
+
+The Windows task `Market Structure Lab - Daily Candle Refresh` is registered for 07:15 local time
+with missed-trigger catch-up and overlapping instances disabled. Retryable failures preserve the
+pending frozen plan; terminal coverage limitations are archived as alerts so the next daily cutoff
+can advance.
 
 ## Phase 4 discovery viability boundary
 
@@ -250,7 +270,11 @@ profitability, target, MFE/MAE, or future-volatility field is admitted.
 
 The committed Phase 4 golden fixture is a deterministic software-verification dataset, not sampled
 market evidence and not proof of an edge. It exercises two symbols through real split, matrix, PCA,
-K-means, stability, motif, transition, behaviour, evidence, and artifact APIs. Stable replay pins
+K-means, stability, motif, transition, behaviour, evidence, and artifact APIs. Real Phase 4 market
+experiments may begin after a declared immutable snapshot and its Phase 3 feature/event publication
+are frozen. Current snapshot policy correctly rejects partial/provider-absent coverage, so research
+must use an approved contiguous/scoped universe or resolve those gaps rather than weaken the gate.
+Stable replay pins
 manifest SHA-256 `86d754f5be1c3d0b5e2a9d403a7af9c814231f7679421a560f14dc1bbc65b8f2`;
 the unstable fixture pins
 `cbadd46a15144ce89424b40c0d84687ce99764725b323d4f2f9dbb3b66f9e500` and publishes no

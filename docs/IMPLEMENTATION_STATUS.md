@@ -327,16 +327,52 @@ The default snapshot policy requires every symbol to be `up_to_date` or `recover
 provider-absent, failed, or unresolved recovery. The nine existing source conflicts therefore keep
 full-universe scheduler health non-zero and are recorded in any explicitly permitted snapshot.
 
-Implementation verification performed for this slice:
+The completed early-recovery state was preserved in the ignored archive
+`data/exports/market-structure-recovery-state-20260716.dump`, SHA-256
+`989E5792F02E3CE01035D0DF91423D8961835AE130EC10D757C8E5A5A643F35C`, and restored atomically into
+the durable database. It retained `16,480,681` supplements, `28,765` completed batches, `19,192`
+terminal resolutions, and logical hash
+`e79c147039249362feba0ef153ea7417bcabab7a3e0c0c670e414f91f2adf6e1`.
 
-- focused snapshot/CLI/export tests: `28 passed`;
-- disposable PostgreSQL 17 integration: `1 passed`, proving migration reapplication, dump-preferred
-  reads, append-only enforcement, same-cutoff idempotency, later-cutoff-only recovery,
-  blocked-source no-fetch, advisory-lock exclusion, and report conservation;
-- the disposable container used no repository volume and was removed after the test;
-- no live Binance request, production database sync, or automation schedule was executed.
+The first durable live plan is
+`data/exports/freshness/20260716T112300Z-754d49560efc.plan.json`, cutoff
+`2026-07-16T11:23:00Z`, SHA-256
+`754d49560efccbe6ac40d23b5b190fa6c791c352951da35ac1c6aff6e40981d2`. It covered 25 symbols,
+`9,388,681` compatible eligible minutes, and `6,910,293` provenance-blocked minutes. Recovery run
+`5ba02c00-c622-41fb-b6c5-1ef960825f88` produced:
+
+- `8,567,720` admitted rows in `9,750` completed batches;
+- 170 terminal ranges: 13 recovered, 3 partially recovered, and 154 provider absent;
+- zero failed batches and zero supplements for source-conflict symbols;
+- logical supplement hash
+  `cfaba512a869075336f27136a6792cb3d07246c8b4e6656a7c08e52dda59189d`.
+
+The durable database now contains `25,048,401` validated supplements. Immutable source rows remain
+`35,748,117`, so the canonical view contains `60,796,518` rows. Report
+`data/exports/freshness/20260716T112300Z-754d49560efc-d518e9ca850a.report.json`, SHA-256
+`d518e9ca850a2c06338da84f2ef921c8efe2ed3f50c52f5a37375ff54678d210`, conserved coverage:
+`16,298,974` before minus `8,567,720` recovered equals `7,731,254` remaining. Of those,
+`6,910,293` are reviewed source conflicts and `820,961` are explicit compatible-source terminal
+gaps. Health returns exit `2` by design.
+
+The identical 170-gap recovery manifest was replayed after publication. It returned the same run
+ID and logical hash, inserted zero rows, and left validated supplements unchanged at `25,048,401`.
+
+The PostgreSQL freshness planner uses bounded aggregate summaries plus lag-only narrow key scans.
+Transaction-local controls retain index-only merge/anti-join plans after the supplement table grew
+past 25 million rows; the prior sequential/hash/sort spill path is regression-tested on disposable
+PostgreSQL.
+
+The Windows task `Market Structure Lab - Daily Candle Refresh` is registered and ready. It runs at
+07:15 local time, starts after missed triggers, ignores overlapping instances, and invokes
+PowerShell 7 with `scripts/run_daily_candle_refresh.ps1`. The runner requires existing durable
+storage, preserves pending manifests across retryable failures, and never bootstraps, snapshots,
+deletes volumes, or reinitializes PostgreSQL.
 
 Exact operator commands, paths, status meanings, resumption procedure, compatibility hash, and the
 deliberate snapshot policy are documented in
-[`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md). Repository-wide gates remain to be recorded
-by the integrating verification pass; this section does not claim them in advance.
+[`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md).
+
+The Phase 4 software is ready for real outcome-blind market experiments after a deliberate immutable
+snapshot and its Phase 3 feature/event publication are frozen. The committed golden data remain
+software-verification fixtures, not market evidence, a validated signal, or an edge.

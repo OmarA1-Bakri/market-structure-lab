@@ -8,8 +8,9 @@ market-structure behavior from OHLCV data.
 The long-term objective is to build a deterministic understanding of the auction process before
 introducing trading logic. The intended sequence is:
 
-Raw OHLCV data -> Dataset layer -> Auction engine -> Volume profile -> Value area -> HVN/LVN ->
-Auction structure -> Auction state -> Transition analysis -> Feature discovery -> Strategy research.
+Raw OHLCV -> canonical datasets and quality checks -> deterministic auction engine -> versioned
+features and events -> outcome-blind behaviour discovery -> frozen AI interpretation -> untouched
+validation -> edge catalogue -> cost-aware strategies and portfolios.
 
 ## Repository layout
 
@@ -67,14 +68,16 @@ restore procedure when replacing an existing local database.
 
 See [`docs/DATA_VIABILITY.md`](docs/DATA_VIABILITY.md) for the full row-quality and symbol-coverage
 assessment and [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for the exact Phase
-0 through Phase 3 verification evidence.
+0 through Phase 4 verification evidence.
 
 ## Daily candle freshness
 
 `msl-sync-candles` freezes a minute-aligned UTC plan, admits only independently compatible real
-source observations through the append-only supplement ledger, and reports every symbol as current,
-recovered, unresolved, or provenance-blocked. Daily sync updates the dump-preferred PostgreSQL
-canonical view; it does not rewrite the dump or duplicate the full dataset into Parquet every day.
+source observations through the append-only supplement ledger, and reports every symbol with an
+explicit terminal or retryable status. Terminal states include `up_to_date`, `recovered`,
+`partially_recovered`, `provider_absent`, `non_trading`, and `source_conflict`. Daily sync updates
+the dump-preferred PostgreSQL canonical view; it does not rewrite the dump or duplicate the full
+dataset into Parquet every day.
 
 ```bash
 uv run msl-sync-candles bootstrap --help
@@ -87,12 +90,22 @@ uv run msl-sync-candles snapshot --help
 `bootstrap` is an explicit, idempotent first-use step for a deliberately restored crypto-only
 database. Daily jobs begin with `plan`; they never initialize storage implicitly.
 
+The unattended Windows runner preserves a pending frozen cutoff across retryable failures and
+returns exit `2` for trustworthy terminal coverage limits. The registered task runs daily at 07:15
+local time:
+
+```powershell
+pwsh.exe -NoLogo -NoProfile -NonInteractive `
+  -File scripts/run_daily_candle_refresh.ps1 `
+  -ProjectRoot D:\market-structure-lab
+```
+
 Immutable Parquet snapshots are created deliberately for frozen research runs. Snapshot publication
 requires a checksum-verified freshness report by default; the explicit provenance-blocked policy
 records uneven coverage in the snapshot identity. See
 [`docs/DAILY_CANDLE_FRESHNESS.md`](docs/DAILY_CANDLE_FRESHNESS.md) for commands, exit statuses,
-resume handling, pinned inputs, and storage paths. The current nine source conflicts keep full-
-universe daily health red until new compatibility evidence resolves them.
+resume handling, pinned inputs, and storage paths. Nine source conflicts plus compatible-symbol
+provider/partial gaps keep full-universe daily health red until new evidence resolves them.
 
 ## Running scripts
 
@@ -250,3 +263,9 @@ uv run pytest -q tests/test_phase4_golden.py
 
 See [`docs/DISCOVERY_MVP.md`](docs/DISCOVERY_MVP.md) for algorithms, caps, artifact formats,
 Markov-like transition caveats, the frozen AI interpretation handoff, and the Phase 5 boundary.
+
+The discovery software, including PCA/K-means, stability analysis, motifs, and Markov-like
+boundary-aware transitions, is ready for real market experiments. The remaining handoff is
+deliberate: freeze an immutable market snapshot and publish its Phase 3 feature/event dataset.
+Those experiments remain outcome-blind Phase 4 research, not Phase 5 validation or evidence of an
+edge.

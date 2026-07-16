@@ -2,8 +2,8 @@
 
 Daily freshness extends the live canonical PostgreSQL view with real, checksum-pinned one-minute
 candles. It never changes the source dump or an existing Parquet snapshot. The scheduler-facing
-command is `msl-sync-candles`; automation is configured separately only after these commands pass
-against durable storage.
+command is `msl-sync-candles`; the registered Windows task invokes the reviewed runner only after
+the durable command path passed against the live database.
 
 ## Frozen inputs and storage
 
@@ -156,6 +156,36 @@ been reviewed. The task uses the current interactive Windows account so it can r
 Desktop. Scheduler-level retries are intentionally omitted; the runner's pending-manifest state is
 the resumability mechanism.
 
+The task is now registered as `Market Structure Lab - Daily Candle Refresh`. It is ready, runs at
+07:15 local time, starts after a missed trigger, ignores overlapping instances, and next invokes:
+
+```text
+C:\Program Files\PowerShell\7\pwsh.exe -NoLogo -NoProfile -NonInteractive
+  -File D:\market-structure-lab\scripts\run_daily_candle_refresh.ps1
+  -ProjectRoot D:\market-structure-lab
+```
+
+## First durable live refresh evidence
+
+- cutoff: `2026-07-16T11:23:00Z`;
+- plan SHA-256: `754d49560efccbe6ac40d23b5b190fa6c791c352951da35ac1c6aff6e40981d2`;
+- recovery run: `5ba02c00-c622-41fb-b6c5-1ef960825f88`;
+- inserted rows: `8,567,720` in `9,750` completed batches, zero failed batches;
+- terminal resolutions: 13 recovered ranges, 3 partially recovered ranges, and 154
+  provider-absent ranges;
+- logical supplement hash:
+  `cfaba512a869075336f27136a6792cb3d07246c8b4e6656a7c08e52dda59189d`;
+- report SHA-256:
+  `d518e9ca850a2c06338da84f2ef921c8efe2ed3f50c52f5a37375ff54678d210`;
+- report result: coverage conserved, `8,567,720` recovered minutes, `7,731,254` remaining minutes,
+  and health exit `2`;
+- identical recovery replay: zero inserted rows, unchanged `25,048,401` validated supplements,
+  identical run ID and logical hash.
+
+The terminal alert contains nine reviewed `source_conflict` symbols, three compatible partial
+symbols, and nine compatible provider-absent symbols. Plans are immutable, checksum-verified
+evidence. Do not manually edit them, including newline normalization on Windows.
+
 ## Deliberate immutable snapshots
 
 Daily sync updates `market_data.candles_canonical`, the dump-preferred live canonical view. It does
@@ -183,7 +213,7 @@ commit. Publication streams bounded batches from the canonical view under the re
 lock and delegates atomic UTC-date Parquet publication to the existing exporter. Reusing a dataset
 version with different evidence fails closed; existing snapshots are never rewritten.
 
-No production network sync or Windows task registration was executed as part of the unattended
-runner implementation. The verified database integration profile is
-`tests/integration/test_freshness_postgres.py`; it requires an explicit disposable database whose
-name contains `test` via `MSL_TEST_POSTGRES_URL`.
+The durable live sync and Windows task registration above are complete. Disposable integration
+profiles remain available in `tests/integration/test_freshness_postgres.py` and
+`tests/integration/test_freshness_planner_postgres.py`; they require an explicit database whose name
+contains `test` via `MSL_TEST_POSTGRES_URL`.
