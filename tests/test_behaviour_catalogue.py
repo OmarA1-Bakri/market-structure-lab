@@ -144,6 +144,18 @@ def test_cluster_definition_hash_changes_with_consistent_centroid_definition() -
         ({"description": "Institutional whale smart-money support."}, "unsupported"),
         ({"description": "Next-period PnL reveals winning alpha."}, "outcome"),
         ({"description": "Market-maker accumulation and large-player support."}, "unsupported"),
+        (
+            {
+                "description": (
+                    "Subsequent positive returns attributed to informed-trader accumulation."
+                )
+            },
+            "outcome|unsupported",
+        ),
+        (
+            {"description": "Later gains reveal professional-operator support."},
+            "outcome|unsupported",
+        ),
     ],
 )
 def test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes(

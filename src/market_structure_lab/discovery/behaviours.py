@@ -21,12 +21,21 @@ _FORBIDDEN_OUTCOME_TEXT = re.compile(
     r"\b(?:future returns?|forward returns?|MFE|MAE|profit(?:able|ability)?|"
     r"target[- ]hits?|trade outcomes?|future volatility|continuation labels?|"
     r"reversal labels?|next[- ](?:period|bar|candle|session)|p(?:&|n)l|"
-    r"win(?:ning)?(?: rate)?|alpha|expectancy|payoff|validated edge)\b",
+    r"win(?:ning)?(?: rate)?|alpha|expectancy|payoff|validated edge|"
+    r"positive returns?|negative returns?|gains?|losses?)\b",
+    re.IGNORECASE,
+)
+_FORBIDDEN_TEMPORAL_OUTCOME_TEXT = re.compile(
+    r"\b(?:subsequent|later|eventual|ensuing|following|afterwards?|thereafter|"
+    r"downstream)\b.{0,64}\b(?:returns?|gains?|losses?|profit(?:s|able|ability)?|"
+    r"p(?:&|n)l|alpha|expectancy|payoff)\b",
     re.IGNORECASE,
 )
 _FORBIDDEN_NARRATIVE_TEXT = re.compile(
     r"\b(?:institutional|whales?|smart[- ]money|market[- ]makers?|"
-    r"(?:large|big)[- ]players?|liquidity providers?)\b",
+    r"(?:large|big|dominant)[- ]players?|liquidity providers?|insiders?|"
+    r"(?:informed|professional|sophisticated)[- ](?:traders?|participants?|"
+    r"operators?|flow|money))\b",
     re.IGNORECASE,
 )
 
@@ -376,7 +385,7 @@ def _squared_distance(left: tuple[float, ...], right: tuple[float, ...]) -> floa
 
 def _validate_description(value: str) -> None:
     _require_text(value, "description")
-    if _FORBIDDEN_OUTCOME_TEXT.search(value):
+    if _FORBIDDEN_OUTCOME_TEXT.search(value) or _FORBIDDEN_TEMPORAL_OUTCOME_TEXT.search(value):
         raise ValueError("description must not contain outcome or profitability fields")
     if _FORBIDDEN_NARRATIVE_TEXT.search(value):
         raise ValueError("description must not contain unsupported participant narratives")
