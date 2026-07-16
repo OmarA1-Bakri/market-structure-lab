@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Iterable, Literal, Mapping, Sequence
@@ -15,6 +15,7 @@ from market_structure_lab.features.registry import FeatureRegistry
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$")
 _ROW_SOURCE_IDENTITY_FIELDS = ("config_version", "profile_version", "window_policy_id")
+_DISCOVERY_INPUT_FACTORY = object()
 
 
 class PartitionRole(StrEnum):
@@ -82,6 +83,11 @@ class DiscoveryInput:
     dataset_version: str
     feature_set_id: str
     registry_id: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _DISCOVERY_INPUT_FACTORY:
+            raise TypeError("DiscoveryInput must be created by make_discovery_input")
 
 
 def freeze_split(
@@ -185,8 +191,13 @@ def make_discovery_input(
             )
             raise ValueError(f"feature row {changed} changed within discovery input")
         key = (row.symbol, row.timeframe, row.timestamp)
-        if previous_key is not None and key < previous_key:
-            raise ValueError("feature rows must be ordered by symbol, timeframe, and UTC timestamp")
+        if previous_key is not None:
+            if key == previous_key:
+                raise ValueError("duplicate feature row identity in discovery input")
+            if key < previous_key:
+                raise ValueError(
+                    "feature rows must be ordered by symbol, timeframe, and UTC timestamp"
+                )
         previous_key = key
         accepted.append(row)
 
@@ -198,6 +209,7 @@ def make_discovery_input(
         dataset_version=dataset_version,
         feature_set_id=registry.feature_set_id,
         registry_id=registry.registry_id,
+        _factory_token=_DISCOVERY_INPUT_FACTORY,
     )
 
 
@@ -210,11 +222,8 @@ def _guard_partition_role(
         raise ValueError("purpose must be 'fit' or 'stability'")
     if purpose == "fit" and partition.role is not PartitionRole.DISCOVERY:
         raise ValueError("fit purpose requires the discovery partition")
-    if purpose == "stability" and partition.role not in (
-        PartitionRole.DISCOVERY,
-        PartitionRole.DEVELOPMENT,
-    ):
-        raise ValueError("stability purpose requires a discovery or development partition")
+    if purpose == "stability" and partition.role is not PartitionRole.DEVELOPMENT:
+        raise ValueError("stability purpose requires the development partition")
 
 
 def _canonical_names(

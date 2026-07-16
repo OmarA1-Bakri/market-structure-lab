@@ -258,10 +258,8 @@ def test_fit_accepts_only_discovery_and_rejects_development_before_iteration() -
         )
 
 
-@pytest.mark.parametrize("role", [PartitionRole.DISCOVERY, PartitionRole.DEVELOPMENT])
-def test_stability_accepts_discovery_and_development(role: PartitionRole) -> None:
-    discovery, development, _ = _partitions()
-    partition = discovery if role is PartitionRole.DISCOVERY else development
+def test_stability_accepts_development() -> None:
+    _, partition, _ = _partitions()
     registry = _registry()
     timestamp = partition.start
     candidate = _row(registry, timestamp=timestamp)
@@ -280,6 +278,49 @@ def test_stability_accepts_discovery_and_development(role: PartitionRole) -> Non
     assert result.dataset_version == "DS-000401"
     assert result.feature_set_id == registry.feature_set_id
     assert result.registry_id == registry.registry_id
+
+
+def test_stability_rejects_discovery_before_iteration() -> None:
+    discovery, _, _ = _partitions()
+
+    with pytest.raises(ValueError, match="stability.*development"):
+        make_discovery_input(
+            partition=discovery,
+            rows=_ExplodingRows(),
+            registry=_registry(),
+            purpose="stability",
+            max_rows=1,
+        )
+
+
+def test_direct_discovery_input_construction_is_rejected() -> None:
+    discovery, _, _ = _partitions()
+    registry = _registry()
+    candidate = _row(registry, timestamp=discovery.start)
+
+    with pytest.raises(TypeError, match="make_discovery_input"):
+        DiscoveryInput(
+            partition=discovery,
+            rows=(candidate,),
+            dataset_version=candidate.dataset_version,
+            feature_set_id=registry.feature_set_id,
+            registry_id=registry.registry_id,
+        )
+
+
+def test_direct_discovery_input_cannot_bypass_holdout_guard() -> None:
+    _, _, holdout = _partitions()
+    registry = _registry()
+    candidate = _row(registry, timestamp=holdout.start)
+
+    with pytest.raises(TypeError, match="make_discovery_input"):
+        DiscoveryInput(
+            partition=holdout,
+            rows=(candidate,),
+            dataset_version=candidate.dataset_version,
+            feature_set_id=registry.feature_set_id,
+            registry_id=registry.registry_id,
+        )
 
 
 def test_make_discovery_input_preserves_valid_order_and_exact_row_identities() -> None:
@@ -332,6 +373,21 @@ def test_make_discovery_input_rejects_identity_drift_and_unsorted_rows() -> None
         make_discovery_input(
             partition=discovery,
             rows=(second, first),
+            registry=registry,
+            purpose="fit",
+            max_rows=2,
+        )
+
+
+def test_make_discovery_input_rejects_duplicate_feature_identity() -> None:
+    discovery, _, _ = _partitions()
+    registry = _registry()
+    candidate = _row(registry, timestamp=discovery.start)
+
+    with pytest.raises(ValueError, match="duplicate"):
+        make_discovery_input(
+            partition=discovery,
+            rows=(candidate, candidate),
             registry=registry,
             purpose="fit",
             max_rows=2,
