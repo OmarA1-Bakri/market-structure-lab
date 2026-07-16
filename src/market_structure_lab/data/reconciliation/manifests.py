@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
+from pathlib import Path
 
 from market_structure_lab.data.reconciliation.models import ReconciliationWorkUnit
 
@@ -309,6 +311,53 @@ def work_unit_manifest_from_dict(raw: Mapping[str, object]) -> WorkUnitManifest:
     )
 
 
+def read_reconciliation_run(path: Path) -> ReconciliationRunManifest:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("reconciliation run manifest is not valid JSON") from error
+    if not isinstance(raw, Mapping):
+        raise ValueError("reconciliation run manifest must be a JSON object")
+    supplied = raw.get("manifest_sha256")
+    logical = {key: value for key, value in raw.items() if key != "manifest_sha256"}
+    actual = hashlib.sha256(_canonical_json(logical)).hexdigest()
+    if supplied != actual:
+        raise ValueError("reconciliation run manifest checksum does not match its content")
+    return ReconciliationRunManifest(
+        run_id=str(raw["run_id"]),
+        cutoff=str(raw["cutoff"]),
+        dump_sha256=str(raw["dump_sha256"]),
+        source_row_count=int(str(raw["source_row_count"])),
+        mapping_version=str(raw["mapping_version"]),
+        candidate_venue=str(raw["candidate_venue"]),
+        market_type=str(raw["market_type"]),
+        source_revision=str(raw["source_revision"]),
+        algorithm_version=str(raw["algorithm_version"]),
+        code_commit=str(raw["code_commit"]),
+        uv_lock_sha256=str(raw["uv_lock_sha256"]),
+        envelopes=tuple(
+            TradingEnvelope(**dict(item))  # type: ignore[arg-type]
+            for item in _sequence(raw["envelopes"])
+        ),
+        work_units=tuple(
+            ReconciliationWorkUnit(**dict(item))  # type: ignore[arg-type]
+            for item in _sequence(raw["work_units"])
+        ),
+        manifest_sha256=str(supplied),
+    )
+
+
+def write_reconciliation_run(run: ReconciliationRunManifest, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if read_reconciliation_run(path) != run:
+            raise ValueError("immutable reconciliation run path contains different content")
+        return
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(run.to_json(), encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def _mapping_counts(value: object) -> tuple[tuple[str, int], ...]:
     if not isinstance(value, Mapping):
         raise ValueError("manifest counts must be a JSON object")
@@ -363,5 +412,7 @@ __all__ = [
     "TradingEnvelope",
     "WorkUnitManifest",
     "freeze_reconciliation_run",
+    "read_reconciliation_run",
+    "write_reconciliation_run",
     "work_unit_manifest_from_dict",
 ]
