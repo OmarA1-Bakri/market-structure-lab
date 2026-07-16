@@ -175,9 +175,10 @@ pair, affected-event, concurrency, and kind-pair evidence.
 ## Derived dataset publication
 
 `market_structure_lab.data.derived` publishes features and events in bounded deterministic Parquet
-parts partitioned by symbol, timeframe, and UTC calendar. A manifest pins dataset, configuration,
-profile, window, feature-set, registry, event/normalizer, code, lockfile, schema, missing/leakage,
-overlap, row-count, time-bound, and part-checksum evidence.
+parts partitioned by symbol, UTC year, and UTC month. Timeframe remains an ordered, validated schema
+field. A manifest pins dataset, configuration, profile, window, feature-set, registry,
+event/normalizer, code, lockfile, schema, missing/leakage, overlap, row-count, time-bound, and
+part-checksum evidence.
 
 Publication stages atomically and writes `_SUCCESS` only after full verification. Identical repeats
 return the verified result; identity/content disagreements, tampering, stale stages, extra parts,

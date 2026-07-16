@@ -212,8 +212,7 @@ Training normalisation uses only a caller-frozen training partition and exact bo
 runs. Feature/event Parquet outputs are derived artifacts stored separately from immutable source
 and supplemental candles. Their manifests pin upstream identities, registered schemas, code and
 lockfile hashes, partition checksums, missing-value counts, and overlap evidence; repeating an
-identical publication is content-idempotent, while disagreement or tampering is quarantined by a
-fail-closed error.
+identical publication is content-idempotent, while disagreement or tampering fails closed.
 
 Read-only verification after Phase 3 reconfirmed the source dump SHA-256 above, `35,748,117`
 immutable source rows, `16,480,681` validated supplements, all `19,192` original gaps terminally

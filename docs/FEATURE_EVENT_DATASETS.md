@@ -84,10 +84,12 @@ selects registered numeric features only and calculates deterministic median and
 range parameters from rows wholly inside that training partition. Validation and holdout roles are
 rejected for fitting.
 
-Fitting is exact and bounded-memory. Values are sorted into deterministic binary runs capped by
-`max_rows_per_run`, written below the caller-selected temporary directory, and merged in bounded
-passes capped by `max_buffered_rows`. The artifact records both limits. Temporary runs are removed
-after success or failure; no quantile approximation or full-column materialisation is used.
+Fitting is exact and bounded-memory. Values are sorted into deterministic binary runs whose initial
+row buffer is capped by `max_rows_per_run` and written below a system temporary directory. Merge
+passes use a fixed fan-in of 64 runs and I/O buffers of 8,192 floats. The artifact records the
+configured run limit and greatest observed initial row buffer as `max_buffered_rows`. Temporary runs
+are removed after success or failure; no quantile approximation or full-column materialisation is
+used.
 
 Transform is immutable and never refits. Nulls remain null. A zero-IQR feature uses a documented
 scale of `1.0`, so it remains centered without division by zero. The serialized artifact pins the
@@ -139,3 +141,12 @@ manifest and never fabricates a row.
 Import publication APIs from `market_structure_lab.data.derived`. They are deliberately not
 re-exported by `market_structure_lab.data`, which keeps canonical data models independent from the
 feature layer and prevents import-order-dependent package cycles in fresh installations.
+
+## Research limits
+
+These features inherit the Phase 2 OHLCV-derived volume-profile approximation. They do not reveal
+order-book depth, aggressor direction, queue position, participant identity, or institutional
+causality. UTC sessions are explicit calendar conventions rather than exchange-closure claims.
+Robust scaling and exact overlap reporting do not make serially dependent or overlapping samples
+independent. Phase 3 produces frozen representation evidence only; it neither attaches outcomes nor
+discovers a behaviour, validates an edge, or constructs a strategy.

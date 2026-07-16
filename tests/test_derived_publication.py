@@ -376,3 +376,44 @@ def test_event_publication_uses_fixed_schema_and_records_overlap(tmp_path: Path)
         )
         == manifest
     )
+
+
+def test_duplicate_and_out_of_order_event_rows_fail_closed(tmp_path: Path) -> None:
+    active = registry()
+    frozen = identity(active)
+    row_one = feature_row(1, active_registry=active)
+    row_two = feature_row(2, active_registry=active)
+    event_one = make_event(
+        EventKind.FIXED_WINDOW,
+        row_one.timestamp - timedelta(minutes=1),
+        row_one.information_cutoff,
+        row_one,
+        "fixed-v1",
+        registry=active,
+    )
+    event_two = make_event(
+        EventKind.FIXED_WINDOW,
+        row_two.timestamp - timedelta(minutes=1),
+        row_two.information_cutoff,
+        row_two,
+        "fixed-v1",
+        registry=active,
+    )
+
+    with pytest.raises(ValueError, match="duplicate events row"):
+        publish_market_events(
+            [event_one, event_one],
+            output_root=tmp_path / "duplicate",
+            identity=frozen,
+            registry=active,
+        )
+    with pytest.raises(
+        ValueError,
+        match="events must be ordered by symbol, timeframe, segment, and start",
+    ):
+        publish_market_events(
+            [event_two, event_one],
+            output_root=tmp_path / "ordering",
+            identity=frozen,
+            registry=active,
+        )
