@@ -140,7 +140,7 @@ def _plan(args: argparse.Namespace) -> int:
         candidate_venue=compatibility.candidate_venue,
         market_type=compatibility.market_type,
         source_revision="binance-public-data-v1",
-        algorithm_version="row-reconciliation-v1",
+        algorithm_version="row-reconciliation-v2",
         code_commit=args.code_commit,
         uv_lock_sha256=args.uv_lock_sha256,
         envelopes=envelopes,

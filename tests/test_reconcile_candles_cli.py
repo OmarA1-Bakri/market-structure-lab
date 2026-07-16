@@ -95,6 +95,7 @@ def test_plan_freezes_selected_symbols_and_month_work_units(
     assert payload["work_units"] == 4
     assert {item.symbol for item in run.envelopes} == {"BTCUSDT", "ETHUSDT"}
     assert run.dump_sha256 == _sha("a")
+    assert run.algorithm_version == "row-reconciliation-v2"
 
 
 def test_plan_rejects_unknown_symbols_and_changed_compatibility_hash(
