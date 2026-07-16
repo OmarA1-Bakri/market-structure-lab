@@ -21,6 +21,7 @@ from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
     FeatureRegistry,
     FeatureValueKind,
+    validate_discovery_field_name,
 )
 
 MANIFEST_NAME = "manifest.json"
@@ -31,26 +32,6 @@ _DATASET_ID = re.compile(r"^DS-[0-9]{6}$")
 _FEATURE_SET_ID = re.compile(r"^FS-[0-9]{6}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
-_PROHIBITED_TOKENS = frozenset(
-    {
-        "continuation",
-        "forward",
-        "future",
-        "hit",
-        "label",
-        "mae",
-        "mfe",
-        "outcome",
-        "pnl",
-        "profit",
-        "profitability",
-        "returns",
-        "reversal",
-        "target",
-        "trade",
-    }
-)
-
 PublicationKind = Literal["features", "events"]
 
 
@@ -873,9 +854,7 @@ def _publication_paths(
 
 def _audit_names(values: Mapping[str, object]) -> None:
     for name, value in values.items():
-        tokens = set(re.split(r"[^A-Za-z0-9]+", name.lower()))
-        if tokens & _PROHIBITED_TOKENS:
-            raise ValueError(f"prohibited outcome or future field: {name}")
+        validate_discovery_field_name(name, field="publication field")
         if isinstance(value, float) and not math.isfinite(value):
             raise ValueError(f"non-finite value in field: {name}")
 

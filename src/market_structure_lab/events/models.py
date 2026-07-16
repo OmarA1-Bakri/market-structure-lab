@@ -13,29 +13,15 @@ from types import MappingProxyType
 from typing import Mapping, TypeAlias
 
 from market_structure_lab.features.models import FeatureRow, FeatureValue
-from market_structure_lab.features.registry import FeatureRegistry
+from market_structure_lab.features.registry import (
+    FeatureRegistry,
+    validate_discovery_field_name,
+)
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 
 _EVENT_ID = re.compile(r"^EV-[A-F0-9]{64}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
-_PROHIBITED_METADATA_TOKENS = frozenset(
-    {
-        "forward",
-        "future",
-        "label",
-        "mae",
-        "mfe",
-        "outcome",
-        "pnl",
-        "profit",
-        "profitability",
-        "target",
-        "trade",
-    }
-)
-
-
 class EventKind(StrEnum):
     """Outcome-blind segment and structural-event categories."""
 
@@ -72,9 +58,7 @@ def _copy_feature_values(values: Mapping[str, FeatureValue]) -> Mapping[str, Fea
         raise TypeError("feature_values must be a mapping")
     copied: dict[str, FeatureValue] = {}
     for name, value in sorted(values.items()):
-        _require_text(name, "feature value name")
-        if frozenset(name.lower().split("_")) & _PROHIBITED_METADATA_TOKENS:
-            raise ValueError(f"prohibited outcome or future feature name: {name}")
+        validate_discovery_field_name(name, field="feature value name")
         if value is not None and not isinstance(value, (float, int, str)):
             raise TypeError(f"feature {name!r} has an unsupported value type")
         if isinstance(value, float) and not math.isfinite(value):
@@ -88,9 +72,7 @@ def _copy_metadata(values: Mapping[str, JsonScalar]) -> Mapping[str, JsonScalar]
         raise TypeError("metadata must be a mapping")
     copied: dict[str, JsonScalar] = {}
     for name, value in sorted(values.items()):
-        _require_text(name, "metadata name")
-        if frozenset(name.lower().split("_")) & _PROHIBITED_METADATA_TOKENS:
-            raise ValueError(f"prohibited outcome or future metadata name: {name}")
+        validate_discovery_field_name(name, field="metadata name")
         if value is not None and not isinstance(value, (str, int, float, bool)):
             raise TypeError(f"metadata {name!r} must be a JSON scalar")
         if isinstance(value, float) and not math.isfinite(value):

@@ -39,6 +39,15 @@ _PROHIBITED_DISCOVERY_TOKENS = frozenset(
 )
 
 
+def validate_discovery_field_name(name: str, *, field: str) -> None:
+    """Require a lower-snake-case name with no future or outcome token."""
+
+    if not isinstance(name, str) or _FEATURE_NAME.fullmatch(name) is None:
+        raise ValueError(f"{field} must be safe lower_snake_case")
+    if frozenset(name.split("_")) & _PROHIBITED_DISCOVERY_TOKENS:
+        raise ValueError(f"prohibited outcome or future {field}: {name}")
+
+
 class FeatureFamily(str, Enum):
     AUCTION = "auction"
     SEQUENCE = "sequence"
@@ -184,9 +193,7 @@ class FeatureRegistry:
 
     def audit_discovery(self) -> None:
         for item in self.definitions:
-            tokens = frozenset(item.name.split("_"))
-            if tokens & _PROHIBITED_DISCOVERY_TOKENS:
-                raise ValueError(f"prohibited discovery feature name: {item.name}")
+            validate_discovery_field_name(item.name, field="discovery feature name")
             if item.leakage_class is LeakageClass.OUTCOME_OR_FUTURE:
                 raise ValueError(
                     f"discovery feature {item.name!r} uses OUTCOME_OR_FUTURE leakage class"

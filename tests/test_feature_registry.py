@@ -185,7 +185,7 @@ def test_registry_rejects_duplicate_names_and_empty_definitions() -> None:
     ],
 )
 def test_discovery_registry_rejects_prohibited_future_or_outcome_names(name: str) -> None:
-    with pytest.raises(ValueError, match="prohibited discovery feature name"):
+    with pytest.raises(ValueError, match="prohibited outcome or future discovery feature name"):
         registry(definition(name))
 
 

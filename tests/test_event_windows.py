@@ -217,16 +217,21 @@ def test_make_event_rejects_nonmatching_cutoff_and_outcome_metadata() -> None:
             "expansion-v1",
             registry=REGISTRY,
         )
-    with pytest.raises(ValueError, match="prohibited"):
-        make_event(
-            EventKind.EXPANSION,
-            current.timestamp,
-            current.information_cutoff,
-            current,
-            "expansion-v1",
-            registry=REGISTRY,
-            metadata={"future_label": "up"},
-        )
+    for metadata, message in (
+        ({"future_label": "up"}, "prohibited"),
+        ({"future-return": 1.0}, "safe lower_snake_case"),
+        ({"futureReturn": 1.0}, "safe lower_snake_case"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            make_event(
+                EventKind.EXPANSION,
+                current.timestamp,
+                current.information_cutoff,
+                current,
+                "expansion-v1",
+                registry=REGISTRY,
+                metadata=metadata,
+            )
 
 
 def test_fixed_windows_are_full_non_overlapping_and_use_last_row_vector() -> None:
