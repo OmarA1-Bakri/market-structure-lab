@@ -156,6 +156,30 @@ def test_cluster_definition_hash_changes_with_consistent_centroid_definition() -
             {"description": "Later gains reveal professional-operator support."},
             "outcome|unsupported",
         ),
+        (
+            {"description": "Future outperformance is attributed to informed desks."},
+            "outcome|unsupported|neutral evidence",
+        ),
+        (
+            {"description": ("The state forecasts price appreciation from dealer accumulation.")},
+            "outcome|unsupported|neutral evidence",
+        ),
+        (
+            {"description": ("Expected drawdown improves after specialist participation.")},
+            "outcome|unsupported|neutral evidence",
+        ),
+        (
+            {"description": "Compression around value precedes a directional move."},
+            "neutral evidence",
+        ),
+        (
+            {
+                "description": (
+                    "Neutral observable auction evidence forecasts profitable future returns."
+                )
+            },
+            "outcome",
+        ),
     ],
 )
 def test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes(

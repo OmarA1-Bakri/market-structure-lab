@@ -22,7 +22,8 @@ _FORBIDDEN_OUTCOME_TEXT = re.compile(
     r"target[- ]hits?|trade outcomes?|future volatility|continuation labels?|"
     r"reversal labels?|next[- ](?:period|bar|candle|session)|p(?:&|n)l|"
     r"win(?:ning)?(?: rate)?|alpha|expectancy|payoff|validated edge|"
-    r"positive returns?|negative returns?|gains?|losses?)\b",
+    r"positive returns?|negative returns?|gains?|losses?|outperformance|"
+    r"forecasts?|predict(?:s|ed|ing|ion)?|price appreciation|drawdowns?)\b",
     re.IGNORECASE,
 )
 _FORBIDDEN_TEMPORAL_OUTCOME_TEXT = re.compile(
@@ -35,7 +36,11 @@ _FORBIDDEN_NARRATIVE_TEXT = re.compile(
     r"\b(?:institutional|whales?|smart[- ]money|market[- ]makers?|"
     r"(?:large|big|dominant)[- ]players?|liquidity providers?|insiders?|"
     r"(?:informed|professional|sophisticated)[- ](?:traders?|participants?|"
-    r"operators?|flow|money))\b",
+    r"operators?|desks?|flow|money)|dealers?|specialists?)\b",
+    re.IGNORECASE,
+)
+_APPROVED_NEUTRAL_EVIDENCE_TEXT = re.compile(
+    r"\b(?:neutral|observable|outcome[- ]blind|auction|frozen[- ]features?)\b",
     re.IGNORECASE,
 )
 
@@ -389,6 +394,8 @@ def _validate_description(value: str) -> None:
         raise ValueError("description must not contain outcome or profitability fields")
     if _FORBIDDEN_NARRATIVE_TEXT.search(value):
         raise ValueError("description must not contain unsupported participant narratives")
+    if _APPROVED_NEUTRAL_EVIDENCE_TEXT.search(value) is None:
+        raise ValueError("description must contain an approved neutral evidence marker")
 
 
 def _require_unique_names(
