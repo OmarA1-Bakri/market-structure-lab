@@ -18,6 +18,16 @@ from market_structure_lab.data.inspection import (
     write_json_report,
 )
 from market_structure_lab.data.recovery import RecoveryCandle
+from market_structure_lab.data.derived import (
+    DerivedEvidence,
+    DerivedPartitionRecord,
+    DerivedPublicationIdentity,
+    DerivedPublicationManifest,
+    publish_feature_rows,
+    publish_market_events,
+    read_derived_manifest,
+    verify_derived_publication,
+)
 from market_structure_lab.data.export import (
     SnapshotIdentity,
     SnapshotManifest,
@@ -36,6 +46,10 @@ __all__ = [
     "CandleQuality",
     "ColumnInspection",
     "DatabaseInspectionError",
+    "DerivedEvidence",
+    "DerivedPartitionRecord",
+    "DerivedPublicationIdentity",
+    "DerivedPublicationManifest",
     "GapRange",
     "InspectionMode",
     "InspectionReport",
@@ -52,10 +66,14 @@ __all__ = [
     "iter_candle_batches",
     "load_candles",
     "load_canonical_gap_boundaries",
+    "publish_feature_rows",
+    "publish_market_events",
     "render_human",
     "render_json",
     "report_to_dict",
+    "read_derived_manifest",
     "write_json_report",
     "assign_segment_ids",
     "verify_snapshot",
+    "verify_derived_publication",
 ]
