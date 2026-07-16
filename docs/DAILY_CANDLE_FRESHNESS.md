@@ -97,6 +97,62 @@ independently reviewed compatibility artifact resolves their provenance.
 - Never delete `data/postgres`, use `docker compose down -v`, alter supplements, or reinitialize the
   database as recovery handling.
 
+## Unattended Windows runner
+
+`scripts/run_daily_candle_refresh.ps1` executes the scheduler contract without installing packages,
+bootstrapping storage, or publishing Parquet:
+
+```powershell
+pwsh.exe -NoLogo -NoProfile -NonInteractive `
+  -File scripts/run_daily_candle_refresh.ps1 `
+  -ProjectRoot D:\market-structure-lab
+```
+
+The runner requires the installed `.venv\Scripts\msl-sync-candles.exe`, the checksum-pinned
+compatibility artifact, and an existing `data/postgres/PG_VERSION`. It starts the existing Compose
+PostgreSQL service only when needed:
+
+- an existing stopped container uses `docker compose start postgres`;
+- a missing container may use `docker compose up -d --no-deps postgres` only when the durable
+  PostgreSQL version marker already exists;
+- an empty or uninitialised `data/postgres` fails closed.
+
+It never invokes `bootstrap`, `snapshot`, `docker compose down`, volume deletion, or database
+reinitialisation. Docker Desktop itself must already be running.
+
+The runner holds a host file lock for the complete workflow; the recovery engine additionally holds
+its PostgreSQL advisory lock while apply publishes supplements. After planning, the runner writes
+`data/exports/freshness/automation/pending.json` atomically, then uses that exact manifest for dry-run
+and apply. An operational failure preserves the pending file so the next invocation resumes the
+older cutoff instead of hiding it behind a newer plan. A terminal report removes the pending file
+and atomically writes `automation/latest.json`.
+
+Runner exits are narrower than the underlying health command:
+
+- exit `0`: all reviewed symbols are current;
+- exit `2`: the only non-healthy statuses are exactly the `source_conflict` symbols derived from the
+  pinned compatibility artifact, those symbols inserted no rows, and every compatible symbol is
+  current;
+- exit `1`: Docker, database, lock, checksum, network, coverage, report-identity, or unexpected
+  symbol-status failure.
+
+Thus the current nine reviewed conflicts remain an alert, while `fetch_failed`, `provider_absent`,
+`partially_recovered`, `unresolved`, a missing expected conflict, or any stale compatible symbol is
+an operational failure. The runner records no credentials or connection URLs.
+
+`scripts/register_daily_candle_refresh.ps1` defines the Windows Task Scheduler handoff. The reviewed
+default is daily at 07:15 local time, running PowerShell 7 with `-NoProfile -NonInteractive`, starting
+after a missed trigger, and refusing overlapping task instances:
+
+```powershell
+pwsh.exe -NoLogo -NoProfile -File scripts/register_daily_candle_refresh.ps1 -WhatIf
+```
+
+Remove `-WhatIf` only after one durable live refresh has completed and its terminal evidence has
+been reviewed. The task uses the current interactive Windows account so it can reach Docker
+Desktop. Scheduler-level retries are intentionally omitted; the runner's pending-manifest state is
+the resumability mechanism.
+
 ## Deliberate immutable snapshots
 
 Daily sync updates `market_data.candles_canonical`, the dump-preferred live canonical view. It does
@@ -124,6 +180,7 @@ commit. Publication streams bounded batches from the canonical view under the re
 lock and delegates atomic UTC-date Parquet publication to the existing exporter. Reusing a dataset
 version with different evidence fails closed; existing snapshots are never rewritten.
 
-No production network sync or daily automation was executed as part of this implementation. The
-verified integration profile is `tests/integration/test_freshness_postgres.py`; it requires an
-explicit disposable database whose name contains `test` via `MSL_TEST_POSTGRES_URL`.
+No production network sync or Windows task registration was executed as part of the unattended
+runner implementation. The verified database integration profile is
+`tests/integration/test_freshness_postgres.py`; it requires an explicit disposable database whose
+name contains `test` via `MSL_TEST_POSTGRES_URL`.
