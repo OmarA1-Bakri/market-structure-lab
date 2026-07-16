@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -25,6 +27,25 @@ from market_structure_lab.features.registry import (
     LeakageClass,
     MissingPolicy,
 )
+
+
+def test_feature_and_derived_modules_import_in_a_fresh_interpreter() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from market_structure_lab.features import builtin_feature_registry; "
+                "from market_structure_lab.data.derived import DerivedPublicationIdentity; "
+                "assert len(builtin_feature_registry().definitions) == 26; "
+                "assert DerivedPublicationIdentity.__name__ == 'DerivedPublicationIdentity'"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def registry() -> FeatureRegistry:
