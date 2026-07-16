@@ -1,0 +1,22 @@
+; Market Structure Lab crypto-only restore manifest.
+; Source archive is immutable; review and regenerate this list for any new dump.
+; dump_sha256=1b6bcb39af41048b53729e9b094f0229163eb6ff6af9563adb666c96f5fd4da4
+; dump_size_bytes=889379858
+; allowed_relations=market_data.candles,market_data.ticks
+233; 1259 16471 TABLE public candles postgres
+237; 1259 16499 SEQUENCE public candles_id_seq postgres
+4328; 0 0 SEQUENCE OWNED BY public candles_id_seq postgres
+275; 1259 16710 TABLE public ticks postgres
+276; 1259 16715 SEQUENCE public ticks_id_seq postgres
+4394; 0 0 SEQUENCE OWNED BY public ticks_id_seq postgres
+3534; 2604 16762 DEFAULT public candles id postgres
+3637; 2604 16781 DEFAULT public ticks id postgres
+4200; 0 16471 TABLE DATA public candles postgres
+4242; 0 16710 TABLE DATA public ticks postgres
+4424; 0 0 SEQUENCE SET public candles_id_seq postgres
+4443; 0 0 SEQUENCE SET public ticks_id_seq postgres
+3798; 2606 26326 CONSTRAINT public candles candles_pkey postgres
+3800; 2606 26328 CONSTRAINT public candles candles_symbol_interval_open_time_key postgres
+3890; 2606 26407 CONSTRAINT public ticks ticks_pkey postgres
+3803; 1259 26443 INDEX public idx_candles_symbol_open_time postgres
+3888; 1259 26466 INDEX public idx_ticks_lookup postgres

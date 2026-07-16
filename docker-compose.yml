@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:17
@@ -12,10 +10,11 @@ services:
       - "5432:5432"
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
-      - ./data/dumps:/docker-entrypoint-initdb.d/dumps:ro
-      - ./docker/postgres/init:/docker-entrypoint-initdb.d/init:ro
+      - ./data/dumps/callscore.dump:/docker-entrypoint-initdb.d/callscore.dump:ro
+      - ./docker/postgres/init/restore_dump.sh:/docker-entrypoint-initdb.d/10_restore_dump.sh:ro
+      - ./docker/postgres/init/crypto_only_restore.list:/usr/local/share/market-structure-lab/crypto_only_restore.list:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d research"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5

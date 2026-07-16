@@ -7,7 +7,6 @@ __pycache__/
 .venv*
 .env
 .pytest_cache/
-.pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/
@@ -17,3 +16,11 @@ __pycache__/
 /data/postgres/
 /data/dumps/*.dump
 /data/exports/
+/data/cache/
+
+# Runtime artifacts
+*.omx
+.omx/
+
+# Ignore VS Code AI rules
+.github/instructions/codacy.instructions.md
