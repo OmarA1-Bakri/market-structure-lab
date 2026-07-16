@@ -26,6 +26,19 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
+@dataclass(frozen=True, slots=True)
+class _ObservedCanonicalSeries:
+    symbol: str
+    timeframe: str
+    first_open_time_ms: int | None
+    last_open_time_ms: int | None
+    row_count: int
+    distinct_timestamp_count: int
+    null_timestamp_count: int
+    misaligned_timestamp_count: int
+    internal_gaps: tuple[GapRange, ...]
+
+
 class FreshnessPlanningStatus(StrEnum):
     """Terminal result of planning one canonical symbol."""
 
@@ -237,100 +250,56 @@ def build_freshness_manifest(
     )
     cutoff = _validate_cutoff(as_of)
     cutoff_ms = _datetime_to_milliseconds(cutoff)
-    relation = _qualified_relation(schema, table)
-    symbol = _quote_identifier(symbol_column)
-    interval = _quote_identifier(timeframe_column)
-    open_time = _quote_identifier(timestamp_column)
-    series_rows = tuple(
-        connection.execute(
-            text(
-                f"""
-SELECT
-    {symbol} AS symbol,
-    {interval} AS timeframe,
-    min({open_time}) AS first_open_time_ms,
-    max({open_time}) AS last_open_time_ms,
-    count(*) AS row_count,
-    count(DISTINCT {open_time}) AS distinct_timestamp_count,
-    count(*) - count({open_time}) AS null_timestamp_count,
-    sum(CASE WHEN {open_time} % {MINUTE_MS} = 0 THEN 0 ELSE 1 END)
-        AS misaligned_timestamp_count
-FROM {relation}
-WHERE {interval} = :timeframe
-GROUP BY {symbol}, {interval}
-ORDER BY {symbol}, {interval}
-"""
-            ),
-            {"timeframe": timeframe},
-        ).mappings()
-    )
-    if not series_rows:
-        raise ValueError("no canonical 1m candle series were found")
-    canonical_symbols = {str(row["symbol"]) for row in series_rows}
     compatibility_symbols = {envelope.symbol for envelope in compatibility_manifest.envelopes}
+    if _uses_default_postgres_canonical_key_stream(
+        connection,
+        schema=schema,
+        table=table,
+        symbol_column=symbol_column,
+        timeframe_column=timeframe_column,
+        timestamp_column=timestamp_column,
+    ):
+        observed_series, canonical_symbols = _inspect_default_postgres_canonical(
+            connection,
+            timeframe=timeframe,
+            reviewed_symbols=compatibility_symbols,
+        )
+    else:
+        observed_series, canonical_symbols = _inspect_generic_canonical(
+            connection,
+            schema=schema,
+            table=table,
+            symbol_column=symbol_column,
+            timeframe_column=timeframe_column,
+            timestamp_column=timestamp_column,
+            timeframe=timeframe,
+        )
+    if not canonical_symbols:
+        raise ValueError("no canonical 1m candle series were found")
     if compatibility_symbols != canonical_symbols:
         raise ValueError("compatibility evidence must cover canonical symbols exactly")
 
-    internal_gaps_by_symbol: dict[str, list[GapRange]] = {name: [] for name in canonical_symbols}
-    gap_rows = connection.execute(
-        text(
-            f"""
-WITH ordered AS (
-    SELECT
-        {symbol} AS symbol,
-        {interval} AS timeframe,
-        {open_time} AS open_time,
-        lead({open_time}) OVER (
-            PARTITION BY {symbol}, {interval}
-            ORDER BY {open_time}
-        ) AS next_open_time
-    FROM {relation}
-    WHERE {interval} = :timeframe
-)
-SELECT
-    symbol,
-    timeframe,
-    open_time + {MINUTE_MS} AS start_ms,
-    next_open_time AS end_ms,
-    ((next_open_time - open_time) / {MINUTE_MS}) - 1 AS expected_minutes
-FROM ordered
-WHERE next_open_time > open_time + {MINUTE_MS}
-ORDER BY symbol, timeframe, start_ms
-"""
-        ),
-        {"timeframe": timeframe},
-    ).mappings()
-    for row in gap_rows:
-        name = str(row["symbol"])
-        internal_gaps_by_symbol[name].append(
-            GapRange.create(
-                name,
-                str(row["timeframe"]),
-                int(row["start_ms"]),
-                int(row["end_ms"]),
-                int(row["expected_minutes"]),
-            )
-        )
-
     plans: list[FreshnessSymbolPlan] = []
-    for row in series_rows:
-        name = str(row["symbol"])
-        row_count = int(row["row_count"])
+    for series in observed_series:
+        name = series.symbol
+        row_count = series.row_count
         if not name:
             raise ValueError("canonical symbols must be non-empty")
-        if int(row["null_timestamp_count"]):
+        if series.null_timestamp_count:
             raise ValueError(f"canonical series {name} contains null timestamps")
-        if int(row["misaligned_timestamp_count"]):
+        if series.misaligned_timestamp_count:
             raise ValueError(f"canonical series {name} contains non-minute timestamps")
-        if int(row["distinct_timestamp_count"]) != row_count:
+        if series.distinct_timestamp_count != row_count:
             raise ValueError(f"canonical series {name} contains duplicate candle keys")
-        first_ms = int(row["first_open_time_ms"])
-        last_ms = int(row["last_open_time_ms"])
+        if series.first_open_time_ms is None or series.last_open_time_ms is None:
+            raise ValueError(f"canonical series {name} contains no timestamped candles")
+        first_ms = series.first_open_time_ms
+        last_ms = series.last_open_time_ms
         if first_ms < 0 or first_ms % MINUTE_MS or last_ms % MINUTE_MS:
             raise ValueError(f"canonical series {name} has invalid timestamp bounds")
         if last_ms >= cutoff_ms:
             raise ValueError(f"canonical series {name} must end before the cutoff's open minute")
-        missing_ranges = internal_gaps_by_symbol[name]
+        missing_ranges = list(series.internal_gaps)
         tail_start = last_ms + MINUTE_MS
         if tail_start < cutoff_ms:
             missing_ranges.append(
@@ -381,6 +350,304 @@ ORDER BY symbol, timeframe, start_ms
         market_type=market_type,
         symbols=ordered_plans,
     )
+
+
+def _uses_default_postgres_canonical_key_stream(
+    connection: Connection,
+    *,
+    schema: str | None,
+    table: str,
+    symbol_column: str,
+    timeframe_column: str,
+    timestamp_column: str,
+) -> bool:
+    return (
+        connection.dialect.name == "postgresql"
+        and schema == "market_data"
+        and table == "candles_canonical"
+        and symbol_column == "symbol"
+        and timeframe_column == "interval"
+        and timestamp_column == "open_time"
+    )
+
+
+def _inspect_default_postgres_canonical(
+    connection: Connection,
+    *,
+    timeframe: str,
+    reviewed_symbols: set[str],
+) -> tuple[tuple[_ObservedCanonicalSeries, ...], set[str]]:
+    summary_query = text(
+        """
+WITH canonical_key AS (
+    SELECT candle.open_time
+    FROM market_data.candles AS candle
+    WHERE candle.symbol = :symbol
+      AND candle."interval" = :timeframe
+    UNION ALL
+    SELECT supplement.open_time
+    FROM market_data.candle_supplements AS supplement
+    WHERE supplement.symbol = :symbol
+      AND supplement."interval" = :timeframe
+      AND supplement.validation_status = 'validated'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM market_data.candles AS candle
+          WHERE candle.symbol = supplement.symbol
+            AND candle."interval" = supplement."interval"
+            AND candle.open_time = supplement.open_time
+      )
+)
+SELECT
+    count(*) AS row_count,
+    min(open_time) AS first_open_time,
+    max(open_time) AS last_open_time,
+    sum(CASE WHEN open_time % 60000 = 0 THEN 0 ELSE 1 END) AS misaligned_rows
+FROM canonical_key
+"""
+    )
+    gap_query = text(
+        """
+WITH canonical_key AS (
+    (
+        SELECT candle.open_time
+        FROM market_data.candles AS candle
+        WHERE candle.symbol = :symbol
+          AND candle."interval" = :timeframe
+        ORDER BY candle.open_time
+    )
+    UNION ALL
+    (
+        SELECT supplement.open_time
+        FROM market_data.candle_supplements AS supplement
+        WHERE supplement.symbol = :symbol
+          AND supplement."interval" = :timeframe
+          AND supplement.validation_status = 'validated'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM market_data.candles AS candle
+              WHERE candle.symbol = supplement.symbol
+                AND candle."interval" = supplement."interval"
+                AND candle.open_time = supplement.open_time
+          )
+        ORDER BY supplement.open_time
+    )
+),
+ordered AS (
+    SELECT
+        open_time,
+        lag(open_time) OVER (ORDER BY open_time) AS previous_open_time
+    FROM canonical_key
+)
+SELECT open_time, previous_open_time
+FROM ordered
+WHERE open_time > previous_open_time + 60000
+ORDER BY open_time
+"""
+    )
+    observed: list[_ObservedCanonicalSeries] = []
+    canonical_symbols: set[str] = set()
+    for symbol in sorted(reviewed_symbols):
+        parameters = {"symbol": symbol, "timeframe": timeframe}
+        summary = connection.execute(summary_query, parameters).mappings().one()
+        row_count = int(summary["row_count"])
+        if not row_count:
+            observed.append(
+                _ObservedCanonicalSeries(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    first_open_time_ms=None,
+                    last_open_time_ms=None,
+                    row_count=0,
+                    distinct_timestamp_count=0,
+                    null_timestamp_count=0,
+                    misaligned_timestamp_count=0,
+                    internal_gaps=(),
+                )
+            )
+            continue
+        gap_rows = connection.execute(gap_query, parameters).mappings()
+        internal_gaps = tuple(
+            GapRange.create(
+                symbol,
+                timeframe,
+                int(row["previous_open_time"]) + MINUTE_MS,
+                int(row["open_time"]),
+                ((int(row["open_time"]) - int(row["previous_open_time"])) // MINUTE_MS) - 1,
+            )
+            for row in gap_rows
+        )
+        observed.append(
+            _ObservedCanonicalSeries(
+                symbol=symbol,
+                timeframe=timeframe,
+                first_open_time_ms=int(summary["first_open_time"]),
+                last_open_time_ms=int(summary["last_open_time"]),
+                row_count=row_count,
+                distinct_timestamp_count=row_count,
+                null_timestamp_count=0,
+                misaligned_timestamp_count=int(summary["misaligned_rows"]),
+                internal_gaps=internal_gaps,
+            )
+        )
+        canonical_symbols.add(symbol)
+    unreviewed_symbol = _find_unreviewed_postgres_symbol(
+        connection,
+        timeframe=timeframe,
+        reviewed_symbols=reviewed_symbols,
+    )
+    if unreviewed_symbol is not None:
+        canonical_symbols.add(unreviewed_symbol)
+    return tuple(observed), canonical_symbols
+
+
+def _inspect_generic_canonical(
+    connection: Connection,
+    *,
+    schema: str | None,
+    table: str,
+    symbol_column: str,
+    timeframe_column: str,
+    timestamp_column: str,
+    timeframe: str,
+) -> tuple[tuple[_ObservedCanonicalSeries, ...], set[str]]:
+    relation = _qualified_relation(schema, table)
+    symbol = _quote_identifier(symbol_column)
+    interval = _quote_identifier(timeframe_column)
+    open_time = _quote_identifier(timestamp_column)
+    series_rows = tuple(
+        connection.execute(
+            text(
+                f"""
+SELECT
+    {symbol} AS symbol,
+    {interval} AS timeframe,
+    min({open_time}) AS first_open_time_ms,
+    max({open_time}) AS last_open_time_ms,
+    count(*) AS row_count,
+    count(DISTINCT {open_time}) AS distinct_timestamp_count,
+    count(*) - count({open_time}) AS null_timestamp_count,
+    sum(CASE WHEN {open_time} % {MINUTE_MS} = 0 THEN 0 ELSE 1 END)
+        AS misaligned_timestamp_count
+FROM {relation}
+WHERE {interval} = :timeframe
+GROUP BY {symbol}, {interval}
+ORDER BY {symbol}, {interval}
+"""
+            ),
+            {"timeframe": timeframe},
+        ).mappings()
+    )
+    gaps_by_symbol: dict[str, list[GapRange]] = {str(row["symbol"]): [] for row in series_rows}
+    gap_rows = connection.execute(
+        text(
+            f"""
+WITH ordered AS (
+    SELECT
+        {symbol} AS symbol,
+        {interval} AS timeframe,
+        {open_time} AS open_time,
+        lead({open_time}) OVER (
+            PARTITION BY {symbol}, {interval}
+            ORDER BY {open_time}
+        ) AS next_open_time
+    FROM {relation}
+    WHERE {interval} = :timeframe
+)
+SELECT
+    symbol,
+    timeframe,
+    open_time + {MINUTE_MS} AS start_ms,
+    next_open_time AS end_ms,
+    ((next_open_time - open_time) / {MINUTE_MS}) - 1 AS expected_minutes
+FROM ordered
+WHERE next_open_time > open_time + {MINUTE_MS}
+ORDER BY symbol, timeframe, start_ms
+"""
+        ),
+        {"timeframe": timeframe},
+    ).mappings()
+    for row in gap_rows:
+        name = str(row["symbol"])
+        gaps_by_symbol[name].append(
+            GapRange.create(
+                name,
+                str(row["timeframe"]),
+                int(row["start_ms"]),
+                int(row["end_ms"]),
+                int(row["expected_minutes"]),
+            )
+        )
+    observed = tuple(
+        _ObservedCanonicalSeries(
+            symbol=str(row["symbol"]),
+            timeframe=str(row["timeframe"]),
+            first_open_time_ms=(
+                None if row["first_open_time_ms"] is None else int(row["first_open_time_ms"])
+            ),
+            last_open_time_ms=(
+                None if row["last_open_time_ms"] is None else int(row["last_open_time_ms"])
+            ),
+            row_count=int(row["row_count"]),
+            distinct_timestamp_count=int(row["distinct_timestamp_count"]),
+            null_timestamp_count=int(row["null_timestamp_count"]),
+            misaligned_timestamp_count=int(row["misaligned_timestamp_count"]),
+            internal_gaps=tuple(gaps_by_symbol[str(row["symbol"])]),
+        )
+        for row in series_rows
+    )
+    return observed, {series.symbol for series in observed}
+
+
+def _find_unreviewed_postgres_symbol(
+    connection: Connection,
+    *,
+    timeframe: str,
+    reviewed_symbols: set[str],
+) -> str | None:
+    ordered_symbols = sorted(reviewed_symbols)
+    bounds: list[tuple[str | None, str | None]] = []
+    if ordered_symbols:
+        bounds.append((None, ordered_symbols[0]))
+        bounds.extend(zip(ordered_symbols, ordered_symbols[1:]))
+        bounds.append((ordered_symbols[-1], None))
+    else:
+        bounds.append((None, None))
+
+    relations = (
+        ("market_data.candles", ""),
+        (
+            "market_data.candle_supplements",
+            "AND validation_status = 'validated'",
+        ),
+    )
+    for relation, validation_filter in relations:
+        for lower, upper in bounds:
+            predicates = ['"interval" = :timeframe']
+            parameters: dict[str, str] = {"timeframe": timeframe}
+            if lower is not None:
+                predicates.append("symbol > :lower_symbol")
+                parameters["lower_symbol"] = lower
+            if upper is not None:
+                predicates.append("symbol < :upper_symbol")
+                parameters["upper_symbol"] = upper
+            where_clause = "\n  AND ".join(predicates)
+            extra = connection.execute(
+                text(
+                    f"""
+SELECT symbol
+FROM {relation}
+WHERE {where_clause}
+  {validation_filter}
+ORDER BY symbol
+LIMIT 1
+"""
+                ),
+                parameters,
+            ).scalar_one_or_none()
+            if extra is not None:
+                return str(extra)
+    return None
 
 
 def write_freshness_manifest(manifest: FreshnessManifest, path: Path) -> None:
