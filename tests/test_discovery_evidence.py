@@ -146,6 +146,7 @@ def test_ai_interpretation_requires_complete_neutral_inference_and_provenance() 
     invalid = (
         {"neutral_name": "Validated profitable edge"},
         {"neutral_name": "Institutional Whale Support"},
+        {"neutral_name": "Neutral structure guarantees riches through coordinated funds"},
         {"candidate_mechanism_inference": "This mechanism is certain."},
         {"detector_fields": ()},
         {"proposed_metrics": ()},

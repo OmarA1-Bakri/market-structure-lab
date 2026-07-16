@@ -54,6 +54,14 @@ _MOTIF_TOP_K = 3
 _TRANSITION_BOOTSTRAP_ITERATIONS = 100
 _TRANSITION_BLOCK_LENGTH = 2
 _TRANSITION_CONFIDENCE_LEVEL = 0.95
+_ROW_IDENTITY_FIELDS = (
+    "dataset_version",
+    "config_version",
+    "profile_version",
+    "window_policy_id",
+    "feature_set_id",
+    "registry_id",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,7 +352,7 @@ def publish_ai_interpretations(
         if record.detector_fields != detector_fields:
             raise ValueError("AI interpretation detector fields changed")
 
-    _verify_bundle(run_dir)
+    _verify_run_manifest_identity(run_dir, run_manifest)
     stage_dir = run_dir / ".interpretations.staging"
     final_dir = run_dir / "interpretations"
     if stage_dir.exists():
@@ -423,10 +431,32 @@ def _validate_run_inputs(
         or development.dataset_version != config.dataset_snapshot_id
     ):
         raise ValueError("dataset snapshot identity does not match discovery inputs")
-    if discovery.feature_set_id != config.feature_set_id:
-        raise ValueError("discovery feature-set identity does not match config")
+    discovery_identity = _feature_row_identity(discovery)
+    development_identity = _feature_row_identity(development)
+    for field in _ROW_IDENTITY_FIELDS:
+        if discovery_identity[field] != development_identity[field]:
+            raise ValueError(f"feature row {field} changed between discovery and development")
+    expected_identity = {
+        "dataset_version": config.dataset_snapshot_id,
+        "config_version": config.config_version,
+        "feature_set_id": config.feature_set_id,
+        "registry_id": registry.registry_id,
+    }
+    for field, expected in expected_identity.items():
+        if discovery_identity[field] != expected:
+            raise ValueError(f"feature row {field} does not match discovery config")
     if not isinstance(output_root, Path):
         raise TypeError("output_root must be a Path")
+
+
+def _feature_row_identity(input_value: DiscoveryInput) -> dict[str, str]:
+    first = input_value.rows[0]
+    identity = {field: getattr(first, field) for field in _ROW_IDENTITY_FIELDS}
+    for row in input_value.rows[1:]:
+        for field, expected in identity.items():
+            if getattr(row, field) != expected:
+                raise ValueError(f"feature row {field} changed within discovery input")
+    return identity
 
 
 def _selected_rows(input_value: DiscoveryInput, matrix: FeatureMatrix) -> tuple[FeatureRow, ...]:
@@ -610,6 +640,20 @@ def _verify_bundle(directory: Path) -> Mapping[str, object]:
         raise RuntimeError("published bundle manifest tamper detected")
     manifest["manifest_sha256"] = supplied_manifest_hash
     return manifest
+
+
+def _verify_run_manifest_identity(
+    directory: Path,
+    supplied: DiscoveryRunManifest,
+) -> None:
+    verified = _verify_bundle(directory)
+    supplied_payload = supplied.to_dict()
+    if verified != supplied_payload:
+        raise RuntimeError("supplied discovery run manifest identity does not match publication")
+    if (directory / "manifest.json").read_bytes() != _json_file(supplied_payload):
+        raise RuntimeError("supplied discovery run manifest identity is not byte-identical")
+    if (directory / "behaviours.json").read_bytes() != _json_file(supplied.behaviours):
+        raise RuntimeError("supplied discovery run behaviour identity does not match publication")
 
 
 def _publish_bundle(stage_dir: Path, final_dir: Path, payloads: Mapping[str, bytes]) -> None:

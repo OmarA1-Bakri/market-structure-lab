@@ -22,6 +22,48 @@ _FORBIDDEN_CLAIM = re.compile(
     re.IGNORECASE,
 )
 _FORBIDDEN_NARRATIVE = re.compile(r"\b(?:institutional|whales?|smart[- ]money)\b", re.IGNORECASE)
+_NEUTRAL_NAME_WORDS = frozenset(
+    {
+        "acceptance",
+        "alternating",
+        "auction",
+        "balance",
+        "balanced",
+        "behaviour",
+        "candle",
+        "configuration",
+        "contracting",
+        "declining",
+        "expanding",
+        "falling",
+        "high",
+        "imbalance",
+        "imbalanced",
+        "location",
+        "low",
+        "migration",
+        "narrow",
+        "pattern",
+        "persistent",
+        "profile",
+        "recurring",
+        "rejection",
+        "return",
+        "rising",
+        "sequence",
+        "state",
+        "stationary",
+        "structure",
+        "transient",
+        "value",
+        "volatility",
+        "volume",
+        "wide",
+    }
+)
+_NEUTRAL_NAME_ENDINGS = frozenset(
+    {"behaviour", "configuration", "pattern", "sequence", "state", "structure"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +130,7 @@ class AIInterpretation:
 
     def __post_init__(self) -> None:
         _require_behaviour_id(self.behaviour_id)
+        _require_neutral_name(self.neutral_name)
         text_fields = (
             (self.neutral_name, "neutral_name"),
             (self.description, "description"),
@@ -188,6 +231,20 @@ def _require_text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be non-empty")
     return value
+
+
+def _require_neutral_name(value: object) -> str:
+    name = _require_text(value, "neutral_name")
+    words = name.split()
+    lowered = tuple(word.lower() for word in words)
+    if (
+        not 2 <= len(words) <= 6
+        or name != " ".join(word.capitalize() for word in lowered)
+        or lowered[-1] not in _NEUTRAL_NAME_ENDINGS
+        or any(word not in _NEUTRAL_NAME_WORDS for word in lowered)
+    ):
+        raise ValueError("neutral_name must use the canonical observable-language grammar")
+    return name
 
 
 def _require_utc(value: datetime, label: str) -> datetime:

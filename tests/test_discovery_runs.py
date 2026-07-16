@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -257,6 +258,36 @@ def test_discovery_run_detects_stale_stage_tamper_and_identity_conflict(tmp_path
         _run(changed)
 
 
+def test_discovery_run_rejects_config_version_drift_from_feature_rows(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+    arguments["config"] = replace(arguments["config"], config_version="cfg-drifted")
+
+    with pytest.raises(ValueError, match="config_version"):
+        _run(arguments)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("config_version", "profile_version", "window_policy_id"),
+)
+def test_discovery_run_rejects_source_identity_drift_between_partitions(
+    tmp_path,
+    field: str,
+) -> None:
+    arguments = _fixture(tmp_path)
+    development = arguments["development"]
+    arguments["development"] = make_discovery_input(
+        partition=development.partition,
+        rows=tuple(replace(row, **{field: "drifted-v2"}) for row in development.rows),
+        registry=arguments["registry"],
+        purpose="stability",
+        max_rows=20,
+    )
+
+    with pytest.raises(ValueError, match=field):
+        _run(arguments)
+
+
 def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
     tmp_path,
 ) -> None:
@@ -306,4 +337,71 @@ def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
             evidence=evidence,
             interpretations=(changed,) + interpretations[1:],
             output_root=tmp_path / "detector-change",
+        )
+
+
+def test_interpretation_publication_rejects_forged_run_manifest_identity(tmp_path) -> None:
+    run_manifest = _run(_fixture(tmp_path))
+    evidence = tuple(
+        BehaviourEvidencePack(
+            run_id=run_manifest.run_id,
+            behaviour=behaviour,
+            nearest_behaviour_ids=tuple(
+                item.behaviour_id
+                for item in run_manifest.behaviours
+                if item.behaviour_id != behaviour.behaviour_id
+            ),
+            contrasting_behaviour_ids=(),
+            transition_rows=run_manifest.transition_rows,
+        )
+        for behaviour in run_manifest.behaviours
+    )
+    interpretations = tuple(_interpretation(item.behaviour) for item in evidence)
+    forged = replace(run_manifest, manifest_sha256="0" * 64)
+
+    with pytest.raises(RuntimeError, match="manifest identity"):
+        publish_ai_interpretations(
+            run_manifest=forged,
+            evidence=evidence,
+            interpretations=interpretations,
+            output_root=tmp_path,
+        )
+
+    assert not (tmp_path / run_manifest.run_id / "interpretations").exists()
+
+
+def test_interpretation_publication_rejects_forged_frozen_behaviour_identity(tmp_path) -> None:
+    run_manifest = _run(_fixture(tmp_path))
+    evidence = tuple(
+        BehaviourEvidencePack(
+            run_id=run_manifest.run_id,
+            behaviour=behaviour,
+            nearest_behaviour_ids=tuple(
+                item.behaviour_id
+                for item in run_manifest.behaviours
+                if item.behaviour_id != behaviour.behaviour_id
+            ),
+            contrasting_behaviour_ids=(),
+            transition_rows=run_manifest.transition_rows,
+        )
+        for behaviour in run_manifest.behaviours
+    )
+    interpretations = tuple(_interpretation(item.behaviour) for item in evidence)
+    changed_behaviour = copy.copy(run_manifest.behaviours[0])
+    object.__setattr__(
+        changed_behaviour,
+        "description",
+        "Another neutral frozen description.",
+    )
+    forged = replace(
+        run_manifest,
+        behaviours=(changed_behaviour,) + run_manifest.behaviours[1:],
+    )
+
+    with pytest.raises(RuntimeError, match="behaviour identity"):
+        publish_ai_interpretations(
+            run_manifest=forged,
+            evidence=evidence,
+            interpretations=interpretations,
+            output_root=tmp_path,
         )
