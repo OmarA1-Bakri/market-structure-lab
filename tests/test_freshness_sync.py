@@ -12,6 +12,7 @@ from market_structure_lab.data.freshness import (
     FreshnessManifest,
     FreshnessPlanningStatus,
     FreshnessSymbolPlan,
+    write_freshness_manifest,
 )
 from market_structure_lab.data.freshness_sync import (
     FreshnessRunStatus,
@@ -264,6 +265,22 @@ def test_report_and_latest_pointer_are_checksum_bearing_and_tamper_evident(
     paths.report.write_text(json.dumps(envelope), encoding="utf-8")
     with pytest.raises(ValueError, match="checksum"):
         read_freshness_report(paths.report)
+
+
+def test_artifact_publication_reuses_logically_identical_windows_plan(
+    tmp_path: Path,
+) -> None:
+    before = _manifest()
+    report = build_freshness_report(before, _manifest(recovered=True))
+    plan_path = tmp_path / f"20260716T123400Z-{before.sha256()[:12]}.plan.json"
+    write_freshness_manifest(before, plan_path)
+    original_bytes = plan_path.read_bytes()
+
+    paths = write_freshness_artifacts(before, report, tmp_path)
+
+    assert paths.manifest == plan_path
+    assert paths.manifest.read_bytes() == original_bytes
+    assert read_latest_freshness_report(tmp_path) == report
 
 
 def test_runner_reuses_existing_recovery_engine_and_replans_same_cutoff(monkeypatch) -> None:

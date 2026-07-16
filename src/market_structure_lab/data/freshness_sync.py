@@ -19,6 +19,7 @@ from market_structure_lab.data.freshness import (
     FreshnessManifest,
     FreshnessSymbolPlan,
     build_freshness_manifest,
+    read_freshness_manifest,
 )
 from market_structure_lab.data.gaps import (
     GapRange,
@@ -322,7 +323,11 @@ def write_freshness_artifacts(
         "sha256": manifest.sha256(),
     }
     report_envelope = {"report": report.to_dict(), "sha256": report.sha256()}
-    _write_immutable(manifest_path, (_canonical_json(manifest_envelope) + "\n").encode())
+    _write_immutable_manifest(
+        manifest_path,
+        manifest,
+        (_canonical_json(manifest_envelope) + "\n").encode(),
+    )
     _write_immutable(report_path, (_canonical_json(report_envelope) + "\n").encode())
     _write_atomic(
         latest_path,
@@ -537,6 +542,20 @@ def _write_immutable(path: Path, payload: bytes) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_bytes(payload)
     os.replace(temporary, path)
+
+
+def _write_immutable_manifest(
+    path: Path,
+    manifest: FreshnessManifest,
+    payload: bytes,
+) -> None:
+    if path.exists():
+        if read_freshness_manifest(path) != manifest:
+            raise ValueError(
+                f"immutable freshness artifact already exists with different content: {path}"
+            )
+        return
+    _write_immutable(path, payload)
 
 
 def _write_atomic(path: Path, value: Mapping[str, object]) -> None:
