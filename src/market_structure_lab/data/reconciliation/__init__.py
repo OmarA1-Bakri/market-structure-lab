@@ -20,14 +20,24 @@ from market_structure_lab.data.reconciliation.publication import (
     publish_work_unit,
     read_work_unit_manifest,
 )
+from market_structure_lab.data.reconciliation.repository import (
+    ReconciliationPromotion,
+    ReconciliationReplacement,
+    ReconciliationRepository,
+    VerifiedCoverageInterval,
+)
 
 __all__ = [
     "ReconciliationClass",
     "ReconciliationRecord",
+    "ReconciliationPromotion",
+    "ReconciliationReplacement",
+    "ReconciliationRepository",
     "ReconciliationRunManifest",
     "ReconciliationWorkUnit",
     "SourceArtifactIdentity",
     "TradingEnvelope",
+    "VerifiedCoverageInterval",
     "WorkUnitManifest",
     "freeze_reconciliation_run",
     "monthly_work_units",
