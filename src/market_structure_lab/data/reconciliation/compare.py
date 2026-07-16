@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -74,13 +75,39 @@ def reconcile_ordered_rows(
     binance_rows: Iterable[SourceKline | RecoveryCandle],
 ) -> Iterator[ReconciliationRecord]:
     """Classify every minute using at most one buffered row from each ordered stream."""
+    for result in reconcile_ordered_candles(
+        work_unit=work_unit,
+        dump_rows=dump_rows,
+        binance_rows=binance_rows,
+    ):
+        yield result.record
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciledCandle:
+    record: ReconciliationRecord
+    dump: RecoveryCandle | None
+    binance: RecoveryCandle | None
+
+
+def reconcile_ordered_candles(
+    *,
+    work_unit: ReconciliationWorkUnit,
+    dump_rows: Iterable[RecoveryCandle],
+    binance_rows: Iterable[SourceKline | RecoveryCandle],
+) -> Iterator[ReconciledCandle]:
+    """Return audit evidence plus the bounded current source rows for publication."""
     dump = _RowCursor(dump_rows, work_unit=work_unit, stream_name="dump")
     source = _RowCursor(binance_rows, work_unit=work_unit, stream_name="Binance")
 
     for timestamp in range(work_unit.start_ms, work_unit.end_ms, MINUTE_MS):
         dump_row = dump.take(timestamp)
         source_row = source.take(timestamp)
-        yield _record(work_unit, timestamp, dump_row, source_row)
+        yield ReconciledCandle(
+            record=_record(work_unit, timestamp, dump_row, source_row),
+            dump=dump_row,
+            binance=source_row,
+        )
 
     dump.require_exhausted()
     source.require_exhausted()
@@ -192,4 +219,9 @@ def _validate_row(
         raise ValueError(f"{stream_name} row violates OHLC relationships")
 
 
-__all__ = ["monthly_work_units", "reconcile_ordered_rows"]
+__all__ = [
+    "ReconciledCandle",
+    "monthly_work_units",
+    "reconcile_ordered_candles",
+    "reconcile_ordered_rows",
+]
