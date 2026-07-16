@@ -8,9 +8,23 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, TypeAlias
 
 from market_structure_lab.events.models import EventKind, MarketEvent
+
+OverlapGroup: TypeAlias = tuple[
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    int,
+]
+OverlapOrderKey: TypeAlias = tuple[OverlapGroup, datetime, datetime, str]
 
 
 def kind_pair_key(first: EventKind, second: EventKind) -> str:
@@ -30,6 +44,7 @@ class EventOverlapReport:
     affected_event_count: int
     affected_event_ratio: float
     max_concurrency: int
+    max_active_events: int
     by_kind_pair: Mapping[str, int]
 
     def __post_init__(self) -> None:
@@ -41,6 +56,10 @@ class EventOverlapReport:
             raise ValueError("affected_event_ratio must be between zero and one")
         if self.max_concurrency < 0:
             raise ValueError("max_concurrency must be non-negative")
+        if self.max_active_events < 0:
+            raise ValueError("max_active_events must be non-negative")
+        if self.max_active_events != self.max_concurrency:
+            raise ValueError("max_active_events must equal max_concurrency")
         object.__setattr__(
             self,
             "by_kind",
@@ -60,6 +79,7 @@ class EventOverlapReport:
             "affected_event_count": self.affected_event_count,
             "affected_event_ratio": self.affected_event_ratio,
             "max_concurrency": self.max_concurrency,
+            "max_active_events": self.max_active_events,
             "by_kind_pair": dict(self.by_kind_pair),
         }
 
@@ -73,11 +93,15 @@ class EventOverlapReport:
         )
 
 
-def _overlap_group(event: MarketEvent) -> tuple[object, ...]:
+def _overlap_group(event: MarketEvent) -> OverlapGroup:
     return (
         event.dataset_version,
+        event.config_version,
+        event.profile_version,
+        event.window_policy_id,
         event.feature_set_id,
         event.registry_id,
+        event.registry_sha256,
         event.symbol,
         event.timeframe,
         event.segment_id,
@@ -85,74 +109,70 @@ def _overlap_group(event: MarketEvent) -> tuple[object, ...]:
 
 
 def build_overlap_report(events: Iterable[MarketEvent]) -> EventOverlapReport:
-    """Count overlaps within identical dataset, feature, stream, and segment identity."""
+    """Count overlaps from events in canonical group and interval order.
 
-    ordered: list[tuple[int, MarketEvent]] = []
-    seen_ids: set[str] = set()
+    The sweep retains only intervals that overlap a future event. Rejecting
+    unordered input keeps memory proportional to maximum concurrency instead
+    of the total event count.
+    """
+
     by_kind: Counter[str] = Counter()
-    for index, event in enumerate(events):
-        if not isinstance(event, MarketEvent):
-            raise TypeError("events must contain only MarketEvent values")
-        if event.event_id in seen_ids:
-            raise ValueError(f"duplicate event_id: {event.event_id}")
-        seen_ids.add(event.event_id)
-        by_kind[event.kind.value] += 1
-        ordered.append((index, event))
-
-    ordered.sort(
-        key=lambda item: (
-            _overlap_group(item[1]),
-            item[1].start,
-            item[1].end,
-            item[1].event_id,
-        )
-    )
-
     pair_count = 0
     max_concurrency = 0
     by_kind_pair: Counter[str] = Counter()
-    affected: set[int] = set()
-    group: tuple[object, ...] | None = None
+    affected_count = 0
+    total = 0
+    group: OverlapGroup | None = None
     active_heap: list[tuple[datetime, int]] = []
-    active: dict[int, MarketEvent] = {}
+    active: dict[int, EventKind] = {}
     active_kinds: Counter[EventKind] = Counter()
-    not_yet_affected: set[int] = set()
+    unaffected_active: set[int] = set()
+    previous_order_key: OverlapOrderKey | None = None
 
-    for index, event in ordered:
+    for index, event in enumerate(events):
+        if not isinstance(event, MarketEvent):
+            raise TypeError("events must contain only MarketEvent values")
         current_group = _overlap_group(event)
+        order_key = (current_group, event.start, event.end, event.event_id)
+        if previous_order_key is not None:
+            if order_key == previous_order_key:
+                raise ValueError(f"duplicate event_id: {event.event_id}")
+            if order_key < previous_order_key:
+                raise ValueError("events must use canonical overlap order")
+        previous_order_key = order_key
+        total += 1
+        by_kind[event.kind.value] += 1
+
         if group != current_group:
             group = current_group
             active_heap.clear()
             active.clear()
             active_kinds.clear()
-            not_yet_affected.clear()
+            unaffected_active.clear()
 
         while active_heap and active_heap[0][0] <= event.start:
             _, expired_index = heapq.heappop(active_heap)
-            expired = active.pop(expired_index)
-            active_kinds[expired.kind] -= 1
-            if active_kinds[expired.kind] == 0:
-                del active_kinds[expired.kind]
-            not_yet_affected.discard(expired_index)
+            expired_kind = active.pop(expired_index)
+            active_kinds[expired_kind] -= 1
+            if active_kinds[expired_kind] == 0:
+                del active_kinds[expired_kind]
+            unaffected_active.discard(expired_index)
 
         active_count = len(active)
         pair_count += active_count
         if active_count:
-            affected.add(index)
-            affected.update(not_yet_affected)
-            not_yet_affected.clear()
+            affected_count += 1 + len(unaffected_active)
+            unaffected_active.clear()
             for active_kind, count in active_kinds.items():
                 by_kind_pair[kind_pair_key(active_kind, event.kind)] += count
         else:
-            not_yet_affected.add(index)
+            unaffected_active.add(index)
 
-        active[index] = event
+        active[index] = event.kind
         active_kinds[event.kind] += 1
         heapq.heappush(active_heap, (event.end, index))
         max_concurrency = max(max_concurrency, len(active))
 
-    total = len(ordered)
-    affected_count = len(affected)
     return EventOverlapReport(
         total_events=total,
         by_kind=by_kind,
@@ -160,5 +180,6 @@ def build_overlap_report(events: Iterable[MarketEvent]) -> EventOverlapReport:
         affected_event_count=affected_count,
         affected_event_ratio=affected_count / total if total else 0.0,
         max_concurrency=max_concurrency,
+        max_active_events=max_concurrency,
         by_kind_pair=by_kind_pair,
     )

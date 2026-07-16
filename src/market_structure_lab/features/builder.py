@@ -113,6 +113,14 @@ class FeatureBuilder:
             raise ValueError("feature stream symbol changed")
         if snapshot.timeframe != previous.timeframe:
             raise ValueError("feature stream timeframe changed")
+        for field in (
+            "dataset_version",
+            "config_version",
+            "profile_definition_id",
+            "window_version",
+        ):
+            if getattr(snapshot, field) != getattr(previous, field):
+                raise ValueError(f"feature stream {field} changed")
         if snapshot.timestamp == previous.timestamp:
             raise ValueError("duplicate feature snapshot timestamp")
         if snapshot.timestamp < previous.timestamp:

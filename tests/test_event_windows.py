@@ -15,6 +15,43 @@ from market_structure_lab.events.fixed_windows import (
 )
 from market_structure_lab.events.models import EventKind, make_event
 from market_structure_lab.features.models import FeatureRow
+from market_structure_lab.features.registry import (
+    FeatureDefinition,
+    FeatureFamily,
+    FeatureRegistry,
+    FeatureValueKind,
+    LeakageClass,
+    MissingPolicy,
+)
+
+REGISTRY = FeatureRegistry(
+    "FS-000001",
+    (
+        FeatureDefinition(
+            name="auction_location",
+            definition="Fixture category",
+            family=FeatureFamily.AUCTION,
+            value_kind=FeatureValueKind.CATEGORY,
+            units="category",
+            required_prior_observations=0,
+            missing_policy=MissingPolicy.NULL,
+            version="v1",
+            leakage_class=LeakageClass.AT_CUTOFF,
+            allowed_categories=("inside_value",),
+        ),
+        FeatureDefinition(
+            name="poc_distance",
+            definition="Fixture distance",
+            family=FeatureFamily.AUCTION,
+            value_kind=FeatureValueKind.FLOAT,
+            units="ratio",
+            required_prior_observations=0,
+            missing_policy=MissingPolicy.NULL,
+            version="v1",
+            leakage_class=LeakageClass.AT_CUTOFF,
+        ),
+    ),
+)
 
 
 def row_at(
@@ -37,7 +74,7 @@ def row_at(
         profile_version="profile-v1",
         window_policy_id="rolling-bars-v1:max-bars=60",
         feature_set_id="FS-000001",
-        registry_id="FR-0123456789AB",
+        registry_id=REGISTRY.registry_id,
         values={"auction_location": "inside_value", "poc_distance": value},
     )
 
@@ -56,6 +93,7 @@ def test_make_event_freezes_cutoff_vector_metadata_and_stable_identity() -> None
         rows[-1].information_cutoff,
         rows[-1],
         "fixed-window-v1",
+        registry=REGISTRY,
         metadata=metadata,
     )
     replay = make_event(
@@ -64,6 +102,7 @@ def test_make_event_freezes_cutoff_vector_metadata_and_stable_identity() -> None
         rows[-1].information_cutoff,
         rows[-1],
         "fixed-window-v1",
+        registry=REGISTRY,
         metadata={"method": "fixed", "window_bars": 2},
     )
     metadata["window_bars"] = 999
@@ -93,6 +132,7 @@ def test_event_id_changes_with_identity_metadata_and_rejects_forgery() -> None:
         current.information_cutoff,
         current,
         "change-point-v1",
+        registry=REGISTRY,
         metadata={"direction": "higher"},
     )
     changed = make_event(
@@ -101,6 +141,7 @@ def test_event_id_changes_with_identity_metadata_and_rejects_forgery() -> None:
         current.information_cutoff,
         current,
         "change-point-v2",
+        registry=REGISTRY,
         metadata={"direction": "higher"},
     )
     changed_metadata = make_event(
@@ -109,12 +150,60 @@ def test_event_id_changes_with_identity_metadata_and_rejects_forgery() -> None:
         current.information_cutoff,
         current,
         "change-point-v1",
+        registry=REGISTRY,
         metadata={"direction": "lower"},
     )
 
     assert len({base.event_id, changed.event_id, changed_metadata.event_id}) == 3
     with pytest.raises(ValueError, match="event_id does not match"):
         replace(base, trigger_version="forged")
+
+
+def test_event_identity_includes_feature_and_auction_configuration() -> None:
+    current = minute_rows(1)[0]
+    base = make_event(
+        EventKind.CHANGE_POINT,
+        current.timestamp,
+        current.information_cutoff,
+        current,
+        "change-point-v1",
+        registry=REGISTRY,
+    )
+    changed = replace(
+        current,
+        config_version="config-v2",
+        profile_version="profile-v2",
+        window_policy_id="rolling-120-v2",
+    )
+    changed_event = make_event(
+        EventKind.CHANGE_POINT,
+        changed.timestamp,
+        changed.information_cutoff,
+        changed,
+        "change-point-v1",
+        registry=REGISTRY,
+    )
+
+    assert changed_event.event_id != base.event_id
+    with pytest.raises(ValueError, match="event_id does not match"):
+        replace(base, feature_values={**base.feature_values, "poc_distance": 99.0})
+
+
+def test_make_event_rejects_unregistered_or_outcome_feature_vectors() -> None:
+    current = minute_rows(1)[0]
+    for forged in (
+        replace(current, registry_id="FR-FORGED"),
+        replace(current, values={"future_return_1": 0.5, "profit_label": "win"}),
+    ):
+        with pytest.raises(ValueError):
+            make_event(
+                EventKind.CHANGE_POINT,
+                forged.timestamp,
+                forged.information_cutoff,
+                forged,
+                "change-point-v1",
+                registry=REGISTRY,
+            )
 
 
 def test_make_event_rejects_nonmatching_cutoff_and_outcome_metadata() -> None:
@@ -126,6 +215,7 @@ def test_make_event_rejects_nonmatching_cutoff_and_outcome_metadata() -> None:
             current.timestamp + timedelta(minutes=2),
             current,
             "expansion-v1",
+            registry=REGISTRY,
         )
     with pytest.raises(ValueError, match="prohibited"):
         make_event(
@@ -134,13 +224,18 @@ def test_make_event_rejects_nonmatching_cutoff_and_outcome_metadata() -> None:
             current.information_cutoff,
             current,
             "expansion-v1",
+            registry=REGISTRY,
             metadata={"future_label": "up"},
         )
 
 
 def test_fixed_windows_are_full_non_overlapping_and_use_last_row_vector() -> None:
     rows = minute_rows(5)
-    events = list(segment_fixed_windows(rows, width=2, trigger_version="fixed-window-v1"))
+    events = list(
+        segment_fixed_windows(
+            rows, width=2, trigger_version="fixed-window-v1", registry=REGISTRY
+        )
+    )
 
     assert len(events) == 2
     assert [(event.start, event.end) for event in events] == [
@@ -163,7 +258,11 @@ def test_fixed_windows_discard_partial_tail_at_each_segment_boundary() -> None:
         row_at(origin + timedelta(minutes=7), segment_id=1),
     ]
 
-    events = list(segment_fixed_windows(rows, width=3, trigger_version="fixed-window-v1"))
+    events = list(
+        segment_fixed_windows(
+            rows, width=3, trigger_version="fixed-window-v1", registry=REGISTRY
+        )
+    )
 
     assert len(events) == 1
     assert events[0].segment_id == 1
@@ -179,6 +278,7 @@ def test_rolling_windows_obey_width_step_and_are_exploratory() -> None:
             width=3,
             step=2,
             trigger_version="rolling-window-v1",
+            registry=REGISTRY,
         )
     )
 
@@ -222,7 +322,11 @@ def test_utc_sessions_reset_at_exact_calendar_boundaries(
     label: tuple[str, str],
 ) -> None:
     rows = [row_at(before), row_at(after)]
-    events = list(segment_utc_sessions(rows, unit=unit, trigger_version="utc-session-v1"))
+    events = list(
+        segment_utc_sessions(
+            rows, unit=unit, trigger_version="utc-session-v1", registry=REGISTRY
+        )
+    )
 
     assert len(events) == 2
     assert [event.metadata["session"] for event in events] == list(label)
@@ -242,6 +346,7 @@ def test_utc_sessions_reset_at_segment_even_within_one_calendar_session() -> Non
             rows,
             unit=UTCSessionUnit.DAY,
             trigger_version="utc-session-v1",
+            registry=REGISTRY,
         )
     )
 
@@ -272,7 +377,11 @@ def test_segmenters_fail_closed_on_identity_order_gap_and_segment_errors(
     rows: list[FeatureRow], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        list(segment_fixed_windows(rows, width=2, trigger_version="fixed-window-v1"))
+        list(
+            segment_fixed_windows(
+                rows, width=2, trigger_version="fixed-window-v1", registry=REGISTRY
+            )
+        )
 
 
 @pytest.mark.parametrize(("width", "step"), [(0, 1), (1, 0), (True, 1)])
@@ -284,5 +393,6 @@ def test_segmenters_reject_invalid_width_or_step(width: int, step: int) -> None:
                 width=width,
                 step=step,
                 trigger_version="rolling-window-v1",
+                registry=REGISTRY,
             )
         )

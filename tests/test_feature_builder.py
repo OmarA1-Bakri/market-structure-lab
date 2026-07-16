@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from math import log, sqrt
 from pathlib import Path
@@ -301,6 +302,22 @@ def test_order_series_and_unexplained_gap_fail_atomically() -> None:
     valid = builder.update(snapshot(1, close=101.0))
     assert valid.values["log_return_1"] == pytest.approx(log(1.01))
     assert first.values["log_return_1"] is None
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("dataset_version", "config_version", "profile_definition_id", "window_version"),
+)
+def test_stream_identity_drift_cannot_reuse_trailing_history(field: str) -> None:
+    builder = FeatureBuilder()
+    first = snapshot(0)
+    builder.update(first)
+
+    with pytest.raises(ValueError, match=field):
+        builder.update(replace(snapshot(1), **{field: "drifted-v2"}))
+
+    assert builder.history_size == 1
+    assert builder.update(snapshot(1, close=101.0)).values["log_return_1"] is not None
 
 
 def test_prefix_invariance_future_poisoning_and_bounded_history() -> None:

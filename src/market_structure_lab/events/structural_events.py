@@ -12,6 +12,7 @@ from market_structure_lab.auction.engine import (
     StructuralEventKind,
 )
 from market_structure_lab.features.models import FeatureRow
+from market_structure_lab.features.registry import FeatureRegistry
 from market_structure_lab.structure.nodes import ProfileNode
 
 from .change_points import observation_resets_continuity, validate_observation_pair
@@ -48,10 +49,15 @@ class StructuralEventConfig:
 class StructuralEventDetector:
     """Project structural events without consulting current or future node zones."""
 
-    def __init__(self, config: StructuralEventConfig | None = None) -> None:
+    def __init__(
+        self, config: StructuralEventConfig | None = None, *, registry: FeatureRegistry
+    ) -> None:
         self.config = StructuralEventConfig() if config is None else config
         if not isinstance(self.config, StructuralEventConfig):
             raise TypeError("config must be a StructuralEventConfig")
+        if not isinstance(registry, FeatureRegistry):
+            raise TypeError("registry must be a FeatureRegistry")
+        self.registry = registry
         self._latest_snapshot: AuctionSnapshot | None = None
         self._latest_row: FeatureRow | None = None
 
@@ -59,7 +65,13 @@ class StructuralEventDetector:
         self, snapshot: AuctionSnapshot, row: FeatureRow
     ) -> tuple[MarketEvent, ...]:
         validate_observation_pair(snapshot, row)
-        reset = observation_resets_continuity(self._latest_snapshot, snapshot)
+        self.registry.validate_row(row)
+        reset = observation_resets_continuity(
+            self._latest_snapshot,
+            snapshot,
+            previous_row=self._latest_row,
+            current_row=row,
+        )
         previous_snapshot = None if reset else self._latest_snapshot
         previous_row = None if reset else self._latest_row
 
@@ -93,10 +105,12 @@ class StructuralEventDetector:
                     row.information_cutoff,
                     row,
                     self.config.phase2_trigger_version,
+                    registry=self.registry,
                     metadata={
                         "phase2_event_id": structural.event_id,
                         "phase2_kind": structural.kind.value,
-                        "observable_trigger_timestamp": _iso_utc(structural.timestamp),
+                        "source_candle_open_timestamp": _iso_utc(structural.timestamp),
+                        "observable_trigger_timestamp": _iso_utc(row.information_cutoff),
                         "phase2_payload_json": json.dumps(
                             dict(structural.payload),
                             ensure_ascii=False,
@@ -131,6 +145,7 @@ class StructuralEventDetector:
                     current_row.information_cutoff,
                     current_row,
                     self.config.node_trigger_version,
+                    registry=self.registry,
                     metadata={
                         "node_source": "prior_snapshot",
                         "prior_snapshot_timestamp": _iso_utc(previous.timestamp),

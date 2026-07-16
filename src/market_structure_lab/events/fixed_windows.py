@@ -9,6 +9,7 @@ from typing import Iterable, Iterator
 
 from market_structure_lab.events.models import EventKind, MarketEvent, make_event
 from market_structure_lab.features.models import FeatureRow
+from market_structure_lab.features.registry import FeatureRegistry
 
 
 class UTCSessionUnit(StrEnum):
@@ -40,14 +41,19 @@ def _stream_identity(row: FeatureRow) -> tuple[str, ...]:
     )
 
 
-def _validated_rows(rows: Iterable[FeatureRow]) -> Iterator[tuple[FeatureRow, bool]]:
+def _validated_rows(
+    rows: Iterable[FeatureRow], registry: FeatureRegistry
+) -> Iterator[tuple[FeatureRow, bool]]:
     """Yield valid rows and whether each row starts a new canonical segment."""
 
+    if not isinstance(registry, FeatureRegistry):
+        raise TypeError("registry must be a FeatureRegistry")
     identity: tuple[str, ...] | None = None
     previous: FeatureRow | None = None
     for row in rows:
         if not isinstance(row, FeatureRow):
             raise TypeError("rows must contain only FeatureRow values")
+        registry.validate_row(row)
         current_identity = _stream_identity(row)
         if identity is None:
             identity = current_identity
@@ -72,6 +78,7 @@ def segment_fixed_windows(
     *,
     width: int,
     trigger_version: str,
+    registry: FeatureRegistry,
 ) -> Iterator[MarketEvent]:
     """Emit full, non-overlapping fixed-width windows without crossing segments."""
 
@@ -79,7 +86,7 @@ def segment_fixed_windows(
     first: FeatureRow | None = None
     last: FeatureRow | None = None
     count = 0
-    for row, segment_start in _validated_rows(rows):
+    for row, segment_start in _validated_rows(rows, registry):
         if segment_start:
             first = None
             last = None
@@ -95,6 +102,7 @@ def segment_fixed_windows(
                 last.information_cutoff,
                 last,
                 trigger_version,
+                registry=registry,
                 metadata={"window_bars": window_width},
             )
             first = None
@@ -108,6 +116,7 @@ def segment_rolling_windows(
     width: int,
     step: int,
     trigger_version: str,
+    registry: FeatureRegistry,
 ) -> Iterator[MarketEvent]:
     """Emit explicitly exploratory full rolling windows at a fixed bar step."""
 
@@ -115,7 +124,7 @@ def segment_rolling_windows(
     window_step = _positive_integer(step, "step")
     active: deque[FeatureRow] = deque(maxlen=window_width)
     observations = 0
-    for row, segment_start in _validated_rows(rows):
+    for row, segment_start in _validated_rows(rows, registry):
         if segment_start:
             active.clear()
             observations = 0
@@ -129,6 +138,7 @@ def segment_rolling_windows(
             row.information_cutoff,
             row,
             trigger_version,
+            registry=registry,
             exploratory=True,
             metadata={"step_bars": window_step, "window_bars": window_width},
         )
@@ -155,6 +165,7 @@ def segment_utc_sessions(
     *,
     unit: UTCSessionUnit,
     trigger_version: str,
+    registry: FeatureRegistry,
 ) -> Iterator[MarketEvent]:
     """Emit observed portions of calendar-aligned UTC sessions."""
 
@@ -174,6 +185,7 @@ def segment_utc_sessions(
             last.information_cutoff,
             last,
             trigger_version,
+            registry=registry,
             metadata={
                 "observed_bars": count,
                 "session": _session_label(key),
@@ -181,7 +193,7 @@ def segment_utc_sessions(
             },
         )
 
-    for row, segment_start in _validated_rows(rows):
+    for row, segment_start in _validated_rows(rows, registry):
         row_key = _session_key(row.timestamp, unit)
         cutoff_key = _session_key(row.information_cutoff - timedelta(microseconds=1), unit)
         if cutoff_key != row_key:

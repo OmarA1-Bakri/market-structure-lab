@@ -12,6 +12,7 @@ from market_structure_lab.auction.engine import (
     StructuralEventKind,
 )
 from market_structure_lab.features.models import FeatureRow, timeframe_duration
+from market_structure_lab.features.registry import FeatureRegistry
 
 from .models import EventKind, MarketEvent, make_event
 
@@ -106,12 +107,16 @@ def validate_observation_pair(snapshot: AuctionSnapshot, row: FeatureRow) -> Non
 class CausalChangePointDetector:
     """Detect robust deviations using completed prior observations only."""
 
-    def __init__(self, config: ChangePointConfig) -> None:
+    def __init__(self, config: ChangePointConfig, *, registry: FeatureRegistry) -> None:
         if not isinstance(config, ChangePointConfig):
             raise TypeError("config must be a ChangePointConfig")
+        if not isinstance(registry, FeatureRegistry):
+            raise TypeError("registry must be a FeatureRegistry")
         self.config = config
+        self.registry = registry
         self._history: deque[float] = deque(maxlen=config.history_window)
         self._latest: AuctionSnapshot | None = None
+        self._latest_row: FeatureRow | None = None
 
     @property
     def history_size(self) -> int:
@@ -119,8 +124,14 @@ class CausalChangePointDetector:
 
     def update(self, snapshot: AuctionSnapshot, row: FeatureRow) -> MarketEvent | None:
         validate_observation_pair(snapshot, row)
+        self.registry.validate_row(row)
         value = _numeric_feature(row, self.config.feature_name)
-        reset = observation_resets_continuity(self._latest, snapshot)
+        reset = observation_resets_continuity(
+            self._latest,
+            snapshot,
+            previous_row=self._latest_row,
+            current_row=row,
+        )
         if reset:
             self._history.clear()
 
@@ -143,6 +154,7 @@ class CausalChangePointDetector:
                     row.information_cutoff,
                     row,
                     self.config.trigger_version,
+                    registry=self.registry,
                     metadata={
                         "feature_name": self.config.feature_name,
                         "current_value": value,
@@ -158,23 +170,31 @@ class CausalChangePointDetector:
         if value is not None:
             self._history.append(value)
         self._latest = snapshot
+        self._latest_row = row
         return event
 
     def reset(self) -> None:
         self._history.clear()
         self._latest = None
+        self._latest_row = None
 
 
 class ExpansionDetector:
     """Detect volatility or volume expansion against completed prior medians."""
 
-    def __init__(self, config: ExpansionConfig | None = None) -> None:
+    def __init__(
+        self, config: ExpansionConfig | None = None, *, registry: FeatureRegistry
+    ) -> None:
         self.config = ExpansionConfig() if config is None else config
         if not isinstance(self.config, ExpansionConfig):
             raise TypeError("config must be an ExpansionConfig")
+        if not isinstance(registry, FeatureRegistry):
+            raise TypeError("registry must be a FeatureRegistry")
+        self.registry = registry
         self._volatility: deque[float] = deque(maxlen=self.config.history_window)
         self._volume: deque[float] = deque(maxlen=self.config.history_window)
         self._latest: AuctionSnapshot | None = None
+        self._latest_row: FeatureRow | None = None
 
     @property
     def history_size(self) -> int:
@@ -182,9 +202,15 @@ class ExpansionDetector:
 
     def update(self, snapshot: AuctionSnapshot, row: FeatureRow) -> MarketEvent | None:
         validate_observation_pair(snapshot, row)
+        self.registry.validate_row(row)
         volatility = _numeric_feature(row, self.config.volatility_feature)
         volume = snapshot.latest_candle.volume
-        reset = observation_resets_continuity(self._latest, snapshot)
+        reset = observation_resets_continuity(
+            self._latest,
+            snapshot,
+            previous_row=self._latest_row,
+            current_row=row,
+        )
         if reset:
             self._volatility.clear()
             self._volume.clear()
@@ -218,8 +244,9 @@ class ExpansionDetector:
                 row.timestamp,
                 row.information_cutoff,
                 row,
-                self.config.trigger_version,
-                metadata={
+                    self.config.trigger_version,
+                    registry=self.registry,
+                    metadata={
                     "volatility_feature": self.config.volatility_feature,
                     "current_volatility": volatility,
                     "prior_volatility_median": volatility_baseline,
@@ -239,16 +266,22 @@ class ExpansionDetector:
             self._volatility.append(volatility)
         self._volume.append(volume)
         self._latest = snapshot
+        self._latest_row = row
         return event
 
     def reset(self) -> None:
         self._volatility.clear()
         self._volume.clear()
         self._latest = None
+        self._latest_row = None
 
 
 def observation_resets_continuity(
-    previous: AuctionSnapshot | None, current: AuctionSnapshot
+    previous: AuctionSnapshot | None,
+    current: AuctionSnapshot,
+    *,
+    previous_row: FeatureRow | None = None,
+    current_row: FeatureRow | None = None,
 ) -> bool:
     """Validate ordering and return whether current starts a new causal segment."""
 
@@ -258,6 +291,20 @@ def observation_resets_continuity(
         raise ValueError("event stream symbol changed")
     if current.timeframe != previous.timeframe:
         raise ValueError("event stream timeframe changed")
+    for field in (
+        "dataset_version",
+        "config_version",
+        "profile_definition_id",
+        "window_version",
+    ):
+        if getattr(current, field) != getattr(previous, field):
+            raise ValueError(f"event stream {field} changed")
+    if (previous_row is None) != (current_row is None):
+        raise ValueError("both previous_row and current_row are required for row identity checks")
+    if previous_row is not None and current_row is not None:
+        for field in ("feature_set_id", "registry_id"):
+            if getattr(current_row, field) != getattr(previous_row, field):
+                raise ValueError(f"event stream {field} changed")
     if current.timestamp == previous.timestamp:
         raise ValueError("duplicate event observation timestamp")
     if current.timestamp < previous.timestamp:

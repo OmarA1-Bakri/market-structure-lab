@@ -13,10 +13,12 @@ from types import MappingProxyType
 from typing import Mapping, TypeAlias
 
 from market_structure_lab.features.models import FeatureRow, FeatureValue
+from market_structure_lab.features.registry import FeatureRegistry
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 
 _EVENT_ID = re.compile(r"^EV-[A-F0-9]{64}$")
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PROHIBITED_METADATA_TOKENS = frozenset(
     {
         "forward",
@@ -71,6 +73,8 @@ def _copy_feature_values(values: Mapping[str, FeatureValue]) -> Mapping[str, Fea
     copied: dict[str, FeatureValue] = {}
     for name, value in sorted(values.items()):
         _require_text(name, "feature value name")
+        if frozenset(name.lower().split("_")) & _PROHIBITED_METADATA_TOKENS:
+            raise ValueError(f"prohibited outcome or future feature name: {name}")
         if value is not None and not isinstance(value, (float, int, str)):
             raise TypeError(f"feature {name!r} has an unsupported value type")
         if isinstance(value, float) and not math.isfinite(value):
@@ -105,26 +109,45 @@ def _identity_payload(
     timeframe: str,
     segment_id: int,
     dataset_version: str,
+    config_version: str,
+    profile_version: str,
+    window_policy_id: str,
     feature_set_id: str,
     registry_id: str,
+    registry_sha256: str,
     trigger_version: str,
     exploratory: bool,
     metadata: Mapping[str, JsonScalar],
+    feature_values: Mapping[str, FeatureValue],
 ) -> dict[str, object]:
+    feature_values_sha256 = hashlib.sha256(
+        json.dumps(
+            dict(feature_values),
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
     return {
+        "config_version": config_version,
         "dataset_version": dataset_version,
         "end": _iso_utc(end),
         "exploratory": exploratory,
         "feature_set_id": feature_set_id,
+        "feature_values_sha256": feature_values_sha256,
         "information_cutoff": _iso_utc(information_cutoff),
         "kind": kind.value,
         "metadata": dict(metadata),
+        "profile_version": profile_version,
         "registry_id": registry_id,
+        "registry_sha256": registry_sha256,
         "segment_id": segment_id,
         "start": _iso_utc(start),
         "symbol": symbol,
         "timeframe": timeframe,
         "trigger_version": trigger_version,
+        "window_policy_id": window_policy_id,
     }
 
 
@@ -152,8 +175,12 @@ class MarketEvent:
     timeframe: str
     segment_id: int
     dataset_version: str
+    config_version: str
+    profile_version: str
+    window_policy_id: str
     feature_set_id: str
     registry_id: str
+    registry_sha256: str
     trigger_version: str
     exploratory: bool
     feature_values: Mapping[str, FeatureValue]
@@ -176,11 +203,18 @@ class MarketEvent:
             (self.symbol, "symbol"),
             (self.timeframe, "timeframe"),
             (self.dataset_version, "dataset_version"),
+            (self.config_version, "config_version"),
+            (self.profile_version, "profile_version"),
+            (self.window_policy_id, "window_policy_id"),
             (self.feature_set_id, "feature_set_id"),
             (self.registry_id, "registry_id"),
             (self.trigger_version, "trigger_version"),
         ):
             _require_text(text_value, field)
+        if not isinstance(self.registry_sha256, str) or _SHA256.fullmatch(
+            self.registry_sha256
+        ) is None:
+            raise ValueError("registry_sha256 must be a lowercase SHA-256 digest")
         if isinstance(self.segment_id, bool) or not isinstance(self.segment_id, int):
             raise TypeError("segment_id must be a non-negative integer")
         if self.segment_id < 0:
@@ -203,11 +237,16 @@ class MarketEvent:
                 timeframe=self.timeframe,
                 segment_id=self.segment_id,
                 dataset_version=self.dataset_version,
+                config_version=self.config_version,
+                profile_version=self.profile_version,
+                window_policy_id=self.window_policy_id,
                 feature_set_id=self.feature_set_id,
                 registry_id=self.registry_id,
+                registry_sha256=self.registry_sha256,
                 trigger_version=self.trigger_version,
                 exploratory=self.exploratory,
                 metadata=metadata,
+                feature_values=feature_values,
             )
         )
         if not isinstance(self.event_id, str) or _EVENT_ID.fullmatch(self.event_id) is None:
@@ -226,8 +265,12 @@ class MarketEvent:
             "timeframe": self.timeframe,
             "segment_id": self.segment_id,
             "dataset_version": self.dataset_version,
+            "config_version": self.config_version,
+            "profile_version": self.profile_version,
+            "window_policy_id": self.window_policy_id,
             "feature_set_id": self.feature_set_id,
             "registry_id": self.registry_id,
+            "registry_sha256": self.registry_sha256,
             "trigger_version": self.trigger_version,
             "exploratory": self.exploratory,
             "feature_values": dict(self.feature_values),
@@ -250,6 +293,8 @@ def make_event(
     end: datetime,
     row: FeatureRow,
     trigger_version: str,
+    *,
+    registry: FeatureRegistry,
     exploratory: bool = False,
     metadata: Mapping[str, JsonScalar] | None = None,
 ) -> MarketEvent:
@@ -257,6 +302,9 @@ def make_event(
 
     if not isinstance(row, FeatureRow):
         raise TypeError("row must be a FeatureRow")
+    if not isinstance(registry, FeatureRegistry):
+        raise TypeError("registry must be a FeatureRegistry")
+    registry.validate_row(row)
     if row.information_cutoff != end:
         raise ValueError("event end must equal the feature row information_cutoff")
     copied_metadata = _copy_metadata(metadata or {})
@@ -269,11 +317,16 @@ def make_event(
         timeframe=row.timeframe,
         segment_id=row.segment_id,
         dataset_version=row.dataset_version,
+        config_version=row.config_version,
+        profile_version=row.profile_version,
+        window_policy_id=row.window_policy_id,
         feature_set_id=row.feature_set_id,
         registry_id=row.registry_id,
+        registry_sha256=registry.sha256,
         trigger_version=trigger_version,
         exploratory=exploratory,
         metadata=copied_metadata,
+        feature_values=row.values,
     )
     return MarketEvent(
         event_id=_event_id(**identity),
@@ -285,8 +338,12 @@ def make_event(
         timeframe=row.timeframe,
         segment_id=row.segment_id,
         dataset_version=row.dataset_version,
+        config_version=row.config_version,
+        profile_version=row.profile_version,
+        window_policy_id=row.window_policy_id,
         feature_set_id=row.feature_set_id,
         registry_id=row.registry_id,
+        registry_sha256=registry.sha256,
         trigger_version=trigger_version,
         exploratory=exploratory,
         feature_values=row.values,
