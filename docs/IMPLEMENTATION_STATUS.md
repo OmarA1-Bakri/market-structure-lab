@@ -307,8 +307,25 @@ Task 6 verification completed:
 - immutable dump, interpretation input, and interpretation response hashes matched their pinned
   values.
 
-Repository-wide Phase 4 exit gates are recorded only after the integrating verification pass; this
-section does not claim them in advance.
+Repository-wide integrating verification completed after the live freshness work:
+
+- unit/regression suite: `711 passed, 3 skipped in 97.30s`; the three skips are explicit PostgreSQL
+  integration profiles;
+- the skipped profiles then passed against an isolated disposable database: `3 passed`;
+- Ruff and Ruff formatting: all checks passed, `120` Python files formatted;
+- Mypy: no issues in `68` source files;
+- `uv lock --check`, `uv sync --locked`, source distribution, and wheel build: passed;
+- a fresh Python 3.13 wheel install imported the package, CLI, and discovery API successfully;
+- `docker compose config --quiet`, restore-script shell syntax, archive TOC inspection, and
+  immutable dump SHA-256 verification: passed;
+- durable PostgreSQL verification found zero public application tables, zero forbidden
+  Callscore-derived candle columns, zero ticks, and zero supplements on conflict symbols;
+- the exact 100,000-candle benchmark matched both pinned correctness hashes, passed `512`
+  incremental/full comparisons at `1e-12`, retained a maximum active window of `1,440`, used
+  `1.0248` MiB peak traced memory, and replayed at `730.15` candles/second. Timing is not an
+  acceptance threshold.
+
+The Phase 4 software exit gate is satisfied. Phase 5 remains unstarted and separately gated.
 
 ## Daily candle freshness implementation
 
