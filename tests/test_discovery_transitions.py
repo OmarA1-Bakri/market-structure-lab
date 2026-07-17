@@ -144,9 +144,7 @@ def test_repeated_minute_dwells_reduce_explicit_effective_support() -> None:
     assert matrix.total_transitions == 2
     assert tuple(row.effective_support for row in matrix.rows) == (1, 1)
     assert tuple(
-        destination.effective_support
-        for row in matrix.rows
-        for destination in row.destinations
+        destination.effective_support for row in matrix.rows for destination in row.destinations
     ) == (1, 1)
     assert asdict(matrix.rows[0])["effective_support"] == 1
     assert asdict(matrix.rows[0].destinations[0])["effective_support"] == 1

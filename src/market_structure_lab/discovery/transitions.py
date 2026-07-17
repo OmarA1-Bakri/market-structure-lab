@@ -71,9 +71,7 @@ class ClusterTransitionEstimate:
         confidence_low = _unit_interval(self.confidence_low, "confidence_low")
         confidence_high = _unit_interval(self.confidence_high, "confidence_high")
         if confidence_low > probability or probability > confidence_high:
-            raise ValueError(
-                "confidence bounds must contain the observed transition probability"
-            )
+            raise ValueError("confidence bounds must contain the observed transition probability")
         object.__setattr__(self, "probability", probability)
         object.__setattr__(self, "confidence_low", confidence_low)
         object.__setattr__(self, "confidence_high", confidence_high)
@@ -212,9 +210,7 @@ class ClusterTransitionMatrix:
             minimum=1,
         )
         if iterations > _MAX_BOOTSTRAP_ITERATIONS:
-            raise ValueError(
-                f"bootstrap_iterations cannot exceed {_MAX_BOOTSTRAP_ITERATIONS}"
-            )
+            raise ValueError(f"bootstrap_iterations cannot exceed {_MAX_BOOTSTRAP_ITERATIONS}")
         block_length = _bounded_integer(self.block_length, "block_length", minimum=1)
         if block_length > _MAX_BLOCK_LENGTH:
             raise ValueError(f"block_length cannot exceed {_MAX_BLOCK_LENGTH}")
@@ -226,10 +222,7 @@ class ClusterTransitionMatrix:
         sequence_count = self.boundary_evidence.contiguous_sequence_count
         maximum_transitions = (
             max(
-                self.boundary_evidence.dwell_run_count
-                - sequence_count
-                - self.horizon
-                + 1,
+                self.boundary_evidence.dwell_run_count - sequence_count - self.horizon + 1,
                 0,
             )
             if sequence_count > 0

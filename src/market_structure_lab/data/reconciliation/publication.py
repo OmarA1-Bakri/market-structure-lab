@@ -258,8 +258,7 @@ def verify_work_unit_publication(directory: Path) -> WorkUnitManifest:
 def _publication_path(run_id: str, work_unit: ReconciliationWorkUnit) -> str:
     start = datetime.fromtimestamp(work_unit.start_ms / 1_000, tz=UTC)
     return (
-        f"run_id={run_id}/symbol={work_unit.symbol}/"
-        f"year={start.year:04d}/month={start.month:02d}"
+        f"run_id={run_id}/symbol={work_unit.symbol}/year={start.year:04d}/month={start.month:02d}"
     )
 
 

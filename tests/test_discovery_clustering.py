@@ -167,9 +167,7 @@ def test_pca_rejects_repeated_or_near_repeated_selected_subspaces(
     n_components: int,
     second_singular_value: float,
 ) -> None:
-    matrix = _matrix(
-        ((0.0, 0.0, 0.0), (1.0, 2.0, 3.0), (3.0, 1.0, 2.0), (4.0, 4.0, 1.0))
-    )
+    matrix = _matrix(((0.0, 0.0, 0.0), (1.0, 2.0, 3.0), (3.0, 1.0, 2.0), (4.0, 4.0, 1.0)))
     scipy_svd = pca_module.svd
 
     def repeated_svd(*args, **kwargs):

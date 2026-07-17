@@ -271,8 +271,7 @@ class BinanceSpotSource:
             notes: tuple[str, ...] = ()
             if count:
                 notes = (
-                    "archive_off_minute_grid:"
-                    f"first={first_excluded_ms}:last={last_excluded_ms}",
+                    f"archive_off_minute_grid:first={first_excluded_ms}:last={last_excluded_ms}",
                 )
             excluded_count = 0
             first_excluded_ms = None
@@ -526,9 +525,7 @@ def iter_archive_klines(
                         open_time_ms = normalize_spot_timestamp_ms(raw[0])
                         if open_time_ms % MINUTE_MS:
                             if start_ms <= open_time_ms < end_ms and on_exclusion is not None:
-                                on_exclusion(
-                                    ArchiveRowExclusion(open_time_ms, "off_minute_grid")
-                                )
+                                on_exclusion(ArchiveRowExclusion(open_time_ms, "off_minute_grid"))
                             continue
                         row = parse_kline_row(raw, symbol=symbol, timeframe=timeframe)
                         if start_ms <= row.open_time_ms < end_ms:

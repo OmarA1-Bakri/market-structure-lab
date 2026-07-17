@@ -79,8 +79,7 @@ class ReconciliationRecord:
             raise ValueError("record timestamp must be minute-aligned")
         for value in (self.dump_row_sha256, self.binance_row_sha256):
             if value is not None and (
-                len(value) != 64
-                or any(character not in "0123456789abcdef" for character in value)
+                len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
             ):
                 raise ValueError("record row hashes must be lowercase SHA-256 digests")
 

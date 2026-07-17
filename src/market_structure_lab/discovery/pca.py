@@ -70,8 +70,7 @@ def fit_pca(matrix: FeatureMatrix, n_components: int) -> PCAProjection:
         tuple(
             _canonical_float(
                 math.fsum(
-                    (value - means[column]) * component[column]
-                    for column, value in enumerate(row)
+                    (value - means[column]) * component[column] for column, value in enumerate(row)
                 )
             )
             for component in components
@@ -196,26 +195,18 @@ def _canonical_component(component: tuple[float, ...]) -> tuple[float, ...]:
     return tuple(_canonical_float(direction * value) for value in canonical)
 
 
-def _require_identifiable_subspace(
-    singular_values: Iterable[float], n_components: int
-) -> None:
+def _require_identifiable_subspace(singular_values: Iterable[float], n_components: int) -> None:
     values = tuple(float(value) for value in singular_values)
     leading = values[0]
-    numerical_rank = sum(
-        value > leading * _SINGULAR_SUBSPACE_RELATIVE_GAP for value in values
-    )
+    numerical_rank = sum(value > leading * _SINGULAR_SUBSPACE_RELATIVE_GAP for value in values)
     if n_components > numerical_rank:
-        raise ValueError(
-            "selected PCA singular-value subspace must be uniquely identifiable"
-        )
+        raise ValueError("selected PCA singular-value subspace must be uniquely identifiable")
     comparison_count = n_components if n_components < len(values) else n_components - 1
     for index in range(comparison_count):
         left, right = values[index], values[index + 1]
         scale = max(abs(left), abs(right))
         if scale == 0.0 or abs(left - right) <= scale * _SINGULAR_SUBSPACE_RELATIVE_GAP:
-            raise ValueError(
-                "selected PCA singular-value subspace must be uniquely identifiable"
-            )
+            raise ValueError("selected PCA singular-value subspace must be uniquely identifiable")
 
 
 def _canonical_float(value: float) -> float:

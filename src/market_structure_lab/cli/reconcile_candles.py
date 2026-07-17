@@ -117,7 +117,9 @@ def _plan(args: argparse.Namespace) -> int:
     selected = set(args.symbol) if args.symbol else available
     unknown = selected - available
     if unknown:
-        raise ValueError(f"symbols are absent from compatibility evidence: {', '.join(sorted(unknown))}")
+        raise ValueError(
+            f"symbols are absent from compatibility evidence: {', '.join(sorted(unknown))}"
+        )
     cutoff = _parse_minute(args.cutoff, "cutoff")
     cutoff_ms = int(cutoff.timestamp() * 1_000)
     history_start_ms = int(CANONICAL_HISTORY_START.timestamp() * 1_000)
@@ -378,7 +380,9 @@ def _coverage_for_run(run, manifests, output_root: Path):
 
 def _merge_coverage(intervals):
     merged: list[VerifiedCoverageInterval] = []
-    for item in sorted(intervals, key=lambda value: (value.symbol, value.timeframe, value.start_ms)):
+    for item in sorted(
+        intervals, key=lambda value: (value.symbol, value.timeframe, value.start_ms)
+    ):
         if (
             merged
             and (merged[-1].symbol, merged[-1].timeframe) == (item.symbol, item.timeframe)

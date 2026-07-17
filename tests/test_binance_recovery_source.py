@@ -203,9 +203,7 @@ def test_archive_quarantines_off_grid_rows_with_durable_provenance(tmp_path) -> 
     ]
     assert sum(batch.provenance.excluded_row_count for batch in batches) == 1
     notes = tuple(note for batch in batches for note in batch.provenance.integrity_notes)
-    assert notes == (
-        f"archive_off_minute_grid:first={start + 60_123}:last={start + 60_123}",
-    )
+    assert notes == (f"archive_off_minute_grid:first={start + 60_123}:last={start + 60_123}",)
 
 
 def test_api_is_bounded_hashed_retried_and_empty_is_explicit(tmp_path) -> None:

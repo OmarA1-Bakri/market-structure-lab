@@ -153,12 +153,26 @@ def test_execute_work_unit_publishes_provenance_replacements_and_split_coverage(
     source = FakeSource(
         (
             _source(0),
-            _source(60_000, open=Decimal("30"), high=Decimal("31"), low=Decimal("29"),
-                    close=Decimal("30"), volume=Decimal("3"), quote_volume=Decimal("90"),
-                    trades=3),
-            _source(120_000, open=Decimal("35"), high=Decimal("36"), low=Decimal("34"),
-                    close=Decimal("35"), volume=Decimal("3.5"),
-                    quote_volume=Decimal("122.5"), trades=4),
+            _source(
+                60_000,
+                open=Decimal("30"),
+                high=Decimal("31"),
+                low=Decimal("29"),
+                close=Decimal("30"),
+                volume=Decimal("3"),
+                quote_volume=Decimal("90"),
+                trades=3,
+            ),
+            _source(
+                120_000,
+                open=Decimal("35"),
+                high=Decimal("36"),
+                low=Decimal("34"),
+                close=Decimal("35"),
+                volume=Decimal("3.5"),
+                quote_volume=Decimal("122.5"),
+                trades=4,
+            ),
         )
     )
 
@@ -178,9 +192,7 @@ def test_execute_work_unit_publishes_provenance_replacements_and_split_coverage(
         ReconciliationClass.BINANCE_CORRECTION,
         ReconciliationClass.BINANCE_FILL,
     ]
-    assert [(item.start_ms, item.end_ms) for item in result.verified_coverage] == [
-        (0, 180_000)
-    ]
+    assert [(item.start_ms, item.end_ms) for item in result.verified_coverage] == [(0, 180_000)]
     ledger = tmp_path / result.manifest.publication_path / "part-00000.parquet"
     assert pl.read_parquet(ledger)["classification"].to_list() == [
         "exact_match",

@@ -189,10 +189,7 @@ def _differing_fields(
     return tuple(
         field
         for field in _COMPARISON_FIELDS
-        if not (
-            field in ("quote_volume", "trades")
-            and getattr(dump, field) is None
-        )
+        if not (field in ("quote_volume", "trades") and getattr(dump, field) is None)
         and getattr(dump, field) != getattr(source, field)
     )
 
@@ -219,9 +216,7 @@ def _validate_row(
         raise ValueError(f"{stream_name} row contains negative volume")
     if row.trades is not None and row.trades < 0:
         raise ValueError(f"{stream_name} row contains a negative trade count")
-    if row.high < max(row.open, row.low, row.close) or row.low > min(
-        row.open, row.high, row.close
-    ):
+    if row.high < max(row.open, row.low, row.close) or row.low > min(row.open, row.high, row.close):
         raise ValueError(f"{stream_name} row violates OHLC relationships")
 
 
