@@ -30,7 +30,7 @@ def _compatibility(path: Path) -> RecoveryManifest:
         market_type="spot",
         envelopes=(
             ObservedEnvelope("BTCUSDT", "1m", 0, 120_000, 2),
-            ObservedEnvelope("ETHUSDT", "1m", 0, 120_000, 2),
+            ObservedEnvelope("ETHUSDT", "1m", 60_000, 120_000, 1),
         ),
         gaps=(),
         provenance_validation={
@@ -96,6 +96,43 @@ def test_plan_freezes_selected_symbols_and_month_work_units(
     assert {item.symbol for item in run.envelopes} == {"BTCUSDT", "ETHUSDT"}
     assert run.dump_sha256 == _sha("a")
     assert run.algorithm_version == "row-reconciliation-v2"
+
+
+def test_plan_full_envelopes_uses_each_symbols_first_observation_to_cutoff(
+    tmp_path: Path,
+) -> None:
+    compatibility_path = tmp_path / "compatibility.json"
+    compatibility = _compatibility(compatibility_path)
+    output = tmp_path / "RR-000099.json"
+
+    exit_code = main(
+        [
+            "plan",
+            "--run-id",
+            "RR-000099",
+            "--compatibility",
+            str(compatibility_path),
+            "--compatibility-sha256",
+            compatibility.sha256(),
+            "--full-envelopes",
+            "--cutoff",
+            "1970-02-01T00:00:00Z",
+            "--code-commit",
+            "deadbeef",
+            "--uv-lock-sha256",
+            _sha("b"),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    run = read_reconciliation_run(output)
+    by_symbol = {item.symbol: item for item in run.envelopes}
+    assert by_symbol["BTCUSDT"].start_ms == 0
+    assert by_symbol["ETHUSDT"].start_ms == 60_000
+    assert {item.end_ms for item in run.envelopes} == {2_678_400_000}
+    assert len(run.work_units) == 2
 
 
 def test_plan_rejects_unknown_symbols_and_changed_compatibility_hash(

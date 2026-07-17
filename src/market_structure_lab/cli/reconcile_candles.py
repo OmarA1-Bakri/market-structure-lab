@@ -47,8 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--run-id", required=True)
     plan.add_argument("--compatibility", type=Path, required=True)
     plan.add_argument("--compatibility-sha256", required=True)
-    plan.add_argument("--start", required=True)
-    plan.add_argument("--end", required=True)
+    plan.add_argument("--start")
+    plan.add_argument("--end")
+    plan.add_argument(
+        "--full-envelopes",
+        action="store_true",
+        help="start each symbol at its first immutable observation and end at cutoff",
+    )
     plan.add_argument("--cutoff", required=True)
     plan.add_argument("--symbol", action="append", default=[])
     plan.add_argument("--code-commit", required=True)
@@ -111,16 +116,35 @@ def _plan(args: argparse.Namespace) -> int:
     unknown = selected - available
     if unknown:
         raise ValueError(f"symbols are absent from compatibility evidence: {', '.join(sorted(unknown))}")
-    start = _parse_minute(args.start, "start")
-    end = _parse_minute(args.end, "end")
     cutoff = _parse_minute(args.cutoff, "cutoff")
-    if not start < end <= cutoff:
-        raise ValueError("reconciliation requires start < end <= cutoff")
-    start_ms = int(start.timestamp() * 1_000)
-    end_ms = int(end.timestamp() * 1_000)
-    envelopes = tuple(
-        TradingEnvelope(symbol, "1m", start_ms, end_ms) for symbol in sorted(selected)
-    )
+    cutoff_ms = int(cutoff.timestamp() * 1_000)
+    if args.full_envelopes:
+        if args.start is not None or args.end is not None:
+            raise ValueError("full-envelope planning cannot also specify start or end")
+        evidence = {item.symbol: item for item in compatibility.envelopes}
+        envelopes = tuple(
+            TradingEnvelope(
+                symbol,
+                evidence[symbol].timeframe,
+                evidence[symbol].first_open_time_ms,
+                cutoff_ms,
+            )
+            for symbol in sorted(selected)
+        )
+        if any(item.start_ms >= item.end_ms for item in envelopes):
+            raise ValueError("a selected evidence envelope starts at or after the cutoff")
+    else:
+        if args.start is None or args.end is None:
+            raise ValueError("fixed-window planning requires both start and end")
+        start = _parse_minute(args.start, "start")
+        end = _parse_minute(args.end, "end")
+        if not start < end <= cutoff:
+            raise ValueError("reconciliation requires start < end <= cutoff")
+        start_ms = int(start.timestamp() * 1_000)
+        end_ms = int(end.timestamp() * 1_000)
+        envelopes = tuple(
+            TradingEnvelope(symbol, "1m", start_ms, end_ms) for symbol in sorted(selected)
+        )
     units = tuple(
         unit
         for envelope in envelopes

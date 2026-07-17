@@ -8,6 +8,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import batched
 
 from sqlalchemy import Connection, text
 
@@ -181,11 +182,8 @@ ON CONFLICT (run_id, work_unit_id) DO NOTHING
         ).scalar_one()
         if stored != manifest.manifest_sha256:
             raise ValueError("registered reconciliation work unit contains different content")
-        inserted = 0
-        for row in rows:
-            result = self.connection.execute(
-                text(
-                    """
+        replacement_statement = text(
+            """
 INSERT INTO market_data.candle_reconciliation_replacements (
     run_id, work_unit_id, symbol, "interval", open_time, classification,
     open, high, low, close, volume, quote_volume, trades, source_name,
@@ -197,16 +195,22 @@ INSERT INTO market_data.candle_reconciliation_replacements (
 )
 ON CONFLICT (run_id, symbol, "interval", open_time) DO NOTHING
 """
-                ),
-                {
-                    **asdict(row),
-                    "classification": row.classification.value,
-                    "retrieved_at": _parse_utc(row.retrieved_at),
-                },
+        )
+        before = _database_replacement_count(self.connection, manifest)
+        for batch in batched(rows, 5_000):
+            self.connection.execute(
+                replacement_statement,
+                [
+                    {
+                        **asdict(row),
+                        "classification": row.classification.value,
+                        "retrieved_at": _parse_utc(row.retrieved_at),
+                    }
+                    for row in batch
+                ],
             )
-            inserted += result.rowcount
         _verify_database_replacements(self.connection, manifest, rows)
-        return inserted
+        return _database_replacement_count(self.connection, manifest) - before
 
     def promote(
         self,
@@ -373,6 +377,21 @@ ORDER BY symbol, "interval", open_time
     )
     if actual != wanted:
         raise ValueError("database replacements differ from the verified work-unit evidence")
+
+
+def _database_replacement_count(
+    connection: Connection,
+    manifest: WorkUnitManifest,
+) -> int:
+    return int(
+        connection.execute(
+            text(
+                "SELECT count(*) FROM market_data.candle_reconciliation_replacements "
+                "WHERE run_id=:run_id AND work_unit_id=:work_unit_id"
+            ),
+            {"run_id": manifest.run_id, "work_unit_id": manifest.work_unit_id},
+        ).scalar_one()
+    )
 
 
 def _validate_coverage(
