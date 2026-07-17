@@ -180,6 +180,34 @@ def test_archive_iterator_rejects_duplicate_keys(tmp_path) -> None:
         )
 
 
+def test_archive_quarantines_off_grid_rows_with_durable_provenance(tmp_path) -> None:
+    start = 1_735_689_600_000
+    archive = _zip_bytes(
+        [
+            _row(start * 1_000),
+            _row(start + 60_123),
+            _row((start + 120_000) * 1_000),
+        ]
+    )
+    digest = hashlib.sha256(archive).hexdigest()
+    filename = "BTCUSDT-1m-2025-01-01.zip"
+    base = f"https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1m/{filename}"
+    transport = FakeTransport({base: archive, f"{base}.CHECKSUM": f"{digest}  {filename}".encode()})
+    source = BinanceSpotSource(tmp_path, transport=transport, sleep=lambda _: None)
+
+    batches = list(source.fetch(FetchRequest("BTCUSDT", "1m", start, start + 86_400_000)))
+
+    assert [row.open_time_ms for batch in batches for row in batch.rows] == [
+        start,
+        start + 120_000,
+    ]
+    assert sum(batch.provenance.excluded_row_count for batch in batches) == 1
+    notes = tuple(note for batch in batches for note in batch.provenance.integrity_notes)
+    assert notes == (
+        f"archive_off_minute_grid:first={start + 60_123}:last={start + 60_123}",
+    )
+
+
 def test_api_is_bounded_hashed_retried_and_empty_is_explicit(tmp_path) -> None:
     start = 1_735_689_660_000
     request = FetchRequest("BTCUSDT", "1m", start, start + 60_000)

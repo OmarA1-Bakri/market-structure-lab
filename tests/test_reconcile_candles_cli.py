@@ -95,7 +95,7 @@ def test_plan_freezes_selected_symbols_and_month_work_units(
     assert payload["work_units"] == 4
     assert {item.symbol for item in run.envelopes} == {"BTCUSDT", "ETHUSDT"}
     assert run.dump_sha256 == _sha("a")
-    assert run.algorithm_version == "row-reconciliation-v2"
+    assert run.algorithm_version == "row-reconciliation-v3"
 
 
 def test_plan_full_envelopes_uses_each_symbols_first_observation_to_cutoff(

@@ -193,6 +193,8 @@ def _artifact(provenance: SourceProvenance) -> SourceArtifactIdentity:
         published_sha256=provenance.published_checksum,
         source_revision=provenance.source_revision,
         retrieved_at=provenance.retrieved_at,
+        excluded_row_count=provenance.excluded_row_count,
+        integrity_notes=provenance.integrity_notes,
     )
 
 

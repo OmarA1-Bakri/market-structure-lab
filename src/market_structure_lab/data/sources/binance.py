@@ -123,6 +123,12 @@ class FetchSegment:
     archive_period: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ArchiveRowExclusion:
+    open_time_ms: int
+    reason: str
+
+
 def normalize_spot_timestamp_ms(raw: object) -> int:
     """Normalize Binance archive/API millisecond or microsecond timestamps."""
     try:
@@ -248,21 +254,61 @@ class BinanceSpotSource:
         artifact = self._download_verified_archive(url)
         rows: list[SourceKline] = []
         emitted = False
+        excluded_count = 0
+        first_excluded_ms: int | None = None
+        last_excluded_ms: int | None = None
+
+        def record_exclusion(exclusion: ArchiveRowExclusion) -> None:
+            nonlocal excluded_count, first_excluded_ms, last_excluded_ms
+            excluded_count += 1
+            if first_excluded_ms is None:
+                first_excluded_ms = exclusion.open_time_ms
+            last_excluded_ms = exclusion.open_time_ms
+
+        def exclusion_metadata() -> tuple[int, tuple[str, ...]]:
+            nonlocal excluded_count, first_excluded_ms, last_excluded_ms
+            count = excluded_count
+            notes: tuple[str, ...] = ()
+            if count:
+                notes = (
+                    "archive_off_minute_grid:"
+                    f"first={first_excluded_ms}:last={last_excluded_ms}",
+                )
+            excluded_count = 0
+            first_excluded_ms = None
+            last_excluded_ms = None
+            return count, notes
+
         for row in iter_archive_klines(
             artifact.path,
             symbol=request.symbol,
             timeframe=request.timeframe,
             start_ms=request.start_ms,
             end_ms=request.end_ms,
+            on_exclusion=record_exclusion,
         ):
             rows.append(row)
             if len(rows) == REST_KLINE_LIMIT:
                 emitted = True
-                yield self._archive_batch(request, tuple(rows), artifact)
+                count, notes = exclusion_metadata()
+                yield self._archive_batch(
+                    request,
+                    tuple(rows),
+                    artifact,
+                    excluded_row_count=count,
+                    integrity_notes=notes,
+                )
                 rows.clear()
-        if rows:
+        if rows or excluded_count:
             emitted = True
-            yield self._archive_batch(request, tuple(rows), artifact)
+            count, notes = exclusion_metadata()
+            yield self._archive_batch(
+                request,
+                tuple(rows),
+                artifact,
+                excluded_row_count=count,
+                integrity_notes=notes,
+            )
         if not emitted:
             yield self._archive_batch(request, (), artifact)
 
@@ -271,6 +317,9 @@ class BinanceSpotSource:
         request: FetchRequest,
         rows: tuple[SourceKline, ...],
         artifact: DownloadArtifact,
+        *,
+        excluded_row_count: int = 0,
+        integrity_notes: tuple[str, ...] = (),
     ) -> FetchBatch:
         batch_request = request
         if rows:
@@ -290,6 +339,8 @@ class BinanceSpotSource:
                 payload_checksum=artifact.checksum_sha256,
                 published_checksum=artifact.published_checksum,
                 retrieved_at=artifact.retrieved_at,
+                excluded_row_count=excluded_row_count,
+                integrity_notes=integrity_notes,
             ),
             authoritative_empty=not rows,
         )
@@ -458,6 +509,7 @@ def iter_archive_klines(
     timeframe: str,
     start_ms: int,
     end_ms: int,
+    on_exclusion: Callable[[ArchiveRowExclusion], None] | None = None,
 ) -> Iterator[SourceKline]:
     seen: set[int] = set()
     try:
@@ -470,6 +522,13 @@ def iter_archive_klines(
                     text_stream = io.TextIOWrapper(binary, encoding="utf-8", newline="")
                     for raw in csv.reader(text_stream):
                         if not raw or raw[0].strip().lower() in {"open_time", "open time"}:
+                            continue
+                        open_time_ms = normalize_spot_timestamp_ms(raw[0])
+                        if open_time_ms % MINUTE_MS:
+                            if start_ms <= open_time_ms < end_ms and on_exclusion is not None:
+                                on_exclusion(
+                                    ArchiveRowExclusion(open_time_ms, "off_minute_grid")
+                                )
                             continue
                         row = parse_kline_row(raw, symbol=symbol, timeframe=timeframe)
                         if start_ms <= row.open_time_ms < end_ms:

@@ -66,6 +66,11 @@ hash, source row count, mapping version, observed envelopes, exact internal gaps
 and per-symbol provenance decision. Binance Spot archive files are accepted only after their
 published SHA-256 checksums pass; REST residual responses are content-hashed. Every gap receives a
 terminal ledger classification, including source conflicts and authoritative provider absence.
+Checksum-valid archive rows that do not lie on the one-minute UTC grid are quarantined rather than
+rounded. Their count and first/last timestamps remain in the work-unit provenance; the affected
+canonical minute keys remain unavailable and form sequence boundaries. Listing boundaries,
+maintenance halts, delistings, and venue outages are non-trading boundaries, never candles to
+synthesize.
 
 Recovery tables are append-only and the command resumes each gap after its last completed bounded
 batch. A PostgreSQL advisory lock serializes recovery publication, and a partial unique index permits

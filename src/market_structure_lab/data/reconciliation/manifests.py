@@ -44,6 +44,8 @@ class SourceArtifactIdentity:
     published_sha256: str | None
     source_revision: str
     retrieved_at: str
+    excluded_row_count: int = 0
+    integrity_notes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.location:
@@ -53,6 +55,12 @@ class SourceArtifactIdentity:
             _require_sha(self.published_sha256, "published_sha256")
         _require_component(self.source_revision, "source_revision")
         _parse_utc(self.retrieved_at)
+        if self.excluded_row_count < 0:
+            raise ValueError("excluded source row count cannot be negative")
+        if self.integrity_notes != tuple(sorted(set(self.integrity_notes))):
+            raise ValueError("source integrity notes must be unique and sorted")
+        if any(not note for note in self.integrity_notes):
+            raise ValueError("source integrity notes cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +222,7 @@ class WorkUnitManifest:
             "row_count": self.row_count,
             "classification_counts": dict(self.classification_counts),
             "differing_field_counts": dict(self.differing_field_counts),
-            "source_artifacts": [asdict(item) for item in self.source_artifacts],
+            "source_artifacts": [_source_artifact_dict(item) for item in self.source_artifacts],
             "replacement_row_count": self.replacement_row_count,
             "replacement_logical_sha256": self.replacement_logical_sha256,
             "max_rows_per_part": self.max_rows_per_part,
@@ -295,8 +303,7 @@ def work_unit_manifest_from_dict(raw: Mapping[str, object]) -> WorkUnitManifest:
         classification_counts=classification_counts,
         differing_field_counts=differing_counts,
         source_artifacts=tuple(
-            SourceArtifactIdentity(**dict(item))  # type: ignore[arg-type]
-            for item in _sequence(raw["source_artifacts"])
+            _source_artifact_from_dict(item) for item in _sequence(raw["source_artifacts"])
         ),
         replacement_row_count=int(str(raw["replacement_row_count"])),
         replacement_logical_sha256=str(raw["replacement_logical_sha256"]),
@@ -362,6 +369,38 @@ def _mapping_counts(value: object) -> tuple[tuple[str, int], ...]:
     if not isinstance(value, Mapping):
         raise ValueError("manifest counts must be a JSON object")
     return tuple(sorted((str(key), int(str(count))) for key, count in value.items()))
+
+
+def _source_artifact_dict(item: SourceArtifactIdentity) -> dict[str, object]:
+    value: dict[str, object] = {
+        "location": item.location,
+        "payload_sha256": item.payload_sha256,
+        "published_sha256": item.published_sha256,
+        "source_revision": item.source_revision,
+        "retrieved_at": item.retrieved_at,
+    }
+    if item.excluded_row_count:
+        value["excluded_row_count"] = item.excluded_row_count
+    if item.integrity_notes:
+        value["integrity_notes"] = list(item.integrity_notes)
+    return value
+
+
+def _source_artifact_from_dict(raw: Mapping[str, object]) -> SourceArtifactIdentity:
+    notes = raw.get("integrity_notes", ())
+    if not isinstance(notes, (list, tuple)) or not all(isinstance(note, str) for note in notes):
+        raise ValueError("source integrity notes must be a string list")
+    return SourceArtifactIdentity(
+        location=str(raw["location"]),
+        payload_sha256=str(raw["payload_sha256"]),
+        published_sha256=(
+            None if raw.get("published_sha256") is None else str(raw["published_sha256"])
+        ),
+        source_revision=str(raw["source_revision"]),
+        retrieved_at=str(raw["retrieved_at"]),
+        excluded_row_count=int(str(raw.get("excluded_row_count", 0))),
+        integrity_notes=tuple(notes),
+    )
 
 
 def _sequence(value: object) -> Sequence[Mapping[str, object]]:

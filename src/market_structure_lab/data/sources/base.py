@@ -104,6 +104,16 @@ class SourceProvenance:
     payload_checksum: str
     retrieved_at: str
     published_checksum: str | None = None
+    excluded_row_count: int = 0
+    integrity_notes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.excluded_row_count < 0:
+            raise ValueError("excluded source row count cannot be negative")
+        if self.integrity_notes != tuple(sorted(set(self.integrity_notes))):
+            raise ValueError("source integrity notes must be unique and sorted")
+        if any(not note for note in self.integrity_notes):
+            raise ValueError("source integrity notes cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)

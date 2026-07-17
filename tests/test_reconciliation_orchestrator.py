@@ -50,9 +50,17 @@ def _source(timestamp: int, **overrides: object) -> SourceKline:
 class FakeSource:
     name = "binance_spot"
 
-    def __init__(self, rows: tuple[SourceKline, ...]) -> None:
+    def __init__(
+        self,
+        rows: tuple[SourceKline, ...],
+        *,
+        excluded_row_count: int = 0,
+        integrity_notes: tuple[str, ...] = (),
+    ) -> None:
         self.rows = rows
         self.requests: list[FetchRequest] = []
+        self.excluded_row_count = excluded_row_count
+        self.integrity_notes = integrity_notes
 
     def fetch(self, request: FetchRequest) -> Iterator[FetchBatch]:
         self.requests.append(request)
@@ -66,6 +74,8 @@ class FakeSource:
                 payload_checksum=_sha("c"),
                 published_checksum=_sha("c"),
                 retrieved_at="2026-07-16T00:00:00Z",
+                excluded_row_count=self.excluded_row_count,
+                integrity_notes=self.integrity_notes,
             ),
             authoritative_empty=not self.rows,
         )
@@ -206,3 +216,22 @@ def test_source_integrity_failure_publishes_no_success_marker(
         )
 
     assert not tuple(tmp_path.rglob("_SUCCESS"))
+
+
+def test_execute_work_unit_persists_excluded_source_row_evidence(
+    dump_connection,
+    tmp_path: Path,
+) -> None:
+    run, unit = _run()
+    note = "archive_off_minute_grid:first=60001:last=60001"
+    result = execute_work_unit(
+        dump_connection,
+        FakeSource((_source(0),), excluded_row_count=1, integrity_notes=(note,)),
+        run=run,
+        work_unit=unit,
+        output_root=tmp_path,
+    )
+
+    artifact = result.manifest.source_artifacts[0]
+    assert artifact.excluded_row_count == 1
+    assert artifact.integrity_notes == (note,)
