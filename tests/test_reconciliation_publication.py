@@ -17,6 +17,7 @@ from market_structure_lab.data.reconciliation import (
     publish_work_unit,
     read_work_unit_manifest,
 )
+from market_structure_lab.data.reconciliation.repository import ReconciliationRepository
 
 
 def _sha(character: str) -> str:
@@ -85,6 +86,37 @@ def _artifact() -> SourceArtifactIdentity:
         source_revision="binance-public-data-v1",
         retrieved_at="2026-07-16T00:00:00Z",
     )
+
+
+class _ScalarResult:
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+    def scalar_one(self) -> object:
+        return self.value
+
+
+class _RegisterConnection:
+    def __init__(self, manifest_sha256: str) -> None:
+        self.manifest_sha256 = manifest_sha256
+        self.statements: list[str] = []
+
+    def execute(self, statement: object, parameters: object = None) -> _ScalarResult:
+        sql = str(statement)
+        self.statements.append(sql)
+        if "SELECT manifest_sha256" in sql:
+            return _ScalarResult(self.manifest_sha256)
+        return _ScalarResult(None)
+
+
+def test_repository_waits_for_the_global_publication_lock() -> None:
+    run, _ = _run()
+    connection = _RegisterConnection(run.manifest_sha256)
+
+    ReconciliationRepository(connection).register_run(run)  # type: ignore[arg-type]
+
+    assert "pg_advisory_xact_lock" in connection.statements[0]
+    assert "pg_try_advisory_xact_lock" not in connection.statements[0]
 
 
 def test_publish_work_unit_is_atomic_bounded_and_idempotent(tmp_path: Path) -> None:

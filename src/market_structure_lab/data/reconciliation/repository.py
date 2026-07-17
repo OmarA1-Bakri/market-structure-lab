@@ -314,14 +314,10 @@ WHERE run_id=:run_id
                 raise ValueError("failed reconciliation work units cannot be promoted")
 
     def _acquire_lock(self) -> None:
-        acquired = bool(
-            self.connection.execute(
-                text("SELECT pg_try_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
-                {"lock_name": RECOVERY_ADVISORY_LOCK_NAME},
-            ).scalar_one()
+        self.connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
+            {"lock_name": RECOVERY_ADVISORY_LOCK_NAME},
         )
-        if not acquired:
-            raise RuntimeError("another recovery, reconciliation, or snapshot publication is active")
 
 
 def _verify_replacements(
