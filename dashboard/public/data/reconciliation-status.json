@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-17T02:53:31Z",
+  "connection_mode": "deployment_snapshot",
+  "run_id": "RR-000002",
+  "status": "promoted",
+  "promoted_at": "2026-07-16T17:35:21.061602Z",
+  "cutoff": "2026-07-16T11:23:00Z",
+  "candidate_venue": "binance",
+  "market_type": "spot",
+  "algorithm_version": "row-reconciliation-v2",
+  "mapping_version": "market-data-candles-v1",
+  "code_commit": "4c28a6aa477f1581754e6a180370e7dc5ef96d72",
+  "manifest_sha256": "408cacf93e2ae0416d4be3c158ee3cd9f65af563c5840489161df9570c6e1265",
+  "canonical_logical_sha256": "93105b226169237f71a260505cc21b4085f8d80237ef30ab9047eaa81606231a",
+  "replacement_logical_sha256": "f6794b7898ae66530c421d71a6a8b2cd0118322924999061f536c836269c3310",
+  "dump_sha256": "1b6bcb39af41048b53729e9b094f0229163eb6ff6af9563adb666c96f5fd4da4",
+  "work_units": 25,
+  "verified_symbols": 24,
+  "unavailable_symbols": 1,
+  "row_count": 557075,
+  "replacement_rows": 481332,
+  "classification_counts": {
+    "exact_match": 53460,
+    "binance_correction": 3697,
+    "binance_fill": 477635,
+    "source_unavailable": 22283
+  },
+  "differing_field_counts": {
+    "open": 23,
+    "high": 1515,
+    "low": 1433,
+    "close": 3294,
+    "volume": 3697
+  }
+}

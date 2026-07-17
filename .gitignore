@@ -7,10 +7,14 @@ __pycache__/
 .venv*
 .env
 .pytest_cache/
+.coverage
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/
 .DS_Store
+node_modules/
+dashboard/dist/
+dashboard/output/
 
 # Local database artifacts
 /data/postgres/

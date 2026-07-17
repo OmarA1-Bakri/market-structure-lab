@@ -26,6 +26,22 @@ validation -> edge catalogue -> cost-aware strategies and portfolios.
 This repository uses Python 3.13 and uv. It does not depend on Conda.
 `pyproject.toml` is the single dependency definition.
 
+## Research dashboard
+
+The deployable read-only dashboard lives in [`dashboard/`](dashboard/README.md). It presents the
+verified Phase 0–4 evidence surface, deterministic auction fixture replay, data-health ledger,
+feature registry, discovery software replay, and a local JSON artifact inspector.
+
+```powershell
+cd dashboard
+npm ci
+npm run dev
+```
+
+The UI keeps Phase 5 validation and all strategy, portfolio, execution, and P&L surfaces sealed.
+It does not connect a browser directly to PostgreSQL or imply that software fixtures are market
+evidence.
+
 ### Install dependencies
 
 ```bash
