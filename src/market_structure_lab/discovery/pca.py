@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import math
 import hashlib
 import json
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from scipy.linalg import svd
@@ -12,11 +13,17 @@ from scipy.linalg import svd
 from market_structure_lab.discovery.matrix import FeatureMatrix
 from market_structure_lab.discovery.splits import PartitionRole
 
+_CANONICAL_SIGNIFICANT_DIGITS = 14
+_COMPONENT_ZERO_RELATIVE_TOLERANCE = 64 * math.ulp(1.0)
+_PCA_ALGORITHM_VERSION = "deterministic-pca-v2"
+_SINGULAR_SUBSPACE_RELATIVE_GAP = 1e-12
+
 
 @dataclass(frozen=True, slots=True)
 class PCAProjection:
     """PCA fit details and projected rows in deterministic component orientation."""
 
+    algorithm_version: str
     means: tuple[float, ...]
     components: tuple[tuple[float, ...], ...]
     explained_variance_ratio: tuple[float, ...]
@@ -36,9 +43,11 @@ def fit_pca(matrix: FeatureMatrix, n_components: int) -> PCAProjection:
     if n_components < 1 or n_components > min(len(rows), width):
         raise ValueError("n_components exceeds the available matrix rank dimensions")
 
-    means = tuple(math.fsum(row[column] for row in rows) / len(rows) for column in range(width))
+    fitted_means = tuple(
+        math.fsum(row[column] for row in rows) / len(rows) for column in range(width)
+    )
     centered = tuple(
-        tuple(value - means[column] for column, value in enumerate(row)) for row in rows
+        tuple(value - fitted_means[column] for column, value in enumerate(row)) for row in rows
     )
     _, singular_values, right_vectors = svd(
         centered,
@@ -46,27 +55,35 @@ def fit_pca(matrix: FeatureMatrix, n_components: int) -> PCAProjection:
         check_finite=True,
         lapack_driver="gesvd",
     )
+    _require_identifiable_subspace(singular_values, n_components)
     squared = tuple(float(value) ** 2 for value in singular_values)
     total_variance = math.fsum(squared)
     if total_variance <= 0.0 or not math.isfinite(total_variance):
         raise ValueError("PCA requires positive finite variance")
 
+    means = tuple(_canonical_float(value) for value in fitted_means)
     components = tuple(
         _canonical_component(tuple(float(value) for value in right_vectors[index]))
         for index in range(n_components)
     )
     scores = tuple(
         tuple(
-            math.fsum(value * loading for value, loading in zip(row, component))
+            _canonical_float(
+                math.fsum(
+                    (value - means[column]) * component[column]
+                    for column, value in enumerate(row)
+                )
+            )
             for component in components
         )
-        for row in centered
+        for row in rows
     )
     return PCAProjection(
+        algorithm_version=_PCA_ALGORITHM_VERSION,
         means=means,
         components=components,
         explained_variance_ratio=tuple(
-            squared[index] / total_variance for index in range(n_components)
+            _canonical_float(squared[index] / total_variance) for index in range(n_components)
         ),
         scores=scores,
     )
@@ -82,6 +99,8 @@ def pca_projection_sha256(matrix: FeatureMatrix, projection: PCAProjection) -> s
     rows, width = _validated_values(matrix)
     if not isinstance(projection, PCAProjection):
         raise TypeError("projection must be a PCAProjection")
+    if projection.algorithm_version != _PCA_ALGORITHM_VERSION:
+        raise ValueError("PCA algorithm version must match the current deterministic fit")
     if len(projection.means) != width or not projection.components:
         raise ValueError("PCA projection dimensions do not match its source matrix")
     means = tuple(_finite(value, "PCA mean") for value in projection.means)
@@ -127,6 +146,7 @@ def pca_projection_sha256(matrix: FeatureMatrix, projection: PCAProjection) -> s
             "partition_role": matrix.partition_role.value,
         },
         "projection": {
+            "algorithm_version": projection.algorithm_version,
             "means": means,
             "components": components,
             "explained_variance_ratio": variance,
@@ -166,10 +186,41 @@ def _validated_values(matrix: FeatureMatrix) -> tuple[tuple[tuple[float, ...], .
 
 
 def _canonical_component(component: tuple[float, ...]) -> tuple[float, ...]:
-    pivot = max(range(len(component)), key=lambda index: (abs(component[index]), -index))
-    if component[pivot] < 0.0:
-        return tuple(-value for value in component)
-    return component
+    scale = max(abs(value) for value in component)
+    zero_threshold = scale * _COMPONENT_ZERO_RELATIVE_TOLERANCE
+    canonical = tuple(
+        0.0 if abs(value) <= zero_threshold else _canonical_float(value) for value in component
+    )
+    pivot = max(range(len(canonical)), key=lambda index: (abs(canonical[index]), -index))
+    direction = -1.0 if canonical[pivot] < 0.0 else 1.0
+    return tuple(_canonical_float(direction * value) for value in canonical)
+
+
+def _require_identifiable_subspace(
+    singular_values: Iterable[float], n_components: int
+) -> None:
+    values = tuple(float(value) for value in singular_values)
+    leading = values[0]
+    numerical_rank = sum(
+        value > leading * _SINGULAR_SUBSPACE_RELATIVE_GAP for value in values
+    )
+    if n_components > numerical_rank:
+        raise ValueError(
+            "selected PCA singular-value subspace must be uniquely identifiable"
+        )
+    comparison_count = n_components if n_components < len(values) else n_components - 1
+    for index in range(comparison_count):
+        left, right = values[index], values[index + 1]
+        scale = max(abs(left), abs(right))
+        if scale == 0.0 or abs(left - right) <= scale * _SINGULAR_SUBSPACE_RELATIVE_GAP:
+            raise ValueError(
+                "selected PCA singular-value subspace must be uniquely identifiable"
+            )
+
+
+def _canonical_float(value: float) -> float:
+    canonical = float(format(value, f".{_CANONICAL_SIGNIFICANT_DIGITS}g"))
+    return 0.0 if canonical == 0.0 else canonical
 
 
 def _finite(value: object, label: str) -> float:

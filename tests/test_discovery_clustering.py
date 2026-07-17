@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from market_structure_lab.discovery import kmeans as kmeans_module
+from market_structure_lab.discovery import pca as pca_module
 from market_structure_lab.discovery import (
     FeatureMatrix,
     KMeansResult,
@@ -51,7 +52,7 @@ def _assert_consistent_kmeans(values: tuple[tuple[float, ...], ...], result: KMe
 def test_pca_exposes_means_canonical_signs_variance_and_scores() -> None:
     projection = fit_pca(
         _matrix(((1.0, 2.0), (2.0, 4.0), (3.0, 6.0), (4.0, 8.0))),
-        n_components=2,
+        n_components=1,
     )
 
     assert projection.means == pytest.approx((2.5, 5.0))
@@ -59,11 +60,147 @@ def test_pca_exposes_means_canonical_signs_variance_and_scores() -> None:
     for component in projection.components:
         pivot = max(range(len(component)), key=lambda index: (abs(component[index]), -index))
         assert component[pivot] >= 0.0
-    assert projection.explained_variance_ratio == pytest.approx((1.0, 0.0), abs=1e-15)
-    assert tuple(
-        sum(score[index] for score in projection.scores) for index in range(2)
-    ) == pytest.approx((0.0, 0.0), abs=1e-14)
+    assert projection.explained_variance_ratio == pytest.approx((1.0,), abs=1e-15)
+    assert sum(score[0] for score in projection.scores) == pytest.approx(0.0, abs=1e-14)
     assert projection.scores[0][0] < projection.scores[-1][0]
+
+
+def test_pca_canonicalizes_last_bit_svd_backend_variation(monkeypatch) -> None:
+    matrix = _matrix(((-10.0, -1.0), (-9.0, -0.9), (9.0, 0.9), (10.0, 1.0)))
+    baseline = fit_pca(matrix, 1)
+    baseline_sha256 = pca_projection_sha256(matrix, baseline)
+    scipy_svd = pca_module.svd
+
+    def varied_svd(*args, **kwargs):
+        left_vectors, singular_values, right_vectors = scipy_svd(*args, **kwargs)
+        varied_right_vectors = right_vectors.copy()
+        varied_right_vectors[0, 1] = math.nextafter(
+            math.nextafter(float(varied_right_vectors[0, 1]), 0.0),
+            0.0,
+        )
+        return left_vectors, singular_values, varied_right_vectors
+
+    monkeypatch.setattr(pca_module, "svd", varied_svd)
+    varied = fit_pca(matrix, 1)
+
+    assert varied == baseline
+    assert pca_projection_sha256(matrix, varied) == baseline_sha256
+
+
+def test_pca_orients_canonical_component_when_backend_noise_changes_raw_pivot(
+    monkeypatch,
+) -> None:
+    matrix = _matrix(((-2.0, 2.0), (-1.0, 1.0), (1.0, -1.0), (2.0, -2.0)))
+    scipy_svd = pca_module.svd
+    loading = 1 / math.sqrt(2)
+
+    def tied_pivot_svd(*args, **kwargs):
+        left_vectors, singular_values, right_vectors = scipy_svd(*args, **kwargs)
+        varied = right_vectors.copy()
+        varied[0, 0], varied[0, 1] = loading, -loading
+        return left_vectors, singular_values, varied
+
+    monkeypatch.setattr(pca_module, "svd", tied_pivot_svd)
+    tied = fit_pca(matrix, 1)
+
+    def noisy_pivot_svd(*args, **kwargs):
+        left_vectors, singular_values, right_vectors = scipy_svd(*args, **kwargs)
+        varied = right_vectors.copy()
+        varied[0, 0] = loading
+        varied[0, 1] = -math.nextafter(loading, math.inf)
+        return left_vectors, singular_values, varied
+
+    monkeypatch.setattr(pca_module, "svd", noisy_pivot_svd)
+    noisy = fit_pca(matrix, 1)
+
+    assert noisy == tied
+    assert pca_projection_sha256(matrix, noisy) == pca_projection_sha256(matrix, tied)
+
+
+def test_pca_discards_scale_relative_near_zero_component_noise(monkeypatch) -> None:
+    matrix = _matrix(((-2.0, 0.0), (-1.0, 0.0), (1.0, 0.0), (2.0, 0.0)))
+    scipy_svd = pca_module.svd
+
+    def noisy_svd(*args, **kwargs):
+        left_vectors, singular_values, right_vectors = scipy_svd(*args, **kwargs)
+        varied = right_vectors.copy()
+        varied[0, 1] = 8 * math.ulp(1.0)
+        return left_vectors, singular_values, varied
+
+    baseline = fit_pca(matrix, 1)
+    monkeypatch.setattr(pca_module, "svd", noisy_svd)
+    noisy = fit_pca(matrix, 1)
+
+    assert noisy == baseline
+    assert noisy.components == ((1.0, 0.0),)
+
+
+def test_pca_canonicalizes_singular_value_backend_ulp_variation(monkeypatch) -> None:
+    matrix = _matrix(((0.0, 0.0), (1.0, 2.0), (3.0, 1.0), (4.0, 4.0)))
+    baseline = fit_pca(matrix, 1)
+    scipy_svd = pca_module.svd
+
+    def varied_svd(*args, **kwargs):
+        left_vectors, singular_values, right_vectors = scipy_svd(*args, **kwargs)
+        varied = singular_values.copy()
+        varied[0] = math.nextafter(float(varied[0]), math.inf)
+        return left_vectors, varied, right_vectors
+
+    monkeypatch.setattr(pca_module, "svd", varied_svd)
+    varied = fit_pca(matrix, 1)
+
+    assert varied == baseline
+    assert pca_projection_sha256(matrix, varied) == pca_projection_sha256(matrix, baseline)
+
+
+@pytest.mark.parametrize(
+    ("n_components", "second_singular_value"),
+    [
+        (2, 4.0),
+        (2, 4.0 * (1.0 - 5e-13)),
+        (1, 4.0),
+        (1, 4.0 * (1.0 - 5e-13)),
+    ],
+)
+def test_pca_rejects_repeated_or_near_repeated_selected_subspaces(
+    monkeypatch,
+    n_components: int,
+    second_singular_value: float,
+) -> None:
+    matrix = _matrix(
+        ((0.0, 0.0, 0.0), (1.0, 2.0, 3.0), (3.0, 1.0, 2.0), (4.0, 4.0, 1.0))
+    )
+    scipy_svd = pca_module.svd
+
+    def repeated_svd(*args, **kwargs):
+        left_vectors, singular_values, right_vectors = scipy_svd(*args, **kwargs)
+        varied = singular_values.copy()
+        varied[0], varied[1], varied[2] = 4.0, second_singular_value, 1.0
+        return left_vectors, varied, right_vectors
+
+    monkeypatch.setattr(pca_module, "svd", repeated_svd)
+
+    with pytest.raises(ValueError, match="uniquely identifiable"):
+        fit_pca(matrix, n_components)
+
+
+def test_pca_rejects_selected_implicit_wide_null_space() -> None:
+    matrix = _matrix(((0.0, 0.0, 0.0), (1.0, 2.0, 3.0)))
+
+    with pytest.raises(ValueError, match="uniquely identifiable"):
+        fit_pca(matrix, 2)
+
+
+def test_pca_projection_identity_requires_current_algorithm_version() -> None:
+    matrix = _matrix(((0.0, 0.0), (1.0, 2.0), (2.0, 4.0), (4.0, 8.0)))
+    projection = fit_pca(matrix, 1)
+
+    assert projection.algorithm_version == "deterministic-pca-v2"
+    with pytest.raises(ValueError, match="PCA algorithm version"):
+        pca_projection_sha256(
+            matrix,
+            replace(projection, algorithm_version="deterministic-pca-v1"),
+        )
 
 
 @pytest.mark.parametrize(

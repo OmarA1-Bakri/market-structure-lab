@@ -383,6 +383,7 @@ def _cluster_definition_sha256(
     payload = {
         "algorithm": "deterministic_kmeans_v1",
         "feature_names": feature_names,
+        "pca_algorithm_version": projection.algorithm_version,
         "pca_means": projection.means,
         "pca_components": projection.components,
         "projected_centroids": clustering.centroids,
