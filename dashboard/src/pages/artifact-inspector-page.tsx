@@ -172,7 +172,7 @@ function summarizeArtifact(parsed: unknown): ArtifactSummary {
       kind: "Discovery fixture",
       title: formatted(stable?.run_id),
       detail:
-        "Committed golden replay for deterministic discovery software verification.",
+        "Committed synthetic fixture contract; not real-market experiment evidence.",
       metrics: [
         {
           label: "Discovery rows",

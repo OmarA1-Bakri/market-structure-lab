@@ -1,35 +1,31 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowCounterClockwiseIcon,
   CheckCircleIcon,
   PauseIcon,
   PlayIcon,
-} from "@phosphor-icons/react"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
+} from "@phosphor-icons/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
-import { MetricBlock } from "@/components/metric-block"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Slider } from "@/components/ui/slider"
-import {
-  auctionFrames,
-  verification,
-} from "@/data/lab-data"
-import { cn } from "@/lib/utils"
+import { MetricBlock } from "@/components/metric-block";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { auctionFrames, verification } from "@/data/lab-data";
+import { cn } from "@/lib/utils";
 
-const chartWidth = 640
-const chartHeight = 280
-const padding = { top: 24, right: 26, bottom: 34, left: 42 }
+const chartWidth = 640;
+const chartHeight = 280;
+const padding = { top: 24, right: 26, bottom: 34, left: 42 };
 
 function priceY(value: number) {
-  const min = 99.5
-  const max = 103.5
+  const min = 99.5;
+  const max = 103.5;
   return (
     padding.top +
-    ((max - value) / (max - min)) *
-      (chartHeight - padding.top - padding.bottom)
-  )
+    ((max - value) / (max - min)) * (chartHeight - padding.top - padding.bottom)
+  );
 }
 
 function priceX(index: number) {
@@ -37,18 +33,18 @@ function priceX(index: number) {
     padding.left +
     (index / (auctionFrames.length - 1)) *
       (chartWidth - padding.left - padding.right)
-  )
+  );
 }
 
 function ReplayChart({ frameIndex }: { frameIndex: number }) {
-  const reduceMotion = useReducedMotion()
-  const visible = auctionFrames.slice(0, frameIndex + 1)
+  const reduceMotion = useReducedMotion();
+  const visible = auctionFrames.slice(0, frameIndex + 1);
   const pricePath = visible
     .map(
       (frame, index) =>
         `${index === 0 ? "M" : "L"} ${priceX(index)} ${priceY(frame.price)}`,
     )
-    .join(" ")
+    .join(" ");
 
   return (
     <svg
@@ -117,13 +113,17 @@ function ReplayChart({ frameIndex }: { frameIndex: number }) {
             className="text-foreground/12"
             initial={reduceMotion ? false : { scaleY: 0 }}
             animate={{ scaleY: 1 }}
-            style={{ transformOrigin: `${priceX(index)}px ${priceY(frame.val)}px` }}
+            style={{
+              transformOrigin: `${priceX(index)}px ${priceY(frame.val)}px`,
+            }}
           />
           <motion.circle
             cx={priceX(index)}
             cy={priceY(frame.price)}
             r={index === frameIndex ? 6 : 3.5}
-            className={index === frameIndex ? "fill-primary" : "fill-foreground/65"}
+            className={
+              index === frameIndex ? "fill-primary" : "fill-foreground/65"
+            }
             initial={reduceMotion ? false : { scale: 0 }}
             animate={{ scale: 1 }}
             transition={{ type: "spring", stiffness: 220, damping: 18 }}
@@ -142,32 +142,44 @@ function ReplayChart({ frameIndex }: { frameIndex: number }) {
 
       <g transform={`translate(${chartWidth - 190} 18)`}>
         <circle cx="0" cy="0" r="3" className="fill-primary" />
-        <text x="10" y="3" className="fill-muted-foreground font-mono text-[9px]">
+        <text
+          x="10"
+          y="3"
+          className="fill-muted-foreground font-mono text-[9px]"
+        >
           close
         </text>
-        <circle cx="63" cy="0" r="2.5" className="fill-background stroke-foreground/70" />
-        <text x="73" y="3" className="fill-muted-foreground font-mono text-[9px]">
+        <circle
+          cx="63"
+          cy="0"
+          r="2.5"
+          className="fill-background stroke-foreground/70"
+        />
+        <text
+          x="73"
+          y="3"
+          className="fill-muted-foreground font-mono text-[9px]"
+        >
           VWAP
         </text>
       </g>
     </svg>
-  )
+  );
 }
 
-function VolumeProfile({
-  frameIndex,
-}: {
-  frameIndex: number
-}) {
-  const frame = auctionFrames[frameIndex]
-  const max = Math.max(...frame.bins.map((item) => item.volume), 1)
+function VolumeProfile({ frameIndex }: { frameIndex: number }) {
+  const frame = auctionFrames[frameIndex];
+  const max = Math.max(...frame.bins.map((item) => item.volume), 1);
   return (
     <div className="space-y-3">
       {[103, 102, 101, 100].map((index) => {
-        const bin = frame.bins.find((item) => item.index === index)
-        const volume = bin?.volume ?? 0
+        const bin = frame.bins.find((item) => item.index === index);
+        const volume = bin?.volume ?? 0;
         return (
-          <div key={index} className="grid grid-cols-[2rem_1fr_3rem] items-center gap-3">
+          <div
+            key={index}
+            className="grid grid-cols-[2rem_1fr_3rem] items-center gap-3"
+          >
             <span className="text-right font-mono text-[0.68rem] text-muted-foreground">
               {index}
             </span>
@@ -187,40 +199,40 @@ function VolumeProfile({
               {volume}
             </span>
           </div>
-        )
+        );
       })}
     </div>
-  )
+  );
 }
 
 export function AuctionReplayPage() {
-  const [frameIndex, setFrameIndex] = useState(0)
-  const [playing, setPlaying] = useState(false)
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
-    if (!playing) return
+    if (!playing) return;
     const interval = window.setInterval(() => {
       setFrameIndex((current) => {
         if (current >= auctionFrames.length - 1) {
-          setPlaying(false)
-          return current
+          setPlaying(false);
+          return current;
         }
-        return current + 1
-      })
-    }, 1100)
-    return () => window.clearInterval(interval)
-  }, [playing])
+        return current + 1;
+      });
+    }, 1100);
+    return () => window.clearInterval(interval);
+  }, [playing]);
 
-  const frame = auctionFrames[frameIndex]
+  const frame = auctionFrames[frameIndex];
   const activeLabel = useMemo(
     () => frame.active.map((minute) => `00:0${minute}`).join(" · "),
     [frame.active],
-  )
+  );
 
   const reset = () => {
-    setPlaying(false)
-    setFrameIndex(0)
-  }
+    setPlaying(false);
+    setFrameIndex(0);
+  };
 
   return (
     <div className="space-y-9">
@@ -241,18 +253,21 @@ export function AuctionReplayPage() {
             Replay the deterministic auction boundary.
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground">
-            Four exact fixture candles enter a three-bar rolling window. Volume is
-            held under integer bin indices, the oldest contribution is removed, and
-            every snapshot is pinned by a canonical hash.
+            Four exact fixture candles enter a three-bar rolling window. Volume
+            is held under integer bin indices, the oldest contribution is
+            removed, and the illustrated snapshots show the intended
+            rolling-window mechanics.
           </p>
         </div>
 
         <Alert className="border-border bg-card/40">
           <CheckCircleIcon className="text-primary" />
-          <AlertTitle>Software verification fixture</AlertTitle>
+          <AlertTitle>
+            Illustrative fixture; no verification receipt published
+          </AlertTitle>
           <AlertDescription className="leading-relaxed text-muted-foreground">
-            This replay proves deterministic engine behaviour. It is not a market
-            signal, empirical behaviour, validated edge, or strategy.
+            This browser illustration does not prove replay execution. It is not
+            a market signal, empirical behaviour, validated edge, or strategy.
           </AlertDescription>
         </Alert>
       </section>
@@ -261,9 +276,12 @@ export function AuctionReplayPage() {
         <div className="overflow-hidden rounded-[1.7rem] border border-border bg-card/42 panel-edge">
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-5 py-4">
             <div>
-              <p className="text-sm font-semibold">BTCUSDT · 1m · rolling 3 bars</p>
+              <p className="text-sm font-semibold">
+                BTCUSDT · 1m · rolling 3 bars
+              </p>
               <p className="mt-1 font-mono text-[0.62rem] text-muted-foreground">
-                fixed step 1.0 · uniform touched-bin allocation · value area 0.70
+                fixed step 1.0 · uniform touched-bin allocation · value area
+                0.70
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -279,8 +297,8 @@ export function AuctionReplayPage() {
               <Button
                 type="button"
                 onClick={() => {
-                  if (frameIndex === auctionFrames.length - 1) setFrameIndex(0)
-                  setPlaying((current) => !current)
+                  if (frameIndex === auctionFrames.length - 1) setFrameIndex(0);
+                  setPlaying((current) => !current);
                 }}
                 className="min-w-24"
               >
@@ -305,8 +323,8 @@ export function AuctionReplayPage() {
                 step={1}
                 value={[frameIndex]}
                 onValueChange={(value) => {
-                  setPlaying(false)
-                  setFrameIndex(value[0] ?? 0)
+                  setPlaying(false);
+                  setFrameIndex(value[0] ?? 0);
                 }}
                 aria-label="Replay snapshot"
               />
@@ -370,7 +388,8 @@ export function AuctionReplayPage() {
                 <span className="size-2 rounded-sm bg-primary" /> POC
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="size-2 rounded-sm bg-foreground/18" /> other bins
+                <span className="size-2 rounded-sm bg-foreground/18" /> other
+                bins
               </span>
             </div>
           </div>
@@ -381,24 +400,24 @@ export function AuctionReplayPage() {
         <MetricBlock
           label="Benchmark candles"
           value={verification.benchmarkCandles.toLocaleString()}
-          detail="Deterministic synthetic workload"
+          detail="Illustrative synthetic workload value"
         />
         <MetricBlock
           label="Observed throughput"
           value={verification.benchmarkThroughput.toFixed(2)}
-          detail="Candles per second; not an acceptance threshold"
+          detail="Illustrative value; no receipt in this contract"
         />
         <MetricBlock
           label="Peak traced memory"
           value={`${verification.peakMemoryMib.toFixed(3)} MiB`}
-          detail="Separate 5,000-candle measurement pass"
+          detail="Illustrative value; no receipt in this contract"
         />
         <MetricBlock
           label="Equivalence checks"
           value={verification.equivalenceChecks}
-          detail={`Incremental vs full recomputation at ${verification.absoluteTolerance.toExponential()}`}
+          detail={`Illustrative expected checks at ${verification.absoluteTolerance.toExponential()}`}
         />
       </section>
     </div>
-  )
+  );
 }

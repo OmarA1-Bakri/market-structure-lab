@@ -1,0 +1,849 @@
+{
+  "connection_mode": "deployment_snapshot",
+  "experiment_accuracy": {
+    "claim": "No verified real-trial artifacts are supplied; numeric accuracy is not estimable.",
+    "fixture_trials_counted_as_real": false,
+    "scope": "verified real-trial artifacts supplied to this dashboard contract",
+    "status": "not_estimable",
+    "trial_ledger_status": "not_implemented",
+    "verified_real_trial_artifacts": {
+      "discovery": 0,
+      "hypothesis": 0,
+      "strategy": 0,
+      "total": 0,
+      "validation": 0
+    }
+  },
+  "feature_registry": {
+    "definitions": [
+      {
+        "allowed_categories": [
+          "above_value",
+          "below_value",
+          "lower_value",
+          "no_value",
+          "point_of_control",
+          "upper_value"
+        ],
+        "definition": "Current AuctionSnapshot.location.value category.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "auction_location",
+        "required_prior_observations": 0,
+        "units": "category",
+        "value_kind": "category",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Signed (current close - current open) / (current high - current low).",
+        "family": "sequence",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "body_range_ratio",
+        "required_prior_observations": 0,
+        "units": "fraction_of_range",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current close - current VAL price) / (current VAH price - current VAL price).",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "close_value_position",
+        "required_prior_observations": 0,
+        "units": "fraction",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Mean over current plus 19 trailing snapshots of location in lower_value, point_of_control, or upper_value; null unless all 20 locations are not no_value.",
+        "family": "auction",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "inside_value_rate_20",
+        "required_prior_observations": 19,
+        "units": "fraction",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Consecutive observations in the current auction location, reset at every continuity boundary.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "location_dwell_bars",
+        "required_prior_observations": 0,
+        "units": "bars",
+        "value_kind": "integer",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Natural logarithm of current close / previous close; null when either close is non-positive.",
+        "family": "sequence",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "log_return_1",
+        "required_prior_observations": 1,
+        "units": "log_return",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Natural logarithm of current volume / previous volume; null when either volume is non-positive.",
+        "family": "sequence",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "log_volume_ratio_1",
+        "required_prior_observations": 1,
+        "units": "log_ratio",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(min(current open, current close) - current low) / (current high - current low).",
+        "family": "sequence",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "lower_wick_range_ratio",
+        "required_prior_observations": 0,
+        "units": "fraction_of_range",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Maximum current profile-node persistence in bars, or zero when no nodes exist.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "max_node_persistence_bars",
+        "required_prior_observations": 0,
+        "units": "bars",
+        "value_kind": "integer",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Signed (current close - nearest current HVN representative price) / current close; nearest minimizes absolute price distance.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "nearest_hvn_distance_close",
+        "required_prior_observations": 0,
+        "units": "fraction_of_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Signed (current close - nearest current LVN representative price) / current close; nearest minimizes absolute price distance.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "nearest_lvn_distance_close",
+        "required_prior_observations": 0,
+        "units": "fraction_of_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current close - current POC price) / current close.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "poc_distance_close",
+        "required_prior_observations": 0,
+        "units": "fraction_of_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current POC price - previous POC price) / previous close.",
+        "family": "auction",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "poc_velocity_close_1",
+        "required_prior_observations": 1,
+        "units": "fraction_of_previous_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Current POC-bin volume / current profile total volume.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "poc_volume_share",
+        "required_prior_observations": 0,
+        "units": "fraction",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current high - current low) / current close.",
+        "family": "sequence",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "range_close_fraction",
+        "required_prior_observations": 0,
+        "units": "fraction_of_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Square root of the mean squared log return over the 20 trailing one-observation returns.",
+        "family": "sequence",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "realized_volatility_20",
+        "required_prior_observations": 20,
+        "units": "log_return",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Pearson correlation of the 19 lag-one pairs within the 20 trailing log returns; null when either side has zero variance.",
+        "family": "sequence",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "return_autocorrelation_1_20",
+        "required_prior_observations": 20,
+        "units": "correlation",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current high - max(current open, current close)) / (current high - current low).",
+        "family": "sequence",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "upper_wick_range_ratio",
+        "required_prior_observations": 0,
+        "units": "fraction_of_range",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Cardinality of the intersection divided by the union of previous and current inclusive integer value-area bin ranges.",
+        "family": "auction",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "value_area_jaccard_1",
+        "required_prior_observations": 1,
+        "units": "fraction",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current value-area midpoint - previous value-area midpoint) / previous close.",
+        "family": "auction",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "value_midpoint_velocity_close_1",
+        "required_prior_observations": 1,
+        "units": "fraction_of_previous_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Count of VALUE_REENTRY events over current plus 19 trailing snapshots divided by 20.",
+        "family": "auction",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "value_reentry_rate_20",
+        "required_prior_observations": 19,
+        "units": "events_per_bar",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current VAH price - current VAL price) / current close.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "value_width_close",
+        "required_prior_observations": 0,
+        "units": "fraction_of_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Current log return divided by realized_volatility_20; null when volatility is zero.",
+        "family": "sequence",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "volatility_normalized_return_20",
+        "required_prior_observations": 20,
+        "units": "ratio",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "Current volume / median(current plus 19 trailing volumes) - 1; null when the median is zero.",
+        "family": "sequence",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "volume_relative_median_20",
+        "required_prior_observations": 19,
+        "units": "fraction",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current close - current VWAP) / current close.",
+        "family": "auction",
+        "leakage_class": "AT_CUTOFF",
+        "missing_policy": "null",
+        "name": "vwap_distance_close",
+        "required_prior_observations": 0,
+        "units": "fraction_of_close",
+        "value_kind": "float",
+        "version": "v1"
+      },
+      {
+        "allowed_categories": [],
+        "definition": "(current VWAP - previous VWAP) / previous close.",
+        "family": "auction",
+        "leakage_class": "TRAILING_ONLY",
+        "missing_policy": "null",
+        "name": "vwap_slope_close_1",
+        "required_prior_observations": 1,
+        "units": "fraction_of_previous_close",
+        "value_kind": "float",
+        "version": "v1"
+      }
+    ],
+    "feature_set_id": "FS-000001",
+    "registry_id": "FR-B132C742D7DF",
+    "registry_sha256": "b132c742d7df3dead7d766a8022e606421b7d6fa6b90cf25b27588c24dafb861"
+  },
+  "freshness": {
+    "before_missing_minutes": 7750554,
+    "coverage_conserved": true,
+    "dump_sha256": "1b6bcb39af41048b53729e9b094f0229163eb6ff6af9563adb666c96f5fd4da4",
+    "evidence_timestamp": "2026-07-17T00:15:00Z",
+    "inserted_rows": 11580,
+    "plan_filename": "20260717T001500Z-a1b1085f76e4.plan.json",
+    "plan_sha256": "a1b1085f76e4877d33d62983efa2f78ce5a326e4306679106e9b4eaaf150bea8",
+    "recovered_minutes": 11580,
+    "remaining_missing_minutes": 7738974,
+    "report_filename": "20260717T001500Z-a1b1085f76e4-2f4f848681b7.report.json",
+    "report_sha256": "2f4f848681b71f62e85d5517bc2688ecad08323617b613cf6807f2f930f8967a",
+    "status_counts": {
+      "provider_absent": 12,
+      "recovered": 4,
+      "source_conflict": 9
+    },
+    "symbols": [
+      {
+        "before_missing_minutes": 5513,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 4741 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 4741,
+        "status": "provider_absent",
+        "symbol": "ADAUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 1766,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 994 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 994,
+        "status": "provider_absent",
+        "symbol": "ALGOUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 772,
+        "compatibility": "compatible",
+        "current_through_cutoff": true,
+        "inserted_rows": 772,
+        "reason": "recovered all 772 missing minute(s)",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 0,
+        "status": "recovered",
+        "symbol": "APTUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 63951,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 63951,
+        "status": "source_conflict",
+        "symbol": "ARUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 826980,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 826980,
+        "status": "source_conflict",
+        "symbol": "AVAXUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 5513,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 4741 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 4741,
+        "status": "provider_absent",
+        "symbol": "BNBUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 1739628,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 1739628,
+        "status": "source_conflict",
+        "symbol": "BTCUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 3862,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 3090 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 3090,
+        "status": "provider_absent",
+        "symbol": "DOGEUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 2217,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 1445 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 1445,
+        "status": "provider_absent",
+        "symbol": "DOTUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 1415769,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 1415769,
+        "status": "source_conflict",
+        "symbol": "ETHUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 1762101,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 1762101,
+        "status": "source_conflict",
+        "symbol": "FETUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 791835,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "provider_absent: 791835 missing minute(s) remain",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 791835,
+        "status": "provider_absent",
+        "symbol": "FTMUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 772,
+        "compatibility": "compatible",
+        "current_through_cutoff": true,
+        "inserted_rows": 772,
+        "reason": "recovered all 772 missing minute(s)",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 0,
+        "status": "recovered",
+        "symbol": "IMXUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 2217,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 1445 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 1445,
+        "status": "provider_absent",
+        "symbol": "INJUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 4882,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 4110 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 4110,
+        "status": "provider_absent",
+        "symbol": "LINKUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 2216,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 1444 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 1444,
+        "status": "provider_absent",
+        "symbol": "NEARUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 63445,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 63445,
+        "status": "source_conflict",
+        "symbol": "PENDLEUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 62911,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 62911,
+        "status": "source_conflict",
+        "symbol": "RENDERUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 919078,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 919078,
+        "status": "source_conflict",
+        "symbol": "SOLUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 63378,
+        "compatibility": "source_conflict",
+        "current_through_cutoff": false,
+        "inserted_rows": 0,
+        "reason": "source_conflict: reviewed source disagrees with dump observations",
+        "recovered_minutes": 0,
+        "remaining_missing_minutes": 63378,
+        "status": "source_conflict",
+        "symbol": "SUIUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 772,
+        "compatibility": "compatible",
+        "current_through_cutoff": true,
+        "inserted_rows": 772,
+        "reason": "recovered all 772 missing minute(s)",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 0,
+        "status": "recovered",
+        "symbol": "TAOUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 772,
+        "compatibility": "compatible",
+        "current_through_cutoff": true,
+        "inserted_rows": 772,
+        "reason": "recovered all 772 missing minute(s)",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 0,
+        "status": "recovered",
+        "symbol": "THETAUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 1765,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 993 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 993,
+        "status": "provider_absent",
+        "symbol": "XLMUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 6674,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 5902 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 5902,
+        "status": "provider_absent",
+        "symbol": "XRPUSDT",
+        "timeframe": "1m"
+      },
+      {
+        "before_missing_minutes": 1765,
+        "compatibility": "compatible",
+        "current_through_cutoff": false,
+        "inserted_rows": 772,
+        "reason": "provider_absent: 993 missing minute(s) remain",
+        "recovered_minutes": 772,
+        "remaining_missing_minutes": 993,
+        "status": "provider_absent",
+        "symbol": "ZECUSDT",
+        "timeframe": "1m"
+      }
+    ]
+  },
+  "generated_at": "2026-07-17T06:53:13Z",
+  "phase_gate": {
+    "active_phase": "Phase 0: trustworthy foundation",
+    "next_required_evidence": "complete RR-000008 and obtain explicit promotion approval",
+    "status": "remediation_in_progress"
+  },
+  "reconciliation": {
+    "bounded_audit": {
+      "algorithm_version": "row-reconciliation-v2",
+      "audited_keys": 557075,
+      "classification_counts": {
+        "binance_correction": 3697,
+        "binance_fill": 477635,
+        "exact_match": 53460,
+        "source_unavailable": 22283
+      },
+      "completion_state": "bounded_audit_complete",
+      "cutoff": "2026-07-16T11:23:00Z",
+      "differing_field_counts": {
+        "close": 3294,
+        "high": 1515,
+        "low": 1433,
+        "open": 23,
+        "volume": 3697
+      },
+      "expected_work_units": 25,
+      "mapping_version": "market-data-candles-v1",
+      "promoted_verified_intervals": 0,
+      "promotion_receipt_available": false,
+      "replacement_rows": 481332,
+      "research_eligibility": "not_established_by_this_artifact",
+      "run_id": "RR-000002",
+      "run_manifest_sha256": "408cacf93e2ae0416d4be3c158ee3cd9f65af563c5840489161df9570c6e1265",
+      "scope_label": "bounded audited keys",
+      "verified_manifest_set_sha256": "a678fa54c96a8759084ed1511c8ae1d8dc688fb24fd3e47f8d9068c90b663a87",
+      "verified_work_units": 25,
+      "work_unit_status_counts": {
+        "completed": 24,
+        "source_unavailable": 1
+      }
+    },
+    "full_history": {
+      "algorithm_version": "row-reconciliation-v3",
+      "audited_keys": 14986858,
+      "classification_counts": {
+        "binance_correction": 5643,
+        "binance_fill": 6422788,
+        "exact_match": 8541517,
+        "source_unavailable": 16910
+      },
+      "completion_state": "partial",
+      "cutoff": "2026-07-16T11:23:00Z",
+      "differing_field_counts": {
+        "close": 4990,
+        "high": 2253,
+        "low": 2288,
+        "open": 41,
+        "quote_volume": 32,
+        "trades": 26,
+        "volume": 5637
+      },
+      "expected_work_units": 1583,
+      "mapping_version": "market-data-candles-v1",
+      "promoted_verified_intervals": 0,
+      "promotion_receipt_available": false,
+      "replacement_rows": 6428431,
+      "research_eligibility": "blocked_until_complete_and_deliberately_promoted",
+      "run_id": "RR-000008",
+      "run_manifest_sha256": "1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629",
+      "scope_label": "partial full-history audit progress",
+      "verified_manifest_set_sha256": "d9d77e352165f064b373400753394689b1636efe038423ab415b2bf0378094ad",
+      "verified_work_units": 346,
+      "work_unit_status_counts": {
+        "completed": 291,
+        "source_unavailable": 55
+      }
+    }
+  },
+  "schema_version": 1,
+  "software_replay": {
+    "behaviours": [
+      {
+        "asset_coverage": [
+          "BTCUSDT",
+          "ETHUSDT"
+        ],
+        "behaviour_id": "B-CB3E7F47FE808F3C",
+        "cautions": [
+          "Fixture separation is synthetic and unusually strong.",
+          "Transition support contains only two dwell-run events.",
+          "Two assets may not represent broader market conditions.",
+          "OHLCV-derived auction location is an approximation."
+        ],
+        "centroid": [
+          10.05,
+          1.005
+        ],
+        "falsifiable_hypothesis": "On untouched Phase 5 data, events assigned to this frozen detector will have a different distribution of 15-minute forward returns and realized volatility than time-matched negative controls.",
+        "frequency": 8,
+        "neutral_name": "High Volume Auction State",
+        "parameter_perturbation_ari": [
+          0.7272727272727273
+        ],
+        "seed_ari": [
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "asset_coverage": [
+          "BTCUSDT",
+          "ETHUSDT"
+        ],
+        "behaviour_id": "B-D6E06239FB9EC1EF",
+        "cautions": [
+          "Fixture separation is synthetic and unusually strong.",
+          "Transition support contains only two dwell-run events.",
+          "Two assets may not represent broader market conditions.",
+          "OHLCV-derived auction location is an approximation."
+        ],
+        "centroid": [
+          -10.05,
+          -1.005
+        ],
+        "falsifiable_hypothesis": "On untouched Phase 5 data, events assigned to this frozen detector will have a different distribution of 15-minute forward returns and realized volatility than time-matched negative controls.",
+        "frequency": 8,
+        "neutral_name": "Low Volume Auction State",
+        "parameter_perturbation_ari": [
+          0.7272727272727273
+        ],
+        "seed_ari": [
+          1.0,
+          1.0
+        ]
+      }
+    ],
+    "claim": "fixture only; no real-market recurrence or predictive evidence",
+    "fixture_kind": "synthetic_golden",
+    "fixture_path": "tests/fixtures/phase4/discovery_run_v1.json",
+    "fixture_sha256": "2a6e7ae69a317f072d0222677d621b55d56240a1a57a0aeeb27ced57aa06f816",
+    "interpretation_input_sha256": "e31c32765d67f84f7a411d9309f636716a2d071a6dc10f7e54f8cf2c32064ac5",
+    "interpretation_response_sha256": "b13972cac7c31f6f48118dc22fd384bacff81935ce6770a75ce6ad2e344f6c04",
+    "runs": {
+      "rejected": {
+        "behaviour_ids": [],
+        "manifest_sha256": "e16a7985f5d015b9931935dd4f171fa365458639df209e4cf92555272dbe7950",
+        "metrics": {
+          "behaviours": 0,
+          "development_rows": 8,
+          "discovery_rows": 16,
+          "dropped_null_rows": {
+            "development": 0,
+            "discovery": 0
+          },
+          "motifs": 6,
+          "status": "rejected_unstable",
+          "transitions": 2
+        },
+        "run_id": "DR-000602",
+        "status": "rejected_unstable"
+      },
+      "stable": {
+        "behaviour_ids": [
+          "B-CB3E7F47FE808F3C",
+          "B-D6E06239FB9EC1EF"
+        ],
+        "manifest_sha256": "925764c238b16df0a5435320adb9f8f3ac59434758aacf8025636a42e50bfaf3",
+        "metrics": {
+          "behaviours": 2,
+          "development_rows": 8,
+          "discovery_rows": 16,
+          "dropped_null_rows": {
+            "development": 0,
+            "discovery": 0
+          },
+          "motifs": 6,
+          "status": "completed",
+          "transitions": 2
+        },
+        "run_id": "DR-000601",
+        "status": "completed"
+      }
+    },
+    "status": "fixture_contract_present",
+    "verification_receipt_available": false
+  }
+}

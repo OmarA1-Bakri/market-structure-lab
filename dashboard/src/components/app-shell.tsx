@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from "react"
+import type { ComponentType, ReactNode } from "react";
 import {
   ArchiveTrayIcon,
   ChartLineUpIcon,
@@ -10,11 +10,11 @@ import {
   LockKeyIcon,
   PulseIcon,
   SquaresFourIcon,
-} from "@phosphor-icons/react"
-import type { IconProps } from "@phosphor-icons/react"
-import { motion, useReducedMotion } from "motion/react"
+} from "@phosphor-icons/react";
+import type { IconProps } from "@phosphor-icons/react";
+import { motion, useReducedMotion } from "motion/react";
 
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -22,20 +22,21 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-} from "@/components/ui/sheet"
+} from "@/components/ui/sheet";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip"
-import { evidenceTimestamp, type PageId } from "@/data/lab-data"
-import { cn } from "@/lib/utils"
+} from "@/components/ui/tooltip";
+import { useLabEvidence } from "@/data/lab-evidence";
+import type { PageId } from "@/data/lab-data";
+import { cn } from "@/lib/utils";
 
 interface NavigationItem {
-  id: PageId
-  label: string
-  detail: string
-  icon: ComponentType<IconProps>
+  id: PageId;
+  label: string;
+  detail: string;
+  icon: ComponentType<IconProps>;
 }
 
 const navigation: NavigationItem[] = [
@@ -75,12 +76,12 @@ const navigation: NavigationItem[] = [
     detail: "Local JSON",
     icon: FileCodeIcon,
   },
-]
+];
 
 interface AppShellProps {
-  activePage: PageId
-  onNavigate: (page: PageId) => void
-  children: ReactNode
+  activePage: PageId;
+  onNavigate: (page: PageId) => void;
+  children: ReactNode;
 }
 
 function LabMark() {
@@ -91,7 +92,7 @@ function LabMark() {
       </span>
       <span className="absolute inset-x-2 bottom-1 h-px bg-primary/45" />
     </div>
-  )
+  );
 }
 
 function Navigation({
@@ -99,17 +100,17 @@ function Navigation({
   onNavigate,
   compact = false,
 }: {
-  activePage: PageId
-  onNavigate: (page: PageId) => void
-  compact?: boolean
+  activePage: PageId;
+  onNavigate: (page: PageId) => void;
+  compact?: boolean;
 }) {
-  const reduceMotion = useReducedMotion()
+  const reduceMotion = useReducedMotion();
 
   return (
     <nav aria-label="Primary navigation" className="space-y-1">
       {navigation.map((item) => {
-        const Icon = item.icon
-        const active = activePage === item.id
+        const Icon = item.icon;
+        const active = activePage === item.id;
         return (
           <button
             key={item.id}
@@ -147,17 +148,26 @@ function Navigation({
               </span>
             </span>
           </button>
-        )
+        );
       })}
     </nav>
-  )
+  );
 }
 
-export function AppShell({
-  activePage,
-  onNavigate,
-  children,
-}: AppShellProps) {
+export function AppShell({ activePage, onNavigate, children }: AppShellProps) {
+  const evidence = useLabEvidence();
+  const evidenceTimestamp =
+    evidence.state === "ready"
+      ? evidence.data.freshness.evidence_timestamp
+      : null;
+  const publicationTimestamp =
+    evidence.state === "ready" ? evidence.data.generated_at : null;
+  const statusLabel =
+    evidence.state === "ready"
+      ? "evidence snapshot loaded"
+      : evidence.state === "loading"
+        ? "loading evidence snapshot"
+        : "evidence snapshot failed";
   return (
     <div className="min-h-[100dvh]">
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-border bg-sidebar/82 px-4 py-5 backdrop-blur-xl lg:flex lg:flex-col">
@@ -168,7 +178,7 @@ export function AppShell({
               Market Structure Lab
             </p>
             <p className="font-mono text-[0.62rem] text-muted-foreground">
-              research console / phase 04
+              research console / phase 0
             </p>
           </div>
         </div>
@@ -192,7 +202,9 @@ export function AppShell({
           </div>
           <div className="flex items-center gap-2 px-1 font-mono text-[0.6rem] text-muted-foreground">
             <ArchiveTrayIcon size={13} />
-            <span className="truncate">Evidence {evidenceTimestamp}</span>
+            <span className="truncate">
+              Evidence cutoff {evidenceTimestamp ?? "loading"}
+            </span>
           </div>
         </div>
       </aside>
@@ -239,26 +251,62 @@ export function AppShell({
           <div className="hidden items-center gap-2 lg:flex">
             <PulseIcon size={16} className="text-primary" />
             <span className="font-mono text-[0.68rem] text-muted-foreground">
-              verified software · live-data maintenance · no live trading
+              read-only evidence · foundation remediation · no live trading
             </span>
           </div>
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="flex cursor-default items-center gap-2 rounded-full border border-primary/20 bg-primary/[0.07] px-3 py-1.5">
+              <div
+                role="status"
+                aria-live="polite"
+                className={cn(
+                  "flex cursor-default items-center gap-2 rounded-full border px-3 py-1.5",
+                  evidence.state === "ready" &&
+                    "border-primary/20 bg-primary/[0.07]",
+                  evidence.state === "loading" && "border-border bg-muted/40",
+                  evidence.state === "error" &&
+                    "border-destructive/30 bg-destructive/8",
+                )}
+              >
                 <motion.span
-                  animate={{ opacity: [0.45, 1, 0.45] }}
-                  transition={{ duration: 2.8, repeat: Number.POSITIVE_INFINITY }}
-                  className="size-1.5 rounded-full bg-primary"
+                  animate={
+                    evidence.state === "ready"
+                      ? { opacity: [0.45, 1, 0.45] }
+                      : { opacity: 1 }
+                  }
+                  transition={{
+                    duration: 2.8,
+                    repeat: Number.POSITIVE_INFINITY,
+                  }}
+                  className={cn(
+                    "size-1.5 rounded-full",
+                    evidence.state === "ready" && "bg-primary",
+                    evidence.state === "loading" && "bg-muted-foreground",
+                    evidence.state === "error" && "bg-destructive",
+                  )}
                   style={{ willChange: "opacity" }}
                 />
-                <span className="font-mono text-[0.64rem] text-primary">
-                  evidence current
+                <span
+                  className={cn(
+                    "font-mono text-[0.64rem]",
+                    evidence.state === "ready" && "text-primary",
+                    evidence.state === "loading" && "text-muted-foreground",
+                    evidence.state === "error" && "text-destructive",
+                  )}
+                >
+                  {statusLabel}
                 </span>
               </div>
             </TooltipTrigger>
             <TooltipContent sideOffset={8}>
-              Snapshot content is pinned to {evidenceTimestamp}
+              {evidenceTimestamp && publicationTimestamp
+                ? `Evidence cutoff ${evidenceTimestamp}; publication ${publicationTimestamp}`
+                : evidence.state === "loading"
+                  ? "Loading the checked deployment artifact."
+                  : evidence.state === "error"
+                    ? evidence.message
+                    : "Evidence contract loaded."}
             </TooltipContent>
           </Tooltip>
         </header>
@@ -266,5 +314,5 @@ export function AppShell({
         <main>{children}</main>
       </div>
     </div>
-  )
+  );
 }

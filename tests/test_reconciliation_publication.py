@@ -16,6 +16,7 @@ from market_structure_lab.data.reconciliation import (
     freeze_reconciliation_run,
     publish_work_unit,
     read_work_unit_manifest,
+    verify_work_unit_publication,
 )
 from market_structure_lab.data.reconciliation.repository import ReconciliationRepository
 
@@ -231,3 +232,21 @@ def test_read_manifest_rejects_tampering_and_unmanifested_parts(tmp_path: Path) 
             work_unit=unit,
             source_artifacts=(_artifact(),),
         )
+
+
+def test_public_verifier_checks_the_full_work_unit_publication(tmp_path: Path) -> None:
+    run, unit = _run()
+    manifest = publish_work_unit(
+        _records(),
+        output_root=tmp_path,
+        run=run,
+        work_unit=unit,
+        source_artifacts=(_artifact(),),
+    )
+    publication = tmp_path / manifest.publication_path
+
+    assert verify_work_unit_publication(publication) == manifest
+
+    (publication / "_SUCCESS").write_text("0" * 64 + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="success marker"):
+        verify_work_unit_publication(publication)

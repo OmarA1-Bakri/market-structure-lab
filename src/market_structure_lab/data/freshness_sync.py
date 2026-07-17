@@ -176,6 +176,17 @@ class FreshnessArtifactPaths:
     latest: Path
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedFreshnessArtifacts:
+    """One atomically selected and fully linked freshness evidence bundle."""
+
+    as_of: str
+    manifest_filename: str
+    manifest: FreshnessManifest
+    report_filename: str
+    report: FreshnessReport
+
+
 def build_freshness_recovery_manifest(
     freshness: FreshnessManifest,
     compatibility: RecoveryManifest,
@@ -329,16 +340,26 @@ def write_freshness_artifacts(
         (_canonical_json(manifest_envelope) + "\n").encode(),
     )
     _write_immutable(report_path, (_canonical_json(report_envelope) + "\n").encode())
-    _write_atomic(
-        latest_path,
-        {
-            "as_of": manifest.as_of,
-            "manifest": manifest_path.name,
-            "manifest_sha256": manifest.sha256(),
-            "report": report_path.name,
-            "report_sha256": report.sha256(),
-        },
+    commit_logical = {
+        "as_of": manifest.as_of,
+        "manifest": manifest_path.name,
+        "manifest_sha256": manifest.sha256(),
+        "report": report_path.name,
+        "report_sha256": report.sha256(),
+    }
+    commit_payload = {
+        **commit_logical,
+        "sha256": hashlib.sha256(_canonical_json(commit_logical).encode()).hexdigest(),
+    }
+    commit_path = directory / f"{prefix}-{report.sha256()[:12]}.commit.json"
+    _write_immutable(
+        commit_path,
+        (_canonical_json(commit_payload) + "\n").encode(),
     )
+    # Persist the rollback anchor before advancing the mutable pointer. If the
+    # process dies between these writes, readers fail closed on the newer
+    # checksum-bearing receipt rather than silently accepting an older view.
+    _write_atomic(latest_path, commit_logical)
     return FreshnessArtifactPaths(manifest_path, report_path, latest_path)
 
 
@@ -359,17 +380,117 @@ def read_freshness_report(path: Path) -> FreshnessReport:
     return report
 
 
-def read_latest_freshness_report(directory: Path) -> FreshnessReport:
-    pointer = json.loads((directory / "latest.json").read_text(encoding="utf-8"))
-    if not isinstance(pointer, dict) or not isinstance(pointer.get("report"), str):
+def read_latest_freshness_artifacts(directory: Path) -> VerifiedFreshnessArtifacts:
+    """Read latest once and reject tampering, linkage drift, or valid rollback."""
+    try:
+        pointer = json.loads((directory / "latest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("latest freshness pointer is invalid") from error
+    required_strings = (
+        "as_of",
+        "manifest",
+        "manifest_sha256",
+        "report",
+        "report_sha256",
+    )
+    if not isinstance(pointer, dict) or any(
+        not isinstance(pointer.get(field), str) for field in required_strings
+    ):
         raise ValueError("latest freshness pointer is invalid")
-    filename = str(pointer["report"])
-    if Path(filename).name != filename:
+    manifest_filename = str(pointer["manifest"])
+    report_filename = str(pointer["report"])
+    if (
+        Path(manifest_filename).name != manifest_filename
+        or "/" in manifest_filename
+        or "\\" in manifest_filename
+    ):
+        raise ValueError("latest freshness manifest path must be a local filename")
+    if (
+        Path(report_filename).name != report_filename
+        or "/" in report_filename
+        or "\\" in report_filename
+    ):
         raise ValueError("latest freshness report path must be a local filename")
-    report = read_freshness_report(directory / filename)
+    manifest = read_freshness_manifest(directory / manifest_filename)
+    if pointer["manifest_sha256"] != manifest.sha256():
+        raise ValueError("latest freshness pointer manifest checksum does not match")
+    report = read_freshness_report(directory / report_filename)
     if pointer.get("report_sha256") != report.sha256():
         raise ValueError("latest freshness pointer report checksum does not match")
-    return report
+    _verify_freshness_linkage(manifest, report)
+    if pointer["as_of"] != manifest.as_of:
+        raise ValueError("latest freshness pointer cutoff does not match its artifacts")
+    _reject_valid_rollback(directory, selected_as_of=manifest.as_of)
+    return VerifiedFreshnessArtifacts(
+        as_of=manifest.as_of,
+        manifest_filename=manifest_filename,
+        manifest=manifest,
+        report_filename=report_filename,
+        report=report,
+    )
+
+
+def read_latest_freshness_report(directory: Path) -> FreshnessReport:
+    """Compatibility reader returning the report from the verified latest bundle."""
+    return read_latest_freshness_artifacts(directory).report
+
+
+def _verify_freshness_linkage(
+    manifest: FreshnessManifest,
+    report: FreshnessReport,
+) -> None:
+    if report.manifest_sha256 != manifest.sha256():
+        raise ValueError("latest freshness report does not belong to the pointed manifest")
+    if report.as_of != manifest.as_of:
+        raise ValueError("latest freshness pointer cutoff does not match its artifacts")
+    if report.dump_sha256 != manifest.dump_identity.dump_sha256.lower():
+        raise ValueError("freshness report dump identity does not match its plan")
+    if report.compatibility_manifest_sha256 != manifest.compatibility_manifest_sha256:
+        raise ValueError("freshness report compatibility identity does not match its plan")
+    planned = {item.symbol: item for item in manifest.symbols}
+    if set(planned) != {item.symbol for item in report.symbols}:
+        raise ValueError("freshness report symbol universe does not match its plan")
+    for item in report.symbols:
+        plan = planned[item.symbol]
+        if (
+            item.timeframe != plan.timeframe
+            or item.compatibility_state is not plan.provenance_state
+            or item.before_missing_minutes != plan.canonical_state.missing_minutes
+            or item.before_missing_ranges != plan.missing_ranges
+        ):
+            raise ValueError("freshness report before-state evidence does not match its plan")
+
+
+def _reject_valid_rollback(directory: Path, *, selected_as_of: str) -> None:
+    for path in directory.glob("*.commit.json"):
+        receipt = _read_commit_receipt(path)
+        plan = read_freshness_manifest(directory / receipt["manifest"])
+        report = read_freshness_report(directory / receipt["report"])
+        if (
+            receipt["manifest_sha256"] != plan.sha256()
+            or receipt["report_sha256"] != report.sha256()
+            or receipt["as_of"] != plan.as_of
+        ):
+            raise ValueError("freshness commit receipt identities do not match")
+        _verify_freshness_linkage(plan, report)
+        if report.as_of > selected_as_of:
+            raise ValueError("latest freshness pointer is a rollback from newer committed evidence")
+
+
+def _read_commit_receipt(path: Path) -> dict[str, str]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    fields = ("as_of", "manifest", "manifest_sha256", "report", "report_sha256")
+    if not isinstance(raw, dict) or any(not isinstance(raw.get(field), str) for field in fields):
+        raise ValueError("freshness commit receipt is invalid")
+    logical = {field: raw[field] for field in fields}
+    expected = hashlib.sha256(_canonical_json(logical).encode()).hexdigest()
+    if raw.get("sha256") != expected:
+        raise ValueError("freshness commit receipt checksum does not match")
+    for field in ("manifest", "report"):
+        filename = logical[field]
+        if Path(filename).name != filename or "/" in filename or "\\" in filename:
+            raise ValueError("freshness commit receipt paths must be local filenames")
+    return logical
 
 
 def _verify_compatibility(
@@ -577,6 +698,7 @@ __all__ = [
     "build_freshness_report",
     "freshness_exit_code",
     "read_freshness_report",
+    "read_latest_freshness_artifacts",
     "read_latest_freshness_report",
     "run_freshness_sync",
     "write_freshness_artifacts",

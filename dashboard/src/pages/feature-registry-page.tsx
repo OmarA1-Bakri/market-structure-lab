@@ -1,16 +1,16 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState } from "react";
 import {
   ArrowRightIcon,
   ClockCounterClockwiseIcon,
   MagnifyingGlassIcon,
   ShieldCheckIcon,
-} from "@phosphor-icons/react"
-import { motion } from "motion/react"
+} from "@phosphor-icons/react";
+import { motion } from "motion/react";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -18,11 +18,11 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"
-import { featureDefinitions } from "@/data/lab-data"
-import { cn } from "@/lib/utils"
+} from "@/components/ui/table";
+import { useLabEvidence } from "@/data/lab-evidence";
+import { cn } from "@/lib/utils";
 
-type FamilyFilter = "all" | "auction" | "sequence"
+type FamilyFilter = "all" | "auction" | "sequence";
 
 const flow = [
   {
@@ -31,7 +31,7 @@ const flow = [
   },
   {
     label: "Auction snapshot",
-    detail: "deterministic state",
+    detail: "declared state input",
   },
   {
     label: "Feature builder",
@@ -43,24 +43,43 @@ const flow = [
   },
   {
     label: "Discovery matrix",
-    detail: "no future outcomes",
+    detail: "declared leakage boundary",
   },
-]
+];
 
 export function FeatureRegistryPage() {
-  const [query, setQuery] = useState("")
-  const [family, setFamily] = useState<FamilyFilter>("all")
+  const evidence = useLabEvidence();
+  const [query, setQuery] = useState("");
+  const [family, setFamily] = useState<FamilyFilter>("all");
 
+  const definitions = useMemo(
+    () =>
+      evidence.state === "ready"
+        ? evidence.data.feature_registry.definitions
+        : [],
+    [evidence],
+  );
   const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
-    return featureDefinitions.filter(
+    const normalized = query.trim().toLowerCase();
+    return definitions.filter(
       (feature) =>
         (family === "all" || feature.family === family) &&
         (!normalized ||
           feature.name.toLowerCase().includes(normalized) ||
           feature.definition.toLowerCase().includes(normalized)),
-    )
-  }, [family, query])
+    );
+  }, [definitions, family, query]);
+
+  if (evidence.state !== "ready") {
+    return (
+      <div className="m-8 rounded-2xl border border-border p-8 font-mono text-sm">
+        {evidence.state === "loading"
+          ? "Loading feature registry…"
+          : `Evidence unavailable: ${evidence.message}`}
+      </div>
+    );
+  }
+  const registry = evidence.data.feature_registry;
 
   return (
     <div className="space-y-9">
@@ -71,29 +90,30 @@ export function FeatureRegistryPage() {
               variant="outline"
               className="rounded-md border-primary/25 bg-primary/8 font-mono text-[0.65rem] text-primary"
             >
-              FS-000001
+              {registry.feature_set_id}
             </Badge>
             <span className="font-mono text-[0.65rem] text-muted-foreground">
-              26 causal feature definitions
+              {registry.definitions.length} registered definitions ·{" "}
+              {registry.registry_id}
             </span>
           </div>
           <h1 className="mt-5 text-4xl font-semibold tracking-[-0.05em] md:text-5xl">
-            A feature contract that carries its information boundary.
+            Declared registry metadata with visible structural safeguards.
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground">
-            Sixteen auction-informed features and ten minimally assumptive sequence
-            features record their units, prior history, missing policy, version, and
-            leakage classification before discovery sees them.
+            Sixteen auction-informed features and ten minimally assumptive
+            sequence features record their units, prior history, missing policy,
+            version, and leakage classification before discovery sees them.
           </p>
         </div>
 
         <Alert className="border-primary/18 bg-primary/[0.045]">
           <ShieldCheckIcon className="text-primary" />
-          <AlertTitle>Outcome-blind by construction</AlertTitle>
+          <AlertTitle>Outcome-blind structure is declared</AlertTitle>
           <AlertDescription className="leading-relaxed text-muted-foreground">
-            Future returns, MFE, MAE, target hits, profitability, and future
-            volatility labels are excluded from feature and event publications used
-            for discovery.
+            Names and leakage classes are structurally audited against
+            prohibited outcome fields. This metadata does not by itself prove
+            the semantics of every future feature implementation.
           </AlertDescription>
         </Alert>
       </section>
@@ -102,15 +122,16 @@ export function FeatureRegistryPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-              Causal handoff
+              Declared handoff
             </p>
             <h2 className="mt-2 text-xl font-semibold tracking-tight">
-              Every downstream row inherits the cutoff.
+              Publication metadata records the intended cutoff boundary.
             </h2>
           </div>
           <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-            Segment, gap, session, and window resets clear trailing history. Missing
-            values remain null; the builder never interpolates or forward-fills.
+            Definitions declare prior-observation and missing-value policies.
+            Runtime reset, null, and leakage behavior remains a separate tested
+            implementation concern.
           </p>
         </div>
 
@@ -150,7 +171,9 @@ export function FeatureRegistryPage() {
       <section className="overflow-hidden rounded-[1.7rem] border border-border bg-card/42 panel-edge">
         <div className="flex flex-col gap-4 border-b border-border p-4 md:flex-row md:items-center md:justify-between md:p-5">
           <div>
-            <h2 className="text-lg font-semibold tracking-tight">Registry browser</h2>
+            <h2 className="text-lg font-semibold tracking-tight">
+              Registry browser
+            </h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {filtered.length} registered definitions
             </p>
@@ -179,7 +202,8 @@ export function FeatureRegistryPage() {
                   onClick={() => setFamily(item)}
                   className={cn(
                     "rounded-lg px-3 text-xs capitalize",
-                    family === item && "bg-primary/9 text-primary hover:bg-primary/12",
+                    family === item &&
+                      "bg-primary/9 text-primary hover:bg-primary/12",
                   )}
                 >
                   {item}
@@ -213,7 +237,11 @@ export function FeatureRegistryPage() {
                         {feature.name}
                       </p>
                       <p className="mt-1 font-mono text-[0.62rem] text-muted-foreground">
-                        {feature.units}
+                        {feature.units} · {feature.value_kind} ·{" "}
+                        {feature.version}
+                      </p>
+                      <p className="mt-1 font-mono text-[0.62rem] text-muted-foreground">
+                        missing: {feature.missing_policy}
                       </p>
                     </TableCell>
                     <TableCell>
@@ -232,12 +260,12 @@ export function FeatureRegistryPage() {
                     <TableCell>
                       <span className="inline-flex items-center gap-1.5 font-mono text-xs text-foreground/75">
                         <ClockCounterClockwiseIcon size={13} />
-                        {feature.prior}
+                        {feature.required_prior_observations}
                       </span>
                     </TableCell>
                     <TableCell>
                       <span className="font-mono text-[0.65rem] text-muted-foreground">
-                        {feature.leakage}
+                        {feature.leakage_class}
                       </span>
                     </TableCell>
                     <TableCell className="text-xs leading-relaxed text-muted-foreground">
@@ -263,6 +291,9 @@ export function FeatureRegistryPage() {
           </div>
         )}
       </section>
+      <p className="break-all font-mono text-[0.62rem] text-muted-foreground">
+        registry sha256 {registry.registry_sha256}
+      </p>
     </div>
-  )
+  );
 }

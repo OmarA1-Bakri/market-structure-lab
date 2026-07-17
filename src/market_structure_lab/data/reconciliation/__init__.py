@@ -28,6 +28,7 @@ from market_structure_lab.data.reconciliation.orchestrator import (
 from market_structure_lab.data.reconciliation.publication import (
     publish_work_unit,
     read_work_unit_manifest,
+    verify_work_unit_publication,
 )
 from market_structure_lab.data.reconciliation.repository import (
     ReconciliationPromotion,
@@ -60,4 +61,5 @@ __all__ = [
     "reconcile_ordered_candles",
     "reconcile_ordered_rows",
     "write_reconciliation_run",
+    "verify_work_unit_publication",
 ]

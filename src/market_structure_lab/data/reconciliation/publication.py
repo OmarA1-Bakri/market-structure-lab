@@ -72,13 +72,13 @@ def publish_work_unit(
             max_rows_per_part=max_rows_per_part,
         )
         if final.exists():
-            existing = _verify_publication(final)
+            existing = verify_work_unit_publication(final)
             if existing != manifest:
                 raise ValueError("existing work-unit publication contains different content")
             return existing
         final.parent.mkdir(parents=True, exist_ok=True)
         os.replace(stage, final)
-        return _verify_publication(final)
+        return verify_work_unit_publication(final)
     finally:
         if stage.exists():
             shutil.rmtree(stage)
@@ -227,7 +227,8 @@ def _write_stage(
     return manifest
 
 
-def _verify_publication(directory: Path) -> WorkUnitManifest:
+def verify_work_unit_publication(directory: Path) -> WorkUnitManifest:
+    """Verify one complete publication, including marker, parts, and row counts."""
     manifest = read_work_unit_manifest(directory / "manifest.json")
     try:
         success = (directory / "_SUCCESS").read_text(encoding="utf-8").strip()
@@ -243,8 +244,13 @@ def _verify_publication(directory: Path) -> WorkUnitManifest:
         path = directory / part.path
         if _sha256_file(path) != part.sha256:
             raise ValueError("work-unit Parquet part checksum does not match the manifest")
-        frame = pl.read_parquet(path)
-        if frame.height != part.row_count:
+        row_count = int(
+            pl.scan_parquet(path)
+            .select(pl.len().alias("row_count"))
+            .collect(engine="streaming")
+            .item()
+        )
+        if row_count != part.row_count:
             raise ValueError("work-unit Parquet part row count does not match the manifest")
     return manifest
 
@@ -265,4 +271,8 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-__all__ = ["publish_work_unit", "read_work_unit_manifest"]
+__all__ = [
+    "publish_work_unit",
+    "read_work_unit_manifest",
+    "verify_work_unit_publication",
+]

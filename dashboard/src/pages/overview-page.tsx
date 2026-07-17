@@ -1,53 +1,59 @@
 import {
   ArrowRightIcon,
-  CheckCircleIcon,
   FingerprintIcon,
   LockKeyIcon,
-  ShieldCheckIcon,
   WarningCircleIcon,
-} from "@phosphor-icons/react"
-import { motion, useReducedMotion } from "motion/react"
+} from "@phosphor-icons/react";
+import { motion, useReducedMotion } from "motion/react";
 
-import { MetricBlock } from "@/components/metric-block"
-import { CoverageArc, MiniBars } from "@/components/visuals"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-  evidenceTimestamp,
-  formatCompact,
-  formatNumber,
-  headlineMetrics,
-  phases,
-  symbolHealth,
-  verification,
-  type PageId,
-} from "@/data/lab-data"
-import { cn } from "@/lib/utils"
+import { MetricBlock } from "@/components/metric-block";
+import { CoverageArc } from "@/components/visuals";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useLabEvidence } from "@/data/lab-evidence";
+import { formatCompact, formatNumber, type PageId } from "@/data/lab-data";
+import { cn } from "@/lib/utils";
 
-const reveal = {
-  hidden: { opacity: 0, y: 14 },
-  visible: { opacity: 1, y: 0 },
-}
+const reveal = { hidden: { opacity: 0, y: 14 }, visible: { opacity: 1, y: 0 } };
+const phases = [
+  { label: "00", name: "Trustworthy foundation remediation", state: "active" },
+  { label: "01", name: "Canonical data truth", state: "locked" },
+  {
+    label: "02",
+    name: "Deterministic auction representation",
+    state: "locked",
+  },
+  { label: "03", name: "Versioned features & events", state: "locked" },
+  { label: "04", name: "Outcome-blind real-market discovery", state: "locked" },
+  { label: "05", name: "Untouched validation", state: "locked" },
+] as const;
 
 export function OverviewPage({
   onNavigate,
 }: {
-  onNavigate: (page: PageId) => void
+  onNavigate: (page: PageId) => void;
 }) {
-  const reduceMotion = useReducedMotion()
-  const counts = symbolHealth.reduce<Record<string, number>>((accumulator, item) => {
-    accumulator[item.status] = (accumulator[item.status] ?? 0) + 1
-    return accumulator
-  }, {})
+  const reduceMotion = useReducedMotion();
+  const evidence = useLabEvidence();
+  if (evidence.state !== "ready") {
+    return (
+      <EvidenceUnavailable
+        state={evidence.state}
+        message={evidence.state === "error" ? evidence.message : undefined}
+      />
+    );
+  }
+  const { data } = evidence;
+  const freshness = data.freshness;
+  const history = data.reconciliation.full_history;
+  const bounded = data.reconciliation.bounded_audit;
 
   return (
     <motion.div
       initial={reduceMotion ? false : "hidden"}
       animate="visible"
       variants={{
-        visible: {
-          transition: { staggerChildren: reduceMotion ? 0 : 0.07 },
-        },
+        visible: { transition: { staggerChildren: reduceMotion ? 0 : 0.07 } },
       }}
       className="space-y-10"
     >
@@ -61,20 +67,20 @@ export function OverviewPage({
               variant="outline"
               className="rounded-md border-primary/25 bg-primary/8 font-mono text-[0.65rem] text-primary"
             >
-              PHASE 04 SOFTWARE GATE PASSED
+              PHASE 0 REMEDIATION IN PROGRESS
             </Badge>
             <span className="font-mono text-[0.65rem] text-muted-foreground">
-              evidence {evidenceTimestamp}
+              evidence cutoff {freshness.evidence_timestamp}
             </span>
           </div>
           <h1 className="mt-6 max-w-3xl text-4xl leading-[0.98] font-semibold tracking-[-0.055em] text-balance md:text-6xl">
             A research console built around what the evidence can prove.
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-relaxed text-muted-foreground md:text-lg">
-            Deterministic market representation, bounded data maintenance, causal
-            features, and outcome-blind discovery are operational. Real market
-            experiments remain the next deliberate handoff; validation and trading
-            surfaces stay sealed.
+            Data recovery and reconciliation remain incomplete. This contract
+            supplies no verified real-market experiment artifacts, so future
+            experiment accuracy is not estimable and no numeric success rate is
+            shown.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
             <Button
@@ -82,197 +88,165 @@ export function OverviewPage({
               onClick={() => onNavigate("data")}
               className="rounded-xl px-4"
             >
-              Inspect data health
+              Inspect verified data evidence{" "}
               <ArrowRightIcon size={16} data-icon="inline-end" />
             </Button>
             <Button
               variant="outline"
               size="lg"
-              onClick={() => onNavigate("artifacts")}
+              onClick={() => onNavigate("discovery")}
               className="rounded-xl border-border bg-background/45 px-4"
             >
-              Open an artifact
+              Review experiment readiness
             </Button>
           </div>
         </div>
 
         <div className="relative overflow-hidden rounded-[1.8rem] border border-border bg-card/58 p-5 panel-edge md:p-6">
-          <div className="absolute inset-0 hairline-grid opacity-45" />
-          <div className="relative">
-            <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
+                Current evidence boundary
+              </p>
+              <p className="mt-2 text-lg font-semibold tracking-tight">
+                {data.experiment_accuracy.status.replace("_", " ")}
+              </p>
+            </div>
+            <FingerprintIcon size={22} className="text-primary" />
+          </div>
+          <div className="mt-7 space-y-5">
+            <div className="flex gap-3">
+              <WarningCircleIcon
+                size={18}
+                className="mt-0.5 shrink-0 text-primary"
+              />
               <div>
-                <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-                  Active boundary
+                <p className="text-sm font-medium">
+                  Synthetic fixture contract present
                 </p>
-                <p className="mt-2 text-lg font-semibold tracking-tight">
-                  Real market discovery
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  No replay receipt is published in this contract; the fixture
+                  is not market evidence.
                 </p>
-              </div>
-              <div className="grid size-10 place-items-center rounded-xl border border-primary/20 bg-primary/8 text-primary">
-                <FingerprintIcon size={20} />
               </div>
             </div>
-            <div className="mt-8 flex gap-2">
-              {[0, 1, 2, 3, 4].map((item) => (
-                <span
-                  key={item}
-                  className="h-1 flex-1 rounded-full bg-primary"
-                />
-              ))}
-              <span className="h-1 flex-1 rounded-full bg-primary/35" />
-              <span className="h-1 flex-1 rounded-full bg-foreground/10" />
-              <span className="h-1 flex-1 rounded-full bg-foreground/10" />
+            <div className="flex gap-3">
+              <WarningCircleIcon
+                size={18}
+                className="mt-0.5 shrink-0 text-primary"
+              />
+              <div>
+                <p className="text-sm font-medium">
+                  {history.completion_state === "partial"
+                    ? "RR-000008 is partial"
+                    : "RR-000008 audit is complete but unpromoted"}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {history.verified_work_units} of {history.expected_work_units}{" "}
+                  frozen work units verify in this publication snapshot. No
+                  promotion receipt is supplied.
+                </p>
+              </div>
             </div>
-            <div className="mt-5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-4">
-              <CheckCircleIcon size={18} weight="fill" className="text-primary" />
+            <div className="flex gap-3">
+              <LockKeyIcon
+                size={18}
+                className="mt-0.5 shrink-0 text-muted-foreground"
+              />
               <div>
-                <p className="text-sm font-medium">Software replay verified</p>
+                <p className="text-sm font-medium">Validation remains sealed</p>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  Frozen fixture runs reproduce byte-identically with sealed holdout
-                  metadata.
-                </p>
-              </div>
-              <WarningCircleIcon size={18} className="text-muted-foreground" />
-              <div>
-                <p className="text-sm font-medium">Market publication pending</p>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  Freeze a deliberate candle snapshot, then publish Phase 3 feature
-                  and event evidence.
-                </p>
-              </div>
-              <LockKeyIcon size={18} className="text-muted-foreground" />
-              <div>
-                <p className="text-sm font-medium">Phase 5 remains untouched</p>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  No future outcomes, performance claims, or validation metrics are
-                  shown.
+                  This contract counts zero verified real discovery, validation,
+                  or strategy artifacts; the trial ledger is not implemented.
                 </p>
               </div>
             </div>
           </div>
-        </div>
-      </motion.section>
-
-      <motion.section variants={reveal}>
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricBlock
-            label="Canonical candles"
-            value={formatCompact(headlineMetrics.canonicalRows)}
-            detail={`${formatNumber(headlineMetrics.immutableRows)} immutable + ${formatNumber(headlineMetrics.supplements)} validated supplements`}
-          />
-          <MetricBlock
-            label="Tracked markets"
-            value={headlineMetrics.symbols}
-            detail="One-minute OHLCV across the reviewed universe"
-          />
-          <MetricBlock
-            label="Feature contract"
-            value="FS-000001"
-            detail="16 auction-informed + 10 sequence features"
-          />
-          <MetricBlock
-            label="Regression proof"
-            value={verification.tests}
-            detail={`plus ${verification.postgresProfiles} disposable PostgreSQL profiles`}
-          />
         </div>
       </motion.section>
 
       <motion.section
         variants={reveal}
-        className="grid gap-8 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]"
+        className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4"
+      >
+        <MetricBlock
+          label="Missing before run"
+          value={formatCompact(freshness.before_missing_minutes)}
+          detail="Frozen latest freshness plan"
+        />
+        <MetricBlock
+          label="Recovered in run"
+          value={formatNumber(freshness.recovered_minutes)}
+          detail={`${formatNumber(freshness.inserted_rows)} inserted rows`}
+        />
+        <MetricBlock
+          label="Still missing"
+          value={formatCompact(freshness.remaining_missing_minutes)}
+          detail={`${freshness.symbols.length} symbol reports`}
+        />
+        <MetricBlock
+          label="Verified real-trial artifacts"
+          value={data.experiment_accuracy.verified_real_trial_artifacts.total}
+          detail="Trial ledger not implemented; accuracy not estimable"
+        />
+      </motion.section>
+
+      <motion.section
+        variants={reveal}
+        className="grid gap-7 xl:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)]"
       >
         <div className="rounded-[1.8rem] border border-border bg-card/46 p-5 panel-edge md:p-7">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-                Latest freshness run
+                Latest freshness report
               </p>
               <h2 className="mt-2 text-2xl font-semibold tracking-[-0.035em]">
-                Coverage conserved, gaps still explicit.
+                Coverage conserved; limitations explicit.
               </h2>
-              <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
-                The run recovered 8.57 million planned minutes without modifying
-                immutable source rows. Remaining coverage limitations are preserved
-                as evidence rather than hidden.
-              </p>
             </div>
             <CoverageArc
-              recovered={headlineMetrics.recoveredLatest}
-              remaining={headlineMetrics.remainingLatest}
+              recovered={freshness.recovered_minutes}
+              remaining={freshness.remaining_missing_minutes}
             />
           </div>
-
-          <div className="mt-7 grid gap-4 border-t border-border pt-5 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              ["Recovered", counts.recovered ?? 0, "current through cutoff"],
-              ["Partial", counts.partially_recovered ?? 0, "bounded residual gaps"],
-              ["Provider absent", counts.provider_absent ?? 0, "terminal source evidence"],
-              ["Source conflict", counts.source_conflict ?? 0, "dump remains authoritative"],
-            ].map(([label, count, detail]) => (
-              <div key={String(label)}>
-                <p className="font-mono text-2xl tracking-[-0.05em]">{count}</p>
-                <p className="mt-1 text-xs font-medium">{label}</p>
-                <p className="mt-1 text-[0.68rem] text-muted-foreground">{detail}</p>
-              </div>
-            ))}
-          </div>
+          <p className="mt-5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            The pointer, plan, and report hashes verify together. This is
+            evidence freshness at the stated cutoff, not a claim that every
+            market is current.
+          </p>
+          <p className="mt-5 break-all border-t border-border pt-4 font-mono text-[0.65rem] text-muted-foreground">
+            report {freshness.report_sha256}
+          </p>
         </div>
-
         <div className="rounded-[1.8rem] border border-border bg-card/46 p-5 panel-edge md:p-7">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-                Auction benchmark
-              </p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight">
-                Bounded replay profile
-              </h2>
-            </div>
-            <ShieldCheckIcon size={24} className="text-primary" />
-          </div>
-          <MiniBars
-            values={[540, 612, 590, 641, 677, 704, 692, 730]}
-            className="mt-7"
-          />
-          <div className="mt-6 grid grid-cols-2 gap-5">
-            <div>
-              <p className="font-mono text-2xl tracking-[-0.05em]">
-                {verification.benchmarkThroughput.toFixed(2)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">candles / second</p>
-            </div>
-            <div>
-              <p className="font-mono text-2xl tracking-[-0.05em]">
-                {verification.peakMemoryMib.toFixed(3)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">MiB peak traced</p>
-            </div>
-          </div>
-          <p className="mt-6 border-t border-border pt-4 text-[0.7rem] leading-relaxed text-muted-foreground">
-            Observed benchmark only. Correctness is pinned by deterministic hashes
-            and {verification.equivalenceChecks} incremental/full comparisons at{" "}
-            {verification.absoluteTolerance.toExponential()} tolerance.
+          <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
+            Bounded reconciliation evidence
+          </p>
+          <p className="mt-3 font-mono text-3xl">
+            {formatNumber(bounded.audited_keys)}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            audited minute keys across {bounded.verified_work_units} verified
+            work units
+          </p>
+          <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
+            No immutable promotion receipt is available to this contract. It
+            therefore reports zero promoted verified intervals and does not
+            infer full-history eligibility.
           </p>
         </div>
       </motion.section>
 
       <motion.section variants={reveal} className="border-t border-border pt-8">
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-              Canonical progression
-            </p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.035em]">
-              Phase gates stay visible.
-            </h2>
-          </div>
-          <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-            A completed behaviour detector is not a hypothesis, a hypothesis is not
-            a validated edge, and a fixture replay is not market evidence.
+        <div>
+          <p className="text-[0.66rem] font-medium tracking-[0.18em] text-muted-foreground uppercase">
+            Canonical progression
           </p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-[-0.035em]">
+            Phase gates stay visible.
+          </h2>
         </div>
-
         <div className="mt-7 divide-y divide-border border-y border-border">
           {phases.map((phase) => (
             <div
@@ -292,10 +266,10 @@ export function OverviewPage({
               </span>
               <span
                 className={cn(
-                  "font-mono text-[0.62rem] tracking-[0.12em] uppercase",
-                  phase.state === "complete" && "text-primary",
-                  phase.state === "next" && "text-foreground",
-                  phase.state === "locked" && "text-muted-foreground",
+                  "font-mono text-[0.62rem] uppercase",
+                  phase.state === "active"
+                    ? "text-primary"
+                    : "text-muted-foreground",
                 )}
               >
                 {phase.state}
@@ -305,5 +279,26 @@ export function OverviewPage({
         </div>
       </motion.section>
     </motion.div>
-  )
+  );
+}
+
+function EvidenceUnavailable({
+  state,
+  message,
+}: {
+  state: "loading" | "error";
+  message?: string;
+}) {
+  return (
+    <div className="m-8 rounded-[1.6rem] border border-border bg-card/42 p-8">
+      <p className="font-mono text-sm">
+        {state === "loading"
+          ? "Loading verified evidence…"
+          : "Verified evidence unavailable"}
+      </p>
+      {message ? (
+        <p className="mt-2 text-xs text-destructive">{message}</p>
+      ) : null}
+    </div>
+  );
 }

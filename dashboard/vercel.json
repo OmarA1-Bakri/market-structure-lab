@@ -5,7 +5,7 @@
   "outputDirectory": "dist",
   "headers": [
     {
-      "source": "/data/reconciliation-status.json",
+      "source": "/data/lab-evidence-v1.json",
       "headers": [
         {
           "key": "Cache-Control",

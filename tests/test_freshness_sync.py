@@ -283,6 +283,122 @@ def test_artifact_publication_reuses_logically_identical_windows_plan(
     assert read_latest_freshness_report(tmp_path) == report
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("manifest", "../outside.plan.json", "local filename"),
+        ("manifest", "C:\\outside.plan.json", "local filename"),
+        ("report", "../outside.report.json", "local filename"),
+        ("manifest_sha256", "0" * 64, "manifest checksum"),
+        ("report_sha256", "0" * 64, "report checksum"),
+        ("as_of", "2026-07-16T12:35:00Z", "cutoff"),
+    ],
+)
+def test_latest_pointer_rejects_stale_tampered_or_nonlocal_linkage(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    before = _manifest()
+    report = build_freshness_report(before, _manifest(recovered=True))
+    paths = write_freshness_artifacts(before, report, tmp_path)
+    pointer = json.loads(paths.latest.read_text(encoding="utf-8"))
+    pointer[field] = value
+    paths.latest.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        read_latest_freshness_report(tmp_path)
+
+
+def test_latest_pointer_rejects_report_linked_to_a_different_plan(tmp_path: Path) -> None:
+    before = _manifest()
+    report = build_freshness_report(before, _manifest(recovered=True))
+    paths = write_freshness_artifacts(before, report, tmp_path)
+    pointer = json.loads(paths.latest.read_text(encoding="utf-8"))
+    other = replace(before, candidate_venue="coinbase")
+    other_path = tmp_path / "other.plan.json"
+    write_freshness_manifest(other, other_path)
+    pointer["manifest"] = other_path.name
+    pointer["manifest_sha256"] = other.sha256()
+    paths.latest.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="report does not belong"):
+        read_latest_freshness_report(tmp_path)
+
+
+def test_latest_pointer_rejects_rollback_when_newer_valid_pair_exists(tmp_path: Path) -> None:
+    older = _manifest()
+    older_report = build_freshness_report(older, _manifest(recovered=True))
+    older_paths = write_freshness_artifacts(older, older_report, tmp_path)
+    older_pointer = older_paths.latest.read_text(encoding="utf-8")
+    newer_as_of = "2026-07-16T12:35:00Z"
+    newer = replace(older, as_of=newer_as_of)
+    newer_after = replace(_manifest(recovered=True), as_of=newer_as_of)
+    newer_report = build_freshness_report(newer, newer_after)
+    write_freshness_artifacts(newer, newer_report, tmp_path)
+    older_paths.latest.write_text(older_pointer, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="rollback"):
+        read_latest_freshness_report(tmp_path)
+
+
+def test_latest_pointer_ignores_newer_orphan_pair_without_commit_receipt(
+    tmp_path: Path,
+) -> None:
+    older = _manifest()
+    older_report = build_freshness_report(older, _manifest(recovered=True))
+    write_freshness_artifacts(older, older_report, tmp_path)
+    newer_as_of = "2026-07-16T12:35:00Z"
+    newer = replace(older, as_of=newer_as_of)
+    newer_after = replace(_manifest(recovered=True), as_of=newer_as_of)
+    newer_report = build_freshness_report(newer, newer_after)
+    staging = tmp_path / "staging"
+    newer_paths = write_freshness_artifacts(newer, newer_report, staging)
+    (tmp_path / newer_paths.manifest.name).write_bytes(newer_paths.manifest.read_bytes())
+    (tmp_path / newer_paths.report.name).write_bytes(newer_paths.report.read_bytes())
+
+    assert read_latest_freshness_report(tmp_path) == older_report
+
+
+def test_interrupted_pointer_advance_leaves_fail_closed_rollback_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import freshness_sync
+
+    older = _manifest()
+    older_report = build_freshness_report(older, _manifest(recovered=True))
+    write_freshness_artifacts(older, older_report, tmp_path)
+    newer_as_of = "2026-07-16T12:35:00Z"
+    newer = replace(older, as_of=newer_as_of)
+    newer_after = replace(_manifest(recovered=True), as_of=newer_as_of)
+    newer_report = build_freshness_report(newer, newer_after)
+
+    def interrupted_advance(_path: Path, _value: object) -> None:
+        raise OSError("simulated pointer interruption")
+
+    monkeypatch.setattr(freshness_sync, "_write_atomic", interrupted_advance)
+    with pytest.raises(OSError, match="pointer interruption"):
+        write_freshness_artifacts(newer, newer_report, tmp_path)
+
+    assert len(tuple(tmp_path.glob("*.commit.json"))) == 2
+    with pytest.raises(ValueError, match="rollback"):
+        read_latest_freshness_report(tmp_path)
+
+
+def test_legacy_latest_directory_without_commit_receipts_remains_readable(
+    tmp_path: Path,
+) -> None:
+    before = _manifest()
+    report = build_freshness_report(before, _manifest(recovered=True))
+    write_freshness_artifacts(before, report, tmp_path)
+    for path in tmp_path.glob("*.commit.json"):
+        path.unlink()
+
+    assert read_latest_freshness_report(tmp_path) == report
+
+
 def test_runner_reuses_existing_recovery_engine_and_replans_same_cutoff(monkeypatch) -> None:
     from market_structure_lab.data import freshness_sync
 

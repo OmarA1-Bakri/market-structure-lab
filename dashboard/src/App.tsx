@@ -1,38 +1,39 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react"
-import { AnimatePresence, MotionConfig } from "motion/react"
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { AnimatePresence, MotionConfig } from "motion/react";
 
-import { AppShell } from "@/components/app-shell"
-import { PageTransition } from "@/components/page-transition"
-import { Skeleton } from "@/components/ui/skeleton"
-import { TooltipProvider } from "@/components/ui/tooltip"
-import type { PageId } from "@/data/lab-data"
-import { OverviewPage } from "@/pages/overview-page"
+import { AppShell } from "@/components/app-shell";
+import { PageTransition } from "@/components/page-transition";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { PageId } from "@/data/lab-data";
+import { LabEvidenceProvider } from "@/data/lab-evidence";
+import { OverviewPage } from "@/pages/overview-page";
 
 const DataHealthPage = lazy(() =>
   import("@/pages/data-health-page").then((module) => ({
     default: module.DataHealthPage,
   })),
-)
+);
 const AuctionReplayPage = lazy(() =>
   import("@/pages/auction-replay-page").then((module) => ({
     default: module.AuctionReplayPage,
   })),
-)
+);
 const FeatureRegistryPage = lazy(() =>
   import("@/pages/feature-registry-page").then((module) => ({
     default: module.FeatureRegistryPage,
   })),
-)
+);
 const DiscoveryPage = lazy(() =>
   import("@/pages/discovery-page").then((module) => ({
     default: module.DiscoveryPage,
   })),
-)
+);
 const ArtifactInspectorPage = lazy(() =>
   import("@/pages/artifact-inspector-page").then((module) => ({
     default: module.ArtifactInspectorPage,
   })),
-)
+);
 
 const titles: Record<PageId, string> = {
   overview: "Overview",
@@ -41,35 +42,35 @@ const titles: Record<PageId, string> = {
   features: "Feature Registry",
   discovery: "Discovery Lab",
   artifacts: "Artifact Inspector",
-}
+};
 
-const validPages = new Set<PageId>(Object.keys(titles) as PageId[])
+const validPages = new Set<PageId>(Object.keys(titles) as PageId[]);
 
 function pageFromHash(): PageId {
-  const page = window.location.hash.replace(/^#\/?/, "") as PageId
-  return validPages.has(page) ? page : "overview"
+  const page = window.location.hash.replace(/^#\/?/, "") as PageId;
+  return validPages.has(page) ? page : "overview";
 }
 
 function Page({
   activePage,
   onNavigate,
 }: {
-  activePage: PageId
-  onNavigate: (page: PageId) => void
+  activePage: PageId;
+  onNavigate: (page: PageId) => void;
 }) {
   switch (activePage) {
     case "overview":
-      return <OverviewPage onNavigate={onNavigate} />
+      return <OverviewPage onNavigate={onNavigate} />;
     case "data":
-      return <DataHealthPage />
+      return <DataHealthPage />;
     case "auction":
-      return <AuctionReplayPage />
+      return <AuctionReplayPage />;
     case "features":
-      return <FeatureRegistryPage />
+      return <FeatureRegistryPage />;
     case "discovery":
-      return <DiscoveryPage />
+      return <DiscoveryPage />;
     case "artifacts":
-      return <ArtifactInspectorPage />
+      return <ArtifactInspectorPage />;
   }
 }
 
@@ -88,41 +89,43 @@ function PageLoading() {
       </div>
       <Skeleton className="h-96 w-full rounded-[1.7rem]" />
     </div>
-  )
+  );
 }
 
 export default function App() {
-  const [activePage, setActivePage] = useState<PageId>(pageFromHash)
+  const [activePage, setActivePage] = useState<PageId>(pageFromHash);
 
   const navigate = useCallback((page: PageId) => {
-    setActivePage(page)
-    window.location.hash = page === "overview" ? "" : page
-  }, [])
+    setActivePage(page);
+    window.location.hash = page === "overview" ? "" : page;
+  }, []);
 
   useEffect(() => {
-    const handleHashChange = () => setActivePage(pageFromHash())
-    window.addEventListener("hashchange", handleHashChange)
-    return () => window.removeEventListener("hashchange", handleHashChange)
-  }, [])
+    const handleHashChange = () => setActivePage(pageFromHash());
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   useEffect(() => {
-    document.title = `${titles[activePage]} · Market Structure Lab`
-    window.scrollTo({ top: 0, behavior: "smooth" })
-  }, [activePage])
+    document.title = `${titles[activePage]} · Market Structure Lab`;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [activePage]);
 
   return (
-    <MotionConfig reducedMotion="user">
-      <TooltipProvider delayDuration={280}>
-        <AppShell activePage={activePage} onNavigate={navigate}>
-          <AnimatePresence mode="wait">
-            <Suspense key={activePage} fallback={<PageLoading />}>
-              <PageTransition>
-                <Page activePage={activePage} onNavigate={navigate} />
-              </PageTransition>
-            </Suspense>
-          </AnimatePresence>
-        </AppShell>
-      </TooltipProvider>
-    </MotionConfig>
-  )
+    <LabEvidenceProvider>
+      <MotionConfig reducedMotion="user">
+        <TooltipProvider delayDuration={280}>
+          <AppShell activePage={activePage} onNavigate={navigate}>
+            <AnimatePresence mode="wait">
+              <Suspense key={activePage} fallback={<PageLoading />}>
+                <PageTransition>
+                  <Page activePage={activePage} onNavigate={navigate} />
+                </PageTransition>
+              </Suspense>
+            </AnimatePresence>
+          </AppShell>
+        </TooltipProvider>
+      </MotionConfig>
+    </LabEvidenceProvider>
+  );
 }

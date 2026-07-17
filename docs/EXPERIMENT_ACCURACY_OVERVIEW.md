@@ -47,11 +47,11 @@ The promoted public RR-000002 summary reports `557,075` audited rows, `481,332` 
 
 The broader RR-000008 plan contains `1,583` work units and was still advancing during this review. Its partial totals must not be treated as final or promotable. Under the reconciliation design, every unit must reach a terminal state and the promoted hashes, corrected keys, and eligible contiguous intervals must verify before use.
 
-### 3. Discovery software: deterministic fixture replay, not market evidence
+### 3. Discovery software: restored deterministic fixture replay, not market evidence
 
-The committed Phase 4 fixture contains 16 discovery rows and eight development rows (`docs/DISCOVERY_MVP.md:100-105`). It exercises the real split, matrix, PCA, K-means, stability, motif, transition, behaviour, evidence, and publication APIs. Fresh leader verification during this review ran the experiment, stability, motif, transition, and Phase 4 golden tests: **73 passed and 3 failed**. All three failures are in `tests/test_phase4_golden.py`: generated behaviour/artifact hashes no longer match the frozen fixture, the interpretation input no longer matches, and frozen interpretation behaviour IDs cannot be published against the regenerated run.
+The committed Phase 4 fixture contains 16 discovery rows and eight development rows (`docs/DISCOVERY_MVP.md:100-105`). It exercises the real split, matrix, PCA, K-means, stability, motif, transition, behaviour, evidence, and publication APIs. The original review reproduced three cross-platform golden failures caused by last-bit SciPy/LAPACK variation entering identity-bearing PCA projections. The repair introduced an explicit `deterministic-pca-v2` canonical numeric boundary, fail-closed handling for non-identifiable singular subspaces, and a reviewed fixture migration (`docs/benchmarks/phase4-golden-drift-diagnosis.md`).
 
-The 73 passing tests support many local contracts, but the three failures mean byte-identical end-to-end golden replay is **currently broken**. Even a green replay would demonstrate software behaviour only. The documentation correctly states that the golden fixture is not sampled market evidence, does not prove that its behaviours exist in cryptocurrency data, and is not evidence of profitability (`docs/DISCOVERY_MVP.md:137-148`; `docs/IMPLEMENTATION_STATUS.md:393-395`).
+Fresh post-repair verification ran the 86-test discovery, behaviour, evidence, and golden suite on both Linux and Windows: **86 passed on each platform**. Ruff and Mypy also passed for the repaired discovery surface. This restores the software-fixture replay contract; it does not create market evidence. The fixture is not sampled market evidence, does not prove that its behaviours exist in cryptocurrency data, and is not evidence of profitability (`docs/DISCOVERY_MVP.md:137-148`; `docs/IMPLEMENTATION_STATUS.md:393-395`).
 
 ### 4. Real experiment evidence: absent
 
@@ -69,7 +69,7 @@ Consequently:
 
 | Dimension | Current assessment | Confidence | Basis |
 |---|---|---:|---|
-| Deterministic software replay | Broken at golden integration boundary | High | Fresh targeted suite: 73 passed, 3 golden replay/provenance failures |
+| Deterministic software replay | Green for the synthetic fixture on Linux and Windows | High | Fresh post-repair suite: 86 passed per platform; explicit `deterministic-pca-v2` identity |
 | Required-field candle validity | Strong for inspected source rows | High | Zero duplicates/null-required/invalid-OHLC/off-grid rows |
 | Full-universe temporal coverage | Weak and uneven | High | 7.739M minutes remain absent; 9 source conflicts; 12 provider-absent statuses |
 | Existing-row venue reconciliation | In progress | High | RR-000008 is nonterminal; RR-000002 found material corrections |
@@ -84,16 +84,15 @@ Consequently:
 ## Ranked methodological blockers
 
 1. **No empirical experiment exists.** There is nothing from which to estimate predictive accuracy, false-discovery rate, or promotion yield.
-2. **The canonical Phase 4 golden replay is currently red.** Regenerated behaviours/artifact hashes differ from the frozen fixture, the evidence input drifts, and interpretation publication rejects the stale behaviour IDs (`tests/test_phase4_golden.py:294,322,343`). The cause must be resolved before using replayability as evidence.
-3. **Full-history reconciliation is unfinished.** A research snapshot frozen before RR-000008 completes and is deliberately promoted could preserve known row-value errors.
-4. **Normalization provenance is not end-to-end bound.** `DiscoveryRunConfig` carries snapshot, registry, commit, and lock hashes, but not a required train-fitted normalizer artifact or feature-publication manifest (`src/market_structure_lab/discovery/runs.py:67-86,403-447`; `src/market_structure_lab/discovery/matrix.py:48-60`).
-5. **Legacy transition significance is statistically unsafe.** `market_structure_lab.transitions` counts all adjacent states and applies binomial tails plus BH correction without symbol/session/gap boundaries or serial-dependence correction (`src/market_structure_lab/transitions/matrix.py:26-55`; `significance.py:21-62`; `screening.py:25-83`). Only the newer discovery transition path is suitable for Phase 4 description.
-6. **Trial accounting is incomplete.** Discovery manifests have only `completed` and `rejected_unstable`; pre-publication failures/abandonment are not durable. The generic experiment writer can overwrite an existing run ID and does not require the full PRD provenance/decision record (`src/market_structure_lab/discovery/runs.py:139-148`; `src/market_structure_lab/experiments/artifacts.py:44-85`).
-7. **The fixture does not validate meaningful stability thresholds.** Its accepted run uses maximally permissive ARI/JS/coverage thresholds, so it proves policy plumbing rather than empirical stability (`tests/fixtures/phase4/discovery_run_v1.json:341-356`).
-8. **Motif evidence is weaker than cluster evidence.** Motifs are computed once, only on the first selected feature, and are not tested across seeds, subsamples, adjacent periods, assets, or parameter perturbations. Grouping lacks explicit timestamp/session-contiguity checks after null-row removal (`src/market_structure_lab/discovery/runs.py:483-520`).
-9. **Transition uncertainty defaults are descriptive only.** The newer path correctly dwell-compresses and boundary-checks, but orchestration pins just 100 bootstrap iterations and block length two without a dependence diagnostic or sensitivity analysis (`src/market_structure_lab/discovery/runs.py:523-548,588-597`).
-10. **Dataset hashes are asserted, not linked through the full derivation chain.** Exact supplied rows are hashed, but the discovery layer does not prove that they came from the claimed snapshot, feature publication, normalizer, and commit.
-11. **Semantic leakage remains a developer-declared risk.** Structural guards are good, but an improperly implemented future-derived feature with an innocuous name and incorrect leakage declaration could still pass.
+2. **Full-history reconciliation is unfinished.** A research snapshot frozen before RR-000008 completes and is deliberately promoted could preserve known row-value errors.
+3. **Normalization provenance is not end-to-end bound.** `DiscoveryRunConfig` carries snapshot, registry, commit, and lock hashes, but not a required train-fitted normalizer artifact or feature-publication manifest (`src/market_structure_lab/discovery/runs.py:67-86,403-447`; `src/market_structure_lab/discovery/matrix.py:48-60`).
+4. **Legacy transition significance is statistically unsafe.** `market_structure_lab.transitions` counts all adjacent states and applies binomial tails plus BH correction without symbol/session/gap boundaries or serial-dependence correction (`src/market_structure_lab/transitions/matrix.py:26-55`; `significance.py:21-62`; `screening.py:25-83`). Only the newer discovery transition path is suitable for Phase 4 description.
+5. **Trial accounting is incomplete.** Discovery manifests have only `completed` and `rejected_unstable`; pre-publication failures/abandonment are not durable. The generic experiment writer can overwrite an existing run ID and does not require the full PRD provenance/decision record (`src/market_structure_lab/discovery/runs.py:139-148`; `src/market_structure_lab/experiments/artifacts.py:44-85`).
+6. **The fixture does not validate meaningful stability thresholds.** Its accepted run uses maximally permissive ARI/JS/coverage thresholds, so it proves policy plumbing rather than empirical stability (`tests/fixtures/phase4/discovery_run_v1.json:341-356`).
+7. **Motif evidence is weaker than cluster evidence.** Motifs are computed once, only on the first selected feature, and are not tested across seeds, subsamples, adjacent periods, assets, or parameter perturbations. Grouping lacks explicit timestamp/session-contiguity checks after null-row removal (`src/market_structure_lab/discovery/runs.py:483-520`).
+8. **Transition uncertainty defaults are descriptive only.** The newer path correctly dwell-compresses and boundary-checks, but orchestration pins just 100 bootstrap iterations and block length two without a dependence diagnostic or sensitivity analysis (`src/market_structure_lab/discovery/runs.py:523-548,588-597`).
+9. **Dataset hashes are asserted, not linked through the full derivation chain.** Exact supplied rows are hashed, but the discovery layer does not prove that they came from the claimed snapshot, feature publication, normalizer, and commit.
+10. **Semantic leakage remains a developer-declared risk.** Structural guards are good, but an improperly implemented future-derived feature with an innocuous name and incorrect leakage declaration could still pass.
 
 ## Canonical gates for future accuracy claims
 
@@ -168,14 +167,14 @@ Record every successful, rejected, inconclusive, failed, and abandoned trial. Af
 
 Do not publish a single “accuracy” percentage for the laboratory. Publish the reliability vector and each gate's evidence. The only currently defensible global status is:
 
-> **Golden replay currently failing; source data conditionally viable; full-history reconciliation incomplete; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
+> **Synthetic golden replay restored; source data conditionally viable; full-history reconciliation incomplete; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
 
 Under the repository phase gate, this review does not authorize a real Phase 4 or Phase 5 experiment. Complete the approved foundation/reconciliation work, freeze a deliberate immutable market snapshot and Phase 3 publication, and obtain explicit phase approval before advancing.
 
 ## Terse review findings
 
 - `docs/RESEARCH_LOG.md:20-22: 🔴 blocker: no completed real research trial exists. Do not report experiment accuracy until trial artifacts exist.`
-- `tests/test_phase4_golden.py:294: 🔴 bug: regenerated behaviour/artifact hashes disagree with the frozen golden bundle. Resolve code-fixture drift and restore byte-identical replay before claiming reproducibility.`
+- `docs/benchmarks/phase4-golden-drift-diagnosis.md: 🟢 closed: cross-platform PCA identity drift is versioned, fail-closed, and verified by 86 passing tests on both Linux and Windows.`
 - `data/exports/reconciliation/RR-000008.run.json:work_units: 🟡 risk: full-history audit is nonterminal. Block snapshot eligibility until every unit and promotion hash verify.`
 - `src/market_structure_lab/discovery/runs.py:67-86: 🔴 risk: run identity omits required normalizer/publication provenance. Bind train-fitted normalizer and feature manifest hashes.`
 - `src/market_structure_lab/transitions/matrix.py:26-55: 🔴 bug: adjacent states cross boundaries and remain serially dependent. Retire this path from research inference; use boundary-aware event transitions.`
@@ -183,5 +182,11 @@ Under the repository phase gate, this review does not authorize a real Phase 4 o
 - `tests/fixtures/phase4/discovery_run_v1.json:350-356: 🟡 risk: accepted fixture thresholds cannot reject instability. Label it policy-plumbing evidence, not stability evidence.`
 - `src/market_structure_lab/discovery/runs.py:483-507: 🔴 bug: motif groups can bridge dropped rows, gaps, or sessions. Enforce explicit contiguity and add multi-axis motif stability.`
 - `src/market_structure_lab/discovery/runs.py:54-56: 🟡 risk: 100 bootstraps with fixed block length 2 are under-justified for inference. Make dependence-calibrated settings part of the frozen policy.`
-- `dashboard/src/data/lab-data.ts:34-57: 🟡 risk: dashboard freshness totals predate the latest checksum-bearing report. Generate metrics from the verified latest pointer.`
-- `dashboard/src/components/reconciliation-status-panel.tsx:95-106: 🟡 risk: RR-000002 work-unit coverage is presented as promotable symbol coverage. Reserve “promotable” for completed verified intervals.`
+- `src/market_structure_lab/data/dashboard_evidence.py: 🟢 closed: dashboard freshness is generated from one verified plan/report bundle with committed-publication rollback protection and an explicit evidence cutoff.`
+- `dashboard/src/components/reconciliation-status-panel.tsx: 🟢 closed: reconciliation is labelled as bounded audited keys or partial/complete-unpromoted work-unit evidence; no promotion or research eligibility is inferred without a receipt.`
+
+## Remediation checkpoint log
+
+| Task | Commit | Remote verification | Evidence |
+|---|---|---|---|
+| Restore cross-platform golden replay | `0db02354ff344e441864afbe093f5477625ce13f` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-17 | 86 targeted tests passed on Linux and Windows; Ruff; Mypy discovery; independent specification and code-quality approvals |

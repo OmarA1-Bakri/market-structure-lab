@@ -1,31 +1,25 @@
 # Market Structure Lab Dashboard
 
-A deployable, read-only research console for the verified Phase 0–4 Market Structure Lab
-implementation.
+A deployable, read-only research console for Market Structure Lab evidence. The current repository
+gate is **Phase 0 trustworthy-foundation remediation**; later research and trading phases remain
+locked.
 
 The dashboard deliberately does not expose P&L, signals, positions, strategies, portfolio controls,
-or live trading. Real market discovery publication is the next active gate; untouched validation
-and all trading phases remain sealed.
+or live trading.
 
 ## Included views
 
-- **Overview** — phase gates, canonical data totals, freshness coverage, and verification evidence.
-- **Data health** — searchable and filterable 25-symbol freshness ledger.
-- **Auction replay** — exact `auction-rolling-3-v1` deterministic golden fixture.
-- **Feature registry** — searchable `FS-000001` definitions and causal cutoff flow.
-- **Discovery lab** — `DR-000601` completed and `DR-000602` rejected golden software replays.
-- **Artifact inspector** — local-only JSON parsing and SHA-256 calculation for supported evidence
-  files.
-
-The embedded figures come from verified repository evidence dated `2026-07-16`. Discovery content
-is prominently labelled as a software fixture, not empirical market evidence.
+- **Overview** — current phase gate, checksum-linked freshness, and scoped experiment readiness.
+- **Data health** — searchable symbol freshness and bounded/partial reconciliation evidence.
+- **Auction replay** — illustrative rolling-window fixture; no verification receipt is published.
+- **Feature registry** — generated `FS-000001` definitions and registry identity.
+- **Discovery lab** — checksum-linked synthetic stable/rejected fixture contracts, never counted as
+  real experiments.
+- **Artifact inspector** — local-only JSON parsing and SHA-256 calculation.
 
 ## Local development
 
-Requirements:
-
-- Node.js 22.12 or newer
-- npm
+Requirements: Node.js 22.12 or newer and npm.
 
 ```powershell
 cd dashboard
@@ -38,36 +32,35 @@ Open `http://localhost:5173`.
 ## Verification
 
 ```powershell
+npm run verify:evidence
 npm run typecheck
 npm run lint
 npm run build
 ```
 
-The production build is written to `dashboard/dist/`.
+`npm run build` runs the dependency-free evidence verifier before TypeScript and Vite. The production
+build is written to `dashboard/dist/`.
 
 ## Deploy
 
-The app is a static Vite build and can be hosted by Vercel, Netlify, Cloudflare Pages, or any static
-web server.
+The app is a static Vite build. For Vercel, set the project root to `dashboard`; `vercel.json` uses
+`npm run build` and publishes `dist`. No environment variables, database credentials, or backend
+connection are required.
 
-For Vercel, set the project root directory to `dashboard`. The checked-in `vercel.json` uses:
+## Evidence publication boundary
 
-- build command: `npm run build`
-- output directory: `dist`
+`data/exports/` is intentionally gitignored and unavailable to a hosted static site. The browser
+fetches one checked deployment artifact, `/data/lab-evidence-v1.json`, and never connects directly
+to PostgreSQL.
 
-No environment variables, database credentials, or backend connection are required.
+Generate the public artifact locally from verified repository evidence:
 
-## Data integration boundary
+```bash
+uv run python scripts/generate_dashboard_evidence.py \
+  --generated-at 2026-07-17T00:00:00Z
+```
 
-`data/exports/` is intentionally gitignored and is unavailable to a hosted static site. The
-dashboard fetches a compact checksum-bearing reconciliation contract from
-`/data/reconciliation-status.json`, ships the remaining verified evidence snapshot, and provides a
-local browser artifact inspector. The reconciliation contract records the promoted run, cutoff,
-classification totals, and canonical logical hash. It is refreshed deliberately when a new run is
-promoted and the dashboard is deployed.
-
-A future continuously updated integration should use a separately approved authenticated,
-read-only artifact API.
-The browser must never connect directly to PostgreSQL or receive credential-bearing connection
-URLs. Any API must preserve manifest identities, UTC cutoffs, checksums, holdout boundaries, and
-the distinction between behaviour, hypothesis, validation, edge, and strategy.
+The explicit `generated_at` is publication time. `freshness.evidence_timestamp` is the verified data
+cutoff. Deployments cannot regenerate from ignored/private inputs, so the prebuild verifier rejects
+malformed or internally inconsistent checked JSON instead. Refresh the artifact deliberately after
+source evidence changes; never expose credentials or infer promotion from partial reconciliation.
