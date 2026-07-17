@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
+import market_structure_lab.discovery as discovery
 from market_structure_lab.discovery import (
     ClusterObservation,
+    ClusterTransitionEstimate,
+    ClusterTransitionRow,
+    TransitionBoundaryEvidence,
     compress_dwell_runs,
     estimate_cluster_transitions,
 )
@@ -129,6 +133,26 @@ def test_transition_matrix_counts_runs_and_returns_row_stochastic_probabilities(
     assert second.destinations[0].probability == 1.0
 
 
+def test_repeated_minute_dwells_reduce_explicit_effective_support() -> None:
+    matrix = _estimate(
+        tuple(_observation(index, label) for index, label in enumerate((0, 0, 0, 1, 1, 0)))
+    )
+
+    assert matrix.boundary_evidence.raw_observation_count == 6
+    assert matrix.boundary_evidence.dwell_run_count == 3
+    assert matrix.boundary_evidence.contiguous_sequence_count == 1
+    assert matrix.total_transitions == 2
+    assert tuple(row.effective_support for row in matrix.rows) == (1, 1)
+    assert tuple(
+        destination.effective_support
+        for row in matrix.rows
+        for destination in row.destinations
+    ) == (1, 1)
+    assert asdict(matrix.rows[0])["effective_support"] == 1
+    assert asdict(matrix.rows[0].destinations[0])["effective_support"] == 1
+    assert isinstance(matrix.boundary_evidence, discovery.TransitionBoundaryEvidence)
+
+
 def test_transition_horizon_uses_run_level_destinations() -> None:
     matrix = _estimate(
         tuple(_observation(index, label) for index, label in enumerate((0, 1, 2, 3))),
@@ -142,46 +166,64 @@ def test_transition_horizon_uses_run_level_destinations() -> None:
 
 
 @pytest.mark.parametrize(
-    "boundary_rows",
+    ("boundary_rows", "evidence_field"),
     [
         (
-            _observation(0, 0, symbol="BTCUSDT"),
-            _observation(1, 1, symbol="BTCUSDT"),
-            _observation(0, 2, symbol="ETHUSDT"),
-            _observation(1, 3, symbol="ETHUSDT"),
+            (
+                _observation(0, 0, symbol="BTCUSDT"),
+                _observation(1, 1, symbol="BTCUSDT"),
+                _observation(0, 2, symbol="ETHUSDT"),
+                _observation(1, 3, symbol="ETHUSDT"),
+            ),
+            "symbol_break_count",
         ),
         (
-            _observation(0, 0, timeframe="1m"),
-            _observation(1, 1, timeframe="1m"),
-            _observation(0, 2, timeframe="5m"),
-            _observation(1, 3, timeframe="5m"),
+            (
+                _observation(0, 0, timeframe="1m"),
+                _observation(1, 1, timeframe="1m"),
+                _observation(0, 2, timeframe="5m"),
+                _observation(1, 3, timeframe="5m"),
+            ),
+            "timeframe_break_count",
         ),
         (
-            _observation(0, 0, segment_id=0),
-            _observation(1, 1, segment_id=0),
-            _observation(2, 2, segment_id=1),
-            _observation(3, 3, segment_id=1),
+            (
+                _observation(0, 0, segment_id=0),
+                _observation(1, 1, segment_id=0),
+                _observation(2, 2, segment_id=1),
+                _observation(3, 3, segment_id=1),
+            ),
+            "segment_break_count",
         ),
         (
-            _observation(0, 0, session_id="2025-01-01"),
-            _observation(1, 1, session_id="2025-01-01"),
-            _observation(2, 2, session_id="2025-01-02"),
-            _observation(3, 3, session_id="2025-01-02"),
+            (
+                _observation(0, 0, session_id="2025-01-01"),
+                _observation(1, 1, session_id="2025-01-01"),
+                _observation(2, 2, session_id="2025-01-02"),
+                _observation(3, 3, session_id="2025-01-02"),
+            ),
+            "session_break_count",
         ),
         (
-            _observation(0, 0),
-            _observation(1, 1),
-            _observation(5, 2),
-            _observation(6, 3),
+            (
+                _observation(0, 0),
+                _observation(1, 1),
+                _observation(5, 2),
+                _observation(6, 3),
+            ),
+            "non_contiguous_time_break_count",
         ),
     ],
 )
 def test_transitions_never_cross_symbol_timeframe_segment_session_or_gap(
     boundary_rows: tuple[ClusterObservation, ...],
+    evidence_field: str,
 ) -> None:
     matrix = _estimate(boundary_rows)
 
     assert matrix.total_transitions == 2
+    assert matrix.boundary_evidence.boundary_break_count == 1
+    assert getattr(matrix.boundary_evidence, evidence_field) == 1
     assert tuple(
         (row.source_label, row.destinations[0].destination_label) for row in matrix.rows
     ) == ((0, 1), (2, 3))
@@ -196,6 +238,9 @@ def test_transition_bootstrap_is_seeded_bounded_and_keeps_run_level_caveat() -> 
     replay = _estimate(rows, seed=11)
 
     assert first == replay
+    assert first.algorithm_version == "boundary-aware-dwell-transitions-v2"
+    with pytest.raises(ValueError, match="algorithm_version"):
+        replace(first, algorithm_version="legacy-adjacent-v1")  # type: ignore[arg-type]
     assert first.seed == 11
     assert first.bootstrap_iterations == 200
     assert first.block_length == 2
@@ -276,3 +321,115 @@ def test_transition_configuration_fails_closed(kwargs: dict[str, object]) -> Non
             (_observation(0, 0), _observation(1, 1)),
             **options,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"destination_label": True},
+        {"destination_label": -1},
+        {"count": True},
+        {"count": 0},
+        {"probability": float("nan")},
+        {"probability": 1.1},
+        {"confidence_low": -0.1},
+        {"confidence_high": float("inf")},
+        {"confidence_low": 0.6},
+        {"confidence_high": 0.4},
+    ],
+)
+def test_transition_estimate_direct_construction_fails_closed(
+    changes: dict[str, object],
+) -> None:
+    estimate = ClusterTransitionEstimate(
+        destination_label=1,
+        count=1,
+        probability=0.5,
+        confidence_low=0.4,
+        confidence_high=0.6,
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        replace(estimate, **changes)
+
+
+def test_transition_row_direct_construction_fails_closed() -> None:
+    destination = ClusterTransitionEstimate(1, 2, 1.0, 0.5, 1.0)
+    row = ClusterTransitionRow(0, 2, (destination,))
+    forged_destination = replace(destination)
+    object.__setattr__(forged_destination, "effective_support", 1)
+
+    invalid = (
+        {"source_label": True},
+        {"source_label": -1},
+        {"support": True},
+        {"support": 0},
+        {"destinations": []},
+        {"destinations": ()},
+        {"destinations": (destination, destination)},
+        {"destinations": (replace(destination, count=1),)},
+        {"destinations": (forged_destination,)},
+    )
+    for changes in invalid:
+        with pytest.raises((TypeError, ValueError)):
+            replace(row, **changes)
+
+
+def test_transition_boundary_evidence_direct_construction_fails_closed() -> None:
+    evidence = TransitionBoundaryEvidence(6, 3, 2, 1, 1, 0, 0, 0, 1)
+    invalid = (
+        {"raw_observation_count": True},
+        {"raw_observation_count": -1},
+        {"dwell_run_count": 7},
+        {"contiguous_sequence_count": 4},
+        {"boundary_break_count": 0},
+        {"symbol_break_count": 2},
+        {
+            "symbol_break_count": 0,
+            "non_contiguous_time_break_count": 0,
+        },
+    )
+    for changes in invalid:
+        with pytest.raises((TypeError, ValueError)):
+            replace(evidence, **changes)
+
+
+def test_transition_matrix_direct_construction_fails_closed_and_empty_is_valid() -> None:
+    matrix = _estimate(tuple(_observation(index, label) for index, label in enumerate((0, 1))))
+    forged_row = replace(matrix.rows[0])
+    object.__setattr__(forged_row, "effective_support", 2)
+    invalid = (
+        {"horizon": True},
+        {"horizon": 0},
+        {"rows": []},
+        {"rows": (forged_row,)},
+        {"total_transitions": True},
+        {"total_transitions": 2},
+        {"sample_unit": "minute"},
+        {"confidence_method": "binomial"},
+        {"seed": True},
+        {"bootstrap_iterations": 0},
+        {"bootstrap_iterations": 10_001},
+        {"block_length": 0},
+        {"block_length": 4_097},
+        {"confidence_level": float("nan")},
+        {"confidence_level": 1.0},
+        {"boundary_evidence": object()},
+    )
+    for changes in invalid:
+        with pytest.raises((TypeError, ValueError)):
+            replace(matrix, **changes)
+
+    empty = _estimate((_observation(0, 0), _observation(1, 0)))
+    assert empty.rows == ()
+    assert empty.total_transitions == 0
+    assert empty.boundary_evidence.dwell_run_count == 1
+
+
+def test_transition_matrix_capacity_accounts_for_horizon() -> None:
+    matrix = _estimate(
+        tuple(_observation(index, label) for index, label in enumerate((0, 1, 2, 3)))
+    )
+
+    with pytest.raises(ValueError, match="boundary-safe dwell-run capacity"):
+        replace(matrix, horizon=4)

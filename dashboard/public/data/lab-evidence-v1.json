@@ -660,7 +660,7 @@
       }
     ]
   },
-  "generated_at": "2026-07-17T06:53:13Z",
+  "generated_at": "2026-07-17T08:33:43Z",
   "phase_gate": {
     "active_phase": "Phase 0: trustworthy foundation",
     "next_required_evidence": "complete RR-000008 and obtain explicit promotion approval",
@@ -703,38 +703,38 @@
     },
     "full_history": {
       "algorithm_version": "row-reconciliation-v3",
-      "audited_keys": 14986858,
+      "audited_keys": 22326427,
       "classification_counts": {
-        "binance_correction": 5643,
-        "binance_fill": 6422788,
-        "exact_match": 8541517,
-        "source_unavailable": 16910
+        "binance_correction": 6198,
+        "binance_fill": 10135975,
+        "exact_match": 12161102,
+        "source_unavailable": 23152
       },
       "completion_state": "partial",
       "cutoff": "2026-07-16T11:23:00Z",
       "differing_field_counts": {
-        "close": 4990,
-        "high": 2253,
-        "low": 2288,
-        "open": 41,
-        "quote_volume": 32,
-        "trades": 26,
-        "volume": 5637
+        "close": 5435,
+        "high": 2559,
+        "low": 2599,
+        "open": 46,
+        "quote_volume": 33,
+        "trades": 27,
+        "volume": 6192
       },
       "expected_work_units": 1583,
       "mapping_version": "market-data-candles-v1",
       "promoted_verified_intervals": 0,
       "promotion_receipt_available": false,
-      "replacement_rows": 6428431,
+      "replacement_rows": 10142173,
       "research_eligibility": "blocked_until_complete_and_deliberately_promoted",
       "run_id": "RR-000008",
       "run_manifest_sha256": "1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629",
       "scope_label": "partial full-history audit progress",
-      "verified_manifest_set_sha256": "d9d77e352165f064b373400753394689b1636efe038423ab415b2bf0378094ad",
-      "verified_work_units": 346,
+      "verified_manifest_set_sha256": "e4f150c0acb0b22a1cc5aa6a8bda988a08a5f9d4057ac0122d9e39c9213b47a4",
+      "verified_work_units": 516,
       "work_unit_status_counts": {
-        "completed": 291,
-        "source_unavailable": 55
+        "completed": 431,
+        "source_unavailable": 85
       }
     }
   },
@@ -799,13 +799,13 @@
     "claim": "fixture only; no real-market recurrence or predictive evidence",
     "fixture_kind": "synthetic_golden",
     "fixture_path": "tests/fixtures/phase4/discovery_run_v1.json",
-    "fixture_sha256": "2a6e7ae69a317f072d0222677d621b55d56240a1a57a0aeeb27ced57aa06f816",
-    "interpretation_input_sha256": "e31c32765d67f84f7a411d9309f636716a2d071a6dc10f7e54f8cf2c32064ac5",
+    "fixture_sha256": "7cb098a040a8ec90ca8a38a5d1d50a6b422a3296e70f15025bc7ec8e4c41cb9a",
+    "interpretation_input_sha256": "3eac8e08aafce10c987298f1365d6570865329184e229477b95fd58656929873",
     "interpretation_response_sha256": "b13972cac7c31f6f48118dc22fd384bacff81935ce6770a75ce6ad2e344f6c04",
     "runs": {
       "rejected": {
         "behaviour_ids": [],
-        "manifest_sha256": "e16a7985f5d015b9931935dd4f171fa365458639df209e4cf92555272dbe7950",
+        "manifest_sha256": "0a06164ce7dbe603c4c11fc9ee62812bf1bdb044ec16a78a6a0dcb24671268d7",
         "metrics": {
           "behaviours": 0,
           "development_rows": 8,
@@ -819,14 +819,15 @@
           "transitions": 2
         },
         "run_id": "DR-000602",
-        "status": "rejected_unstable"
+        "status": "rejected_unstable",
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
       },
       "stable": {
         "behaviour_ids": [
           "B-CB3E7F47FE808F3C",
           "B-D6E06239FB9EC1EF"
         ],
-        "manifest_sha256": "925764c238b16df0a5435320adb9f8f3ac59434758aacf8025636a42e50bfaf3",
+        "manifest_sha256": "c06ddc20b8e606cb62aefa50a68a2624594abef06f8f760c6adc9dabc2dbdbc2",
         "metrics": {
           "behaviours": 2,
           "development_rows": 8,
@@ -840,7 +841,8 @@
           "transitions": 2
         },
         "run_id": "DR-000601",
-        "status": "completed"
+        "status": "completed",
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
       }
     },
     "status": "fixture_contract_present",

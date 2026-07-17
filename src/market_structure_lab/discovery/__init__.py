@@ -39,6 +39,7 @@ from market_structure_lab.discovery.transitions import (
     ClusterTransitionEstimate,
     ClusterTransitionMatrix,
     ClusterTransitionRow,
+    TransitionBoundaryEvidence,
     compress_dwell_runs,
     estimate_cluster_transitions,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "ClusterTransitionEstimate",
     "ClusterTransitionMatrix",
     "ClusterTransitionRow",
+    "TransitionBoundaryEvidence",
     "FeatureDistribution",
     "FeatureMatrix",
     "FrozenBehaviour",

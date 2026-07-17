@@ -97,7 +97,12 @@ export function DiscoveryPage() {
           ))}
         </div>
         <div className="font-mono text-[0.65rem] text-muted-foreground">
-          {run.run_id} · {run.status} · {run.manifest_sha256.slice(0, 12)}…
+          <span>
+            {run.run_id} · {run.status} · {run.manifest_sha256.slice(0, 12)}…
+          </span>
+          <span className="mt-1 block text-primary/80">
+            transition model · {run.transition_algorithm_version}
+          </span>
         </div>
       </section>
 

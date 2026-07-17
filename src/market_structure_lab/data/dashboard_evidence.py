@@ -226,7 +226,7 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
         "interpretation_input_sha256", "interpretation_response_sha256",
         "interpretation_publication",
     }
-    if set(fixture) != expected_top or fixture.get("schema_version") != "phase4-discovery-fixture-v1":
+    if set(fixture) != expected_top or fixture.get("schema_version") != "phase4-discovery-fixture-v2":
         raise ValueError("unsupported Phase 4 fixture schema")
     input_sha = _sha256_file(input_path)
     response_sha = _sha256_file(response_path)
@@ -239,7 +239,7 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
         raise ValueError("Phase 4 fixture requires stable and rejected runs")
     stable = _fixture_run(runs["stable"], expected_status="completed")
     rejected = _fixture_run(runs["rejected"], expected_status="rejected_unstable")
-    if interpretation_input.get("schema_version") != "phase4-interpretation-input-v1":
+    if interpretation_input.get("schema_version") != "phase4-interpretation-input-v2":
         raise ValueError("unsupported Phase 4 interpretation input schema")
     if (
         interpretation_input.get("run_id") != stable["run_id"]
@@ -312,6 +312,8 @@ def _fixture_run(value: object, *, expected_status: str) -> dict[str, Any]:
         or expected.get("status") != expected_status
         or not _is_sha256(expected.get("manifest_sha256"))
         or not isinstance(expected.get("behaviour_ids"), list)
+        or expected.get("transition_algorithm_version")
+        != "boundary-aware-dwell-transitions-v2"
         or not isinstance(metrics, dict)
     ):
         raise ValueError("Phase 4 run fixture contract is invalid")
@@ -320,6 +322,7 @@ def _fixture_run(value: object, *, expected_status: str) -> dict[str, Any]:
         "status": expected_status,
         "manifest_sha256": expected["manifest_sha256"],
         "behaviour_ids": expected["behaviour_ids"],
+        "transition_algorithm_version": expected["transition_algorithm_version"],
         "metrics": metrics,
     }
 

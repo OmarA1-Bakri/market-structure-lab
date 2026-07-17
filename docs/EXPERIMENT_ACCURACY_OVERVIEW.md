@@ -77,7 +77,7 @@ Consequently:
 | End-to-end normalization provenance | Insufficiently bound | High | Discovery config/input identity does not require the fitted normalizer or feature-publication hash |
 | Real detector/cluster stability | Unknown | High | No real discovery run exists |
 | Motif stability and boundary safety | Insufficient | High | Motifs are not stability-tested and orchestration lacks explicit time/session-contiguity checks |
-| Transition inference | Mixed | High | New discovery path is boundary-aware; legacy public path still uses adjacent binomial trials |
+| Transition description | Structurally safe, statistically descriptive | High | The sole public path dwell-compresses, preserves boundary evidence, and exposes no adjacent-binomial/BH inference API |
 | Predictive validity after costs | Not measured | High | Phase 5 and strategy validation have not run |
 | Future experiment success rate | Not estimable (`n=0`) | High | No completed real research trials |
 
@@ -86,13 +86,12 @@ Consequently:
 1. **No empirical experiment exists.** There is nothing from which to estimate predictive accuracy, false-discovery rate, or promotion yield.
 2. **Full-history reconciliation is unfinished.** A research snapshot frozen before RR-000008 completes and is deliberately promoted could preserve known row-value errors.
 3. **Normalization provenance is not end-to-end bound.** `DiscoveryRunConfig` carries snapshot, registry, commit, and lock hashes, but not a required train-fitted normalizer artifact or feature-publication manifest (`src/market_structure_lab/discovery/runs.py:67-86,403-447`; `src/market_structure_lab/discovery/matrix.py:48-60`).
-4. **Legacy transition significance is statistically unsafe.** `market_structure_lab.transitions` counts all adjacent states and applies binomial tails plus BH correction without symbol/session/gap boundaries or serial-dependence correction (`src/market_structure_lab/transitions/matrix.py:26-55`; `significance.py:21-62`; `screening.py:25-83`). Only the newer discovery transition path is suitable for Phase 4 description.
-5. **Trial accounting is incomplete.** Discovery manifests have only `completed` and `rejected_unstable`; pre-publication failures/abandonment are not durable. The generic experiment writer can overwrite an existing run ID and does not require the full PRD provenance/decision record (`src/market_structure_lab/discovery/runs.py:139-148`; `src/market_structure_lab/experiments/artifacts.py:44-85`).
-6. **The fixture does not validate meaningful stability thresholds.** Its accepted run uses maximally permissive ARI/JS/coverage thresholds, so it proves policy plumbing rather than empirical stability (`tests/fixtures/phase4/discovery_run_v1.json:341-356`).
-7. **Motif evidence is weaker than cluster evidence.** Motifs are computed once, only on the first selected feature, and are not tested across seeds, subsamples, adjacent periods, assets, or parameter perturbations. Grouping lacks explicit timestamp/session-contiguity checks after null-row removal (`src/market_structure_lab/discovery/runs.py:483-520`).
-8. **Transition uncertainty defaults are descriptive only.** The newer path correctly dwell-compresses and boundary-checks, but orchestration pins just 100 bootstrap iterations and block length two without a dependence diagnostic or sensitivity analysis (`src/market_structure_lab/discovery/runs.py:523-548,588-597`).
-9. **Dataset hashes are asserted, not linked through the full derivation chain.** Exact supplied rows are hashed, but the discovery layer does not prove that they came from the claimed snapshot, feature publication, normalizer, and commit.
-10. **Semantic leakage remains a developer-declared risk.** Structural guards are good, but an improperly implemented future-derived feature with an innocuous name and incorrect leakage declaration could still pass.
+4. **Trial accounting is incomplete.** Discovery manifests have only `completed` and `rejected_unstable`; pre-publication failures/abandonment are not durable. The generic experiment writer can overwrite an existing run ID and does not require the full PRD provenance/decision record (`src/market_structure_lab/discovery/runs.py`; `src/market_structure_lab/experiments/artifacts.py`).
+5. **The fixture does not validate meaningful stability thresholds.** Its accepted run uses maximally permissive ARI/JS/coverage thresholds, so it proves policy plumbing rather than empirical stability (`tests/fixtures/phase4/discovery_run_v1.json`).
+6. **Motif evidence is weaker than cluster evidence.** Motifs are computed once, only on the first selected feature, and are not tested across seeds, subsamples, adjacent periods, assets, or parameter perturbations. Grouping lacks explicit timestamp/session-contiguity checks after null-row removal (`src/market_structure_lab/discovery/runs.py`).
+7. **Transition uncertainty defaults are descriptive only.** The canonical path correctly dwell-compresses and boundary-checks, but orchestration pins just 100 bootstrap iterations and block length two without a dependence diagnostic or sensitivity analysis (`src/market_structure_lab/discovery/runs.py`).
+8. **Dataset hashes are asserted, not linked through the full derivation chain.** Exact supplied rows are hashed, but the discovery layer does not prove that they came from the claimed snapshot, feature publication, normalizer, and commit.
+9. **Semantic leakage remains a developer-declared risk.** Structural guards are good, but an improperly implemented future-derived feature with an innocuous name and incorrect leakage declaration could still pass.
 
 ## Canonical gates for future accuracy claims
 
@@ -177,7 +176,7 @@ Under the repository phase gate, this review does not authorize a real Phase 4 o
 - `docs/benchmarks/phase4-golden-drift-diagnosis.md: 🟢 closed: cross-platform PCA identity drift is versioned, fail-closed, and verified by 86 passing tests on both Linux and Windows.`
 - `data/exports/reconciliation/RR-000008.run.json:work_units: 🟡 risk: full-history audit is nonterminal. Block snapshot eligibility until every unit and promotion hash verify.`
 - `src/market_structure_lab/discovery/runs.py:67-86: 🔴 risk: run identity omits required normalizer/publication provenance. Bind train-fitted normalizer and feature manifest hashes.`
-- `src/market_structure_lab/transitions/matrix.py:26-55: 🔴 bug: adjacent states cross boundaries and remain serially dependent. Retire this path from research inference; use boundary-aware event transitions.`
+- `src/market_structure_lab/transitions/__init__.py: 🟢 closed: the raw-adjacent binomial/BH surface is deleted; the canonical API requires boundary-aware observations and publishes dwell-run support plus boundary evidence.`
 - `src/market_structure_lab/experiments/artifacts.py:44-85: 🔴 risk: repeated run IDs overwrite evidence and failed trials are lost. Make trial records immutable and terminal-status complete.`
 - `tests/fixtures/phase4/discovery_run_v1.json:350-356: 🟡 risk: accepted fixture thresholds cannot reject instability. Label it policy-plumbing evidence, not stability evidence.`
 - `src/market_structure_lab/discovery/runs.py:483-507: 🔴 bug: motif groups can bridge dropped rows, gaps, or sessions. Enforce explicit contiguity and add multi-axis motif stability.`

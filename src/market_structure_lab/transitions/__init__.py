@@ -1,27 +1,21 @@
-from market_structure_lab.transitions.matrix import (
-    State,
-    Transition,
-    TransitionRow,
-    estimate_transition_matrix,
-    observed_transitions,
-)
-from market_structure_lab.transitions.screening import (
-    TransitionEnrichmentCandidate,
-    screen_transition_enrichment,
-)
-from market_structure_lab.transitions.significance import (
-    TransitionSignificance,
-    transition_significance,
+"""Canonical boundary-aware transition evidence."""
+
+from market_structure_lab.discovery.transitions import (
+    ClusterObservation,
+    ClusterTransitionEstimate,
+    ClusterTransitionMatrix,
+    ClusterTransitionRow,
+    TransitionBoundaryEvidence,
+    compress_dwell_runs,
+    estimate_cluster_transitions,
 )
 
 __all__ = [
-    "State",
-    "Transition",
-    "TransitionEnrichmentCandidate",
-    "TransitionRow",
-    "TransitionSignificance",
-    "estimate_transition_matrix",
-    "observed_transitions",
-    "screen_transition_enrichment",
-    "transition_significance",
+    "ClusterObservation",
+    "ClusterTransitionEstimate",
+    "ClusterTransitionMatrix",
+    "ClusterTransitionRow",
+    "TransitionBoundaryEvidence",
+    "compress_dwell_runs",
+    "estimate_cluster_transitions",
 ]

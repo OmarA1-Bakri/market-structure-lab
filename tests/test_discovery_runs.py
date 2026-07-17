@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -217,7 +218,18 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     assert first == replay
     assert first.status == "completed"
     assert len(first.behaviours) == 2
-    assert first.transition_rows
+    assert first.transition_matrix.rows
+    assert first.transition_matrix.boundary_evidence.raw_observation_count == 12
+    assert first.transition_matrix.boundary_evidence.dwell_run_count < 12
+    published_manifest = json.loads(
+        (tmp_path / first.run_id / "manifest.json").read_text(encoding="utf-8")
+    )
+    published_transitions = json.loads(
+        (tmp_path / first.run_id / "transitions.json").read_text(encoding="utf-8")
+    )
+    assert published_manifest["schema_version"] == "discovery-run-manifest-v2"
+    assert published_manifest["transition_matrix"] == published_transitions
+    assert replay.transition_matrix == first.transition_matrix
     assert not (tmp_path / ".DR-000501.staging").exists()
     assert first_bytes == {
         path.relative_to(tmp_path / first.run_id): path.read_bytes()
@@ -302,7 +314,7 @@ def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
                 if item.behaviour_id != behaviour.behaviour_id
             ),
             contrasting_behaviour_ids=(),
-            transition_rows=run_manifest.transition_rows,
+            transition_matrix=run_manifest.transition_matrix,
         )
         for behaviour in run_manifest.behaviours
     )
@@ -322,10 +334,27 @@ def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
     )
 
     assert first == replay
+    assert first.to_dict()["schema_version"] == "interpretation-manifest-v2"
     assert first.behaviour_ids == tuple(
         sorted(behaviour.behaviour_id for behaviour in run_manifest.behaviours)
     )
     assert not (tmp_path / "DR-000501" / ".interpretations.staging").exists()
+
+    boundary_evidence = run_manifest.transition_matrix.boundary_evidence
+    forged_matrix = replace(
+        run_manifest.transition_matrix,
+        boundary_evidence=replace(
+            boundary_evidence,
+            raw_observation_count=boundary_evidence.raw_observation_count + 1,
+        ),
+    )
+    with pytest.raises(ValueError, match="transition evidence"):
+        publish_ai_interpretations(
+            run_manifest=run_manifest,
+            evidence=(replace(evidence[0], transition_matrix=forged_matrix),) + evidence[1:],
+            interpretations=interpretations,
+            output_root=tmp_path,
+        )
 
     changed = replace(
         interpretations[0],
@@ -352,7 +381,7 @@ def test_interpretation_publication_rejects_forged_run_manifest_identity(tmp_pat
                 if item.behaviour_id != behaviour.behaviour_id
             ),
             contrasting_behaviour_ids=(),
-            transition_rows=run_manifest.transition_rows,
+            transition_matrix=run_manifest.transition_matrix,
         )
         for behaviour in run_manifest.behaviours
     )
@@ -382,7 +411,7 @@ def test_interpretation_publication_rejects_forged_frozen_behaviour_identity(tmp
                 if item.behaviour_id != behaviour.behaviour_id
             ),
             contrasting_behaviour_ids=(),
-            transition_rows=run_manifest.transition_rows,
+            transition_matrix=run_manifest.transition_matrix,
         )
         for behaviour in run_manifest.behaviours
     )

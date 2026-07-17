@@ -35,7 +35,6 @@ from market_structure_lab.discovery.stability import (
 from market_structure_lab.discovery.transitions import (
     ClusterObservation,
     ClusterTransitionMatrix,
-    ClusterTransitionRow,
     estimate_cluster_transitions,
 )
 from market_structure_lab.features.models import FeatureRow
@@ -144,19 +143,19 @@ class DiscoveryRunManifest:
     config_sha256: str
     artifact_sha256: tuple[tuple[str, str], ...]
     behaviours: tuple[FrozenBehaviour, ...]
-    transition_rows: tuple[ClusterTransitionRow, ...]
+    transition_matrix: ClusterTransitionMatrix
     manifest_sha256: str
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": "discovery-run-manifest-v1",
+            "schema_version": "discovery-run-manifest-v2",
             "run_id": self.run_id,
             "status": self.status,
             "identity_sha256": self.identity_sha256,
             "config_sha256": self.config_sha256,
             "artifact_sha256": dict(self.artifact_sha256),
             "behaviour_ids": [item.behaviour_id for item in self.behaviours],
-            "transition_rows": [_jsonable(row) for row in self.transition_rows],
+            "transition_matrix": _jsonable(self.transition_matrix),
             "manifest_sha256": self.manifest_sha256,
         }
 
@@ -171,7 +170,7 @@ class InterpretationManifest:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": "interpretation-manifest-v1",
+            "schema_version": "interpretation-manifest-v2",
             "run_id": self.run_id,
             "behaviour_ids": list(self.behaviour_ids),
             "identity_sha256": self.identity_sha256,
@@ -286,14 +285,14 @@ def run_discovery(
     artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
     config_sha256 = _sha256(_canonical_json(config_payload))
     manifest_without_hash = {
-        "schema_version": "discovery-run-manifest-v1",
+        "schema_version": "discovery-run-manifest-v2",
         "run_id": config.run_id,
         "status": status,
         "identity_sha256": identity_sha256,
         "config_sha256": config_sha256,
         "artifact_sha256": dict(artifact_hashes),
         "behaviour_ids": [item.behaviour_id for item in behaviours],
-        "transition_rows": [_jsonable(row) for row in transition_matrix.rows],
+        "transition_matrix": _jsonable(transition_matrix),
     }
     manifest = DiscoveryRunManifest(
         run_id=config.run_id,
@@ -302,7 +301,7 @@ def run_discovery(
         config_sha256=config_sha256,
         artifact_sha256=artifact_hashes,
         behaviours=behaviours,
-        transition_rows=transition_matrix.rows,
+        transition_matrix=transition_matrix,
         manifest_sha256=_sha256(_canonical_json(manifest_without_hash)),
     )
     manifest_bytes = _json_file(manifest.to_dict())
@@ -348,6 +347,8 @@ def publish_ai_interpretations(
         ) - set(expected_ids)
         if unknown_neighbours:
             raise ValueError("evidence neighbours must reference frozen run behaviours")
+        if pack.transition_matrix != run_manifest.transition_matrix:
+            raise ValueError("evidence transition evidence changed")
         detector_fields = tuple(item.feature_name for item in pack.behaviour.feature_distributions)
         if record.detector_fields != detector_fields:
             raise ValueError("AI interpretation detector fields changed")
@@ -374,7 +375,7 @@ def publish_ai_interpretations(
     }
     artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
     manifest_without_hash = {
-        "schema_version": "interpretation-manifest-v1",
+        "schema_version": "interpretation-manifest-v2",
         "run_id": run_manifest.run_id,
         "behaviour_ids": list(expected_ids),
         "identity_sha256": identity_sha256,

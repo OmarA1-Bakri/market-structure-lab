@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -178,6 +179,7 @@ def _expected_run(manifest, run_dir: Path) -> dict[str, object]:
         "behaviour_ids": [item.behaviour_id for item in manifest.behaviours],
         "artifact_sha256": dict(manifest.artifact_sha256),
         "metrics": metrics,
+        "transition_algorithm_version": manifest.transition_matrix.algorithm_version,
     }
 
 
@@ -191,7 +193,7 @@ def _evidence(manifest) -> tuple[BehaviourEvidencePack, ...]:
                 item for item in behaviour_ids if item != behaviour.behaviour_id
             ),
             contrasting_behaviour_ids=(),
-            transition_rows=manifest.transition_rows,
+            transition_matrix=manifest.transition_matrix,
         )
         for behaviour in manifest.behaviours
     )
@@ -201,7 +203,7 @@ def _interpretation_input(manifest) -> dict[str, object]:
     evidence = _evidence(manifest)
     evidence_payload = [item.to_dict() for item in evidence]
     payload = {
-        "schema_version": "phase4-interpretation-input-v1",
+        "schema_version": "phase4-interpretation-input-v2",
         "run_id": manifest.run_id,
         "run_manifest_sha256": manifest.manifest_sha256,
         "evidence_sha256": hashlib.sha256(
@@ -276,6 +278,7 @@ def _interpretations(
 
 def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path) -> None:
     fixture = _load_json(FIXTURE_PATH)
+    assert fixture["schema_version"] == "phase4-discovery-fixture-v2"
     assert "holdout_rows" not in fixture
     assert all(
         forbidden not in FIXTURE_PATH.read_text(encoding="utf-8").lower()
@@ -291,6 +294,16 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
 
     assert stable_first == stable_second
     assert _bundle_bytes(stable_first_dir) == _bundle_bytes(stable_second_dir)
+    published_manifest = _load_json(stable_first_dir / "manifest.json")
+    published_transitions = _load_json(stable_first_dir / "transitions.json")
+    assert published_manifest["transition_matrix"] == published_transitions
+    assert (
+        published_manifest["transition_matrix"]["boundary_evidence"]
+        == asdict(stable_first.transition_matrix.boundary_evidence)
+    )
+    assert _load_json(stable_first_dir / "projection.json")["algorithm_version"] == (
+        "deterministic-pca-v2"
+    )
     assert _expected_run(stable_first, stable_first_dir) == fixture["runs"]["stable"]["expected"]
 
     rejected_first_root = tmp_path / "rejected-first"

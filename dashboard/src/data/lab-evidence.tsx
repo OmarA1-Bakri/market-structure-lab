@@ -6,6 +6,9 @@ import {
   type ReactNode,
 } from "react";
 
+export const TRANSITION_ALGORITHM_VERSION =
+  "boundary-aware-dwell-transitions-v2" as const;
+
 export type SymbolState =
   | "up_to_date"
   | "recovered"
@@ -94,6 +97,7 @@ export interface LabEvidence {
         run_id: string;
         status: "completed" | "rejected_unstable";
         manifest_sha256: string;
+        transition_algorithm_version: typeof TRANSITION_ALGORITHM_VERSION;
         behaviour_ids: string[];
         metrics: Record<string, unknown>;
       }
@@ -330,6 +334,7 @@ function isReplay(value: unknown): value is LabEvidence["software_replay"] {
     typeof run.run_id === "string" &&
     run.status === status &&
     isSha256(run.manifest_sha256) &&
+    run.transition_algorithm_version === TRANSITION_ALGORITHM_VERSION &&
     Array.isArray(run.behaviour_ids) &&
     run.behaviour_ids.every((id) => typeof id === "string") &&
     hasReplayMetrics(run.metrics);

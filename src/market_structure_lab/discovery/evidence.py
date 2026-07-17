@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 
 from market_structure_lab.discovery.behaviours import FrozenBehaviour
-from market_structure_lab.discovery.transitions import ClusterTransitionRow
+from market_structure_lab.discovery.transitions import ClusterTransitionMatrix
 from market_structure_lab.features.registry import validate_discovery_field_name
 
 _RUN_ID = re.compile(r"^DR-[0-9]{6}$")
@@ -74,7 +74,7 @@ class BehaviourEvidencePack:
     behaviour: FrozenBehaviour
     nearest_behaviour_ids: tuple[str, ...]
     contrasting_behaviour_ids: tuple[str, ...]
-    transition_rows: tuple[ClusterTransitionRow, ...]
+    transition_matrix: ClusterTransitionMatrix
 
     def __post_init__(self) -> None:
         _require_run_id(self.run_id)
@@ -90,18 +90,19 @@ class BehaviourEvidencePack:
             raise ValueError("evidence neighbours cannot contain the source behaviour")
         if set(nearest) & set(contrasting):
             raise ValueError("nearest and contrasting behaviour IDs cannot overlap")
-        if any(not isinstance(row, ClusterTransitionRow) for row in self.transition_rows):
-            raise TypeError("transition_rows must contain ClusterTransitionRow values")
+        if not isinstance(self.transition_matrix, ClusterTransitionMatrix):
+            raise TypeError("transition_matrix must be a ClusterTransitionMatrix")
         object.__setattr__(self, "nearest_behaviour_ids", nearest)
         object.__setattr__(self, "contrasting_behaviour_ids", contrasting)
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "schema_version": "behaviour-evidence-pack-v2",
             "run_id": self.run_id,
             "behaviour": asdict(self.behaviour),
             "nearest_behaviour_ids": list(self.nearest_behaviour_ids),
             "contrasting_behaviour_ids": list(self.contrasting_behaviour_ids),
-            "transition_rows": [asdict(row) for row in self.transition_rows],
+            "transition_matrix": asdict(self.transition_matrix),
         }
 
     def canonical_json(self) -> str:

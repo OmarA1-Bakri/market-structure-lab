@@ -87,9 +87,9 @@ manifest.json
 ```
 
 JSON is canonical and newline-terminated. `manifest.json` pins run/config/input identity, status,
-behaviour IDs, transition rows, and every artifact SHA-256. Repeating identical content returns the
-verified existing run without rewriting it. Stale stages, changed identity/content, missing files,
-extra caller identities, or checksum disagreement fail closed.
+behaviour IDs, the complete versioned transition matrix, and every artifact SHA-256. Repeating
+identical content returns the verified existing run without rewriting it. Stale stages, changed
+identity/content, missing files, extra caller identities, or checksum disagreement fail closed.
 
 Interpretations publish separately under `DR-*/interpretations/` with evidence, interpretation, and
 manifest hashes. The supplied run object must be byte-identical to the verified run manifest, and
@@ -109,21 +109,21 @@ uv run pytest -q tests/test_phase4_golden.py
 ```
 
 The stable `DR-000601` fixture freezes two behaviours and has manifest SHA-256
-`86d754f5be1c3d0b5e2a9d403a7af9c814231f7679421a560f14dc1bbc65b8f2`. The unstable
+`c06ddc20b8e606cb62aefa50a68a2624594abef06f8f760c6adc9dabc2dbdbc2`. The unstable
 `DR-000602` fixture is deterministically retained with no behaviours and manifest SHA-256
-`cbadd46a15144ce89424b40c0d84687ce99764725b323d4f2f9dbb3b66f9e500`.
+`0a06164ce7dbe603c4c11fc9ee62812bf1bdb044ec16a78a6a0dcb24671268d7`.
 
 The parent-model interpretation prompt input is frozen at
 `tests/fixtures/phase4/discovery_interpretation_input_v1.json`, SHA-256
-`dd306e3eea72684c28d3855e924785c805d1c7b0e8d8961736eab9c5fca526e5`. It is derived through the
+`3eac8e08aafce10c987298f1365d6570865329184e229477b95fd58656929873`. It is derived through the
 real evidence-pack API.
 
 The session model's exact response and supplied provenance are stored separately at
 `tests/fixtures/phase4/discovery_interpretation_response_v1.json`, SHA-256
-`d3a180687ff3e630b559f17c2433359bc86d76e301c585e84da6a0a77453ab06`. The test constructs real
+`b13972cac7c31f6f48118dc22fd384bacff81935ce6770a75ce6ad2e344f6c04`. The test constructs real
 `AIInterpretation` records from those bytes and publishes them through
 `publish_ai_interpretations`. The interpretation manifest SHA-256 is
-`b0370ffee5a3d64ae57fd3e4af798ec98fe00daee70dcb07a2ed08d1b545c53c`. These are candidate
+`c2f1249ed0a3558f07e33ca11ebdb007c97a98975d682ca8a2bd576e8add6a60`. These are candidate
 interpretations and proposed Phase 5 tests, not validation results.
 
 ## Interpretation of transitions
@@ -133,6 +133,8 @@ Transition rows estimate observed conditional frequencies such as
 Markov-like summaries only. Phase 4 does not establish the Markov property, stationarity, causal
 mechanisms, or independent samples. Support counts and block-bootstrap intervals must accompany
 every probability, and low-support rows are descriptive evidence rather than significant signals.
+The serialized algorithm identity is `boundary-aware-dwell-transitions-v2`; discovery manifests and
+AI evidence packs retain the complete matrix so compression and boundary evidence survive replay.
 
 ## Approximation limits and Phase 5 boundary
 

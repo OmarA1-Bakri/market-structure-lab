@@ -253,20 +253,16 @@ in [`DISCOVERY_MVP.md`](DISCOVERY_MVP.md).
 
 ## Transition analysis
 
-Use `market_structure_lab.transitions` to count adjacent observed state transitions and estimate conditional
-probabilities:
+Use `market_structure_lab.transitions.estimate_cluster_transitions` to estimate conditional
+frequencies from boundary-aware `ClusterObservation` records:
 
 ```text
 P(next_state | current_state)
 ```
 
-Rows include support counts, so later research can filter low-observation transitions before
-claiming statistical significance.
-
-Use `market_structure_lab.transitions.transition_significance` to compare an observed transition probability
-against the unconditional base rate of the next state. The current implementation is a one-sided
-binomial tail test for enrichment; it does not correct for multiple comparisons.
-
-Use `market_structure_lab.transitions.screen_transition_enrichment` when testing many observed transitions at once.
-It applies Benjamini-Hochberg false-discovery-rate correction and returns only significant
-candidates that meet the configured support threshold.
+The estimator compresses repeated dwell rows and partitions observations at symbol, timeframe,
+segment, session, and non-contiguous-time boundaries before counting. Each matrix records raw-row,
+dwell-run, contiguous-sequence, and boundary-break evidence; its rows and destinations expose
+effective dwell-run support. Boundary-preserving block-bootstrap intervals quantify sampling
+variation without claiming independent minute observations. The legacy raw-adjacent matrix,
+binomial p-value, and Benjamini-Hochberg screening APIs are intentionally unavailable.

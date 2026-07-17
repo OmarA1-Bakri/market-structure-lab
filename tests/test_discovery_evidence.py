@@ -10,11 +10,13 @@ from market_structure_lab.discovery import (
     AIInterpretation,
     BehaviourEvidencePack,
     ClusterTransitionEstimate,
+    ClusterTransitionMatrix,
     ClusterTransitionRow,
     FeatureMatrix,
     PartitionRole,
     StabilityPolicy,
     StabilityReport,
+    TransitionBoundaryEvidence,
     fit_pca,
     fit_projected_kmeans,
     freeze_behaviours,
@@ -75,6 +77,32 @@ def _transition_row() -> ClusterTransitionRow:
     )
 
 
+def _transition_matrix() -> ClusterTransitionMatrix:
+    return ClusterTransitionMatrix(
+        algorithm_version="boundary-aware-dwell-transitions-v2",
+        horizon=1,
+        rows=(_transition_row(),),
+        total_transitions=2,
+        sample_unit="dwell_run",
+        confidence_method="boundary_block_bootstrap",
+        seed=7,
+        bootstrap_iterations=100,
+        block_length=2,
+        confidence_level=0.95,
+        boundary_evidence=TransitionBoundaryEvidence(
+            raw_observation_count=6,
+            dwell_run_count=3,
+            contiguous_sequence_count=1,
+            boundary_break_count=0,
+            symbol_break_count=0,
+            timeframe_break_count=0,
+            segment_break_count=0,
+            session_break_count=0,
+            non_contiguous_time_break_count=0,
+        ),
+    )
+
+
 def _interpretation(behaviour_id: str) -> AIInterpretation:
     return AIInterpretation(
         behaviour_id=behaviour_id,
@@ -102,13 +130,25 @@ def test_evidence_pack_contains_only_frozen_summaries() -> None:
         behaviour=behaviour,
         nearest_behaviour_ids=("B-1111111111111111",),
         contrasting_behaviour_ids=("B-2222222222222222",),
-        transition_rows=(_transition_row(),),
+        transition_matrix=_transition_matrix(),
     )
 
     payload = pack.to_dict()
     text = pack.canonical_json()
 
     assert payload["behaviour"]["behaviour_id"] == behaviour.behaviour_id
+    assert payload["schema_version"] == "behaviour-evidence-pack-v2"
+    assert payload["transition_matrix"]["boundary_evidence"] == {
+        "raw_observation_count": 6,
+        "dwell_run_count": 3,
+        "contiguous_sequence_count": 1,
+        "boundary_break_count": 0,
+        "symbol_break_count": 0,
+        "timeframe_break_count": 0,
+        "segment_break_count": 0,
+        "session_break_count": 0,
+        "non_contiguous_time_break_count": 0,
+    }
     assert "rows" not in payload
     assert "holdout" not in text.lower()
     assert "future_return" not in text
@@ -122,7 +162,7 @@ def test_evidence_pack_rejects_self_neighbours_overlap_and_run_drift() -> None:
         behaviour=behaviour,
         nearest_behaviour_ids=(),
         contrasting_behaviour_ids=(),
-        transition_rows=(),
+        transition_matrix=_transition_matrix(),
     )
 
     for changes in (

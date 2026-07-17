@@ -117,14 +117,14 @@ prior frozen state; no future candle participates in a snapshot.
 
 ## Current transition model
 
-`market_structure_lab.transitions.estimate_transition_matrix` estimates empirical transition probabilities from any
-deterministic state sequence. It does not smooth, infer hidden states, or fit a probabilistic model.
-Those steps should only be introduced after observed deterministic transitions have enough support.
+`market_structure_lab.transitions.estimate_cluster_transitions` is the canonical transition
+surface. It accepts only UTC-aware `ClusterObservation` values carrying symbol, timeframe, segment,
+session, timestamp, and information-cutoff boundaries. Equal adjacent labels are compressed into
+dwell runs, and transitions never cross a declared boundary or non-contiguous timestamp.
 
-`market_structure_lab.transitions.transition_significance` tests whether one observed transition is enriched
-relative to the next state's unconditional base rate. It is a statistical layer outside the Phase 2
-auction representation and must respect symbol, session, segment, and material-gap boundaries.
-
-`market_structure_lab.transitions.screen_transition_enrichment` is the current broad-screening primitive. It tests
-all observed transitions above a support threshold and applies Benjamini-Hochberg correction before
-returning candidates.
+Returned matrices expose raw observation count, dwell-run count, contiguous-sequence count, and
+boundary-break counts by symbol, timeframe, segment, session, and non-contiguous time. Row and
+destination estimates expose effective dwell-run support. The estimates are descriptive conditional
+frequencies with boundary-preserving block-bootstrap intervals; no raw-adjacent binomial p-value or
+Benjamini-Hochberg screening API is available. Discovery manifests and interpretation evidence
+packs retain this complete matrix rather than copying rows without their boundary evidence.

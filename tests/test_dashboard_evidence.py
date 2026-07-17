@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Callable
 
 import pytest
 
@@ -129,6 +131,9 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     assert accuracy["fixture_trials_counted_as_real"] is False
     replay = evidence["software_replay"]
     assert replay["runs"]["stable"]["run_id"] == "DR-000601"
+    assert replay["runs"]["stable"]["transition_algorithm_version"] == (
+        "boundary-aware-dwell-transitions-v2"
+    )
     assert replay["runs"]["stable"]["behaviour_ids"] == [
         "B-CB3E7F47FE808F3C", "B-D6E06239FB9EC1EF"
     ]
@@ -200,3 +205,39 @@ def test_generator_rejects_noncanonical_publication_timestamps(
 ) -> None:
     with pytest.raises(ValueError, match="generated_at"):
         generate_lab_evidence(_repository(tmp_path), generated_at=generated_at)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda run: run.pop("transition_algorithm_version"),
+        lambda run: run.__setitem__("transition_algorithm_version", "legacy-v1"),
+    ],
+    ids=["missing", "wrong"],
+)
+def test_dashboard_verifier_rejects_invalid_transition_algorithm_version(
+    tmp_path: Path,
+    mutation: Callable[[dict[str, Any]], object],
+) -> None:
+    evidence = generate_lab_evidence(
+        _repository(tmp_path / "repository"),
+        generated_at="2026-07-17T03:00:00Z",
+    )
+    mutation(evidence["software_replay"]["runs"]["stable"])
+    artifact = tmp_path / "lab-evidence-v1.json"
+    artifact.write_text(json.dumps(evidence), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "node",
+            "dashboard/scripts/verify-lab-evidence.mjs",
+            str(artifact),
+        ],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "transition algorithm version" in result.stderr

@@ -1,5 +1,5 @@
 {
-  "schema_version": "phase4-discovery-fixture-v1",
+  "schema_version": "phase4-discovery-fixture-v2",
   "dataset_snapshot": {
     "dataset_version": "DS-000601",
     "sha256": "8be7a8986ce91cff9af10249be029aaeb6893e2fdf7a63ca99115b6ec58b9dc5"
@@ -356,7 +356,7 @@
       },
       "expected": {
         "status": "completed",
-        "manifest_sha256": "925764c238b16df0a5435320adb9f8f3ac59434758aacf8025636a42e50bfaf3",
+        "manifest_sha256": "c06ddc20b8e606cb62aefa50a68a2624594abef06f8f760c6adc9dabc2dbdbc2",
         "identity_sha256": "cf808253c11204fdc725fe9e8ec18b34ab84970289ff5706c2d8c3bdf2b26b86",
         "config_sha256": "9c6f31ac2da36907492623132e789d1520186d1e0d98093a348a408c78464918",
         "behaviour_ids": [
@@ -372,7 +372,7 @@
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "6c369e5c863a2714aaa7865ba239e6eb6d864e151c99cf48ef47b07aa6c57622",
           "summary.md": "4416fc69bc5c4f7f80e8de94a7229a3fbb54689dcbc2cf32334f9ff7b0f4f3ad",
-          "transitions.json": "507d9fb64ce4b6a615647e3bb14e1ba1c185285fed77199e709bb39784ff71bc"
+          "transitions.json": "4586a21d8ff6e594531ab6a7c6275f4ea7a5205990fdf0e7c4d48048e54a3661"
         },
         "metrics": {
           "behaviours": 2,
@@ -385,7 +385,8 @@
           "motifs": 6,
           "status": "completed",
           "transitions": 2
-        }
+        },
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
       }
     },
     "rejected": {
@@ -405,7 +406,7 @@
       },
       "expected": {
         "status": "rejected_unstable",
-        "manifest_sha256": "e16a7985f5d015b9931935dd4f171fa365458639df209e4cf92555272dbe7950",
+        "manifest_sha256": "0a06164ce7dbe603c4c11fc9ee62812bf1bdb044ec16a78a6a0dcb24671268d7",
         "identity_sha256": "edf76c9ca23d2fb39ef2c10041cd36961fc5b5b35f0c0f041378e3fa866d88a9",
         "config_sha256": "c2140865855c1f320bc59457e56f158681cd04ba20ae251895d8818689ca6c8a",
         "behaviour_ids": [],
@@ -418,7 +419,7 @@
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "0ccc8ad028003ba7ff762c8261b407dee9e503801dd29f4bdc3526ab9569573c",
           "summary.md": "8d87b964312105a50df1d4abc8e2431aa38c0b40dfac9a463ee663ca802d9e30",
-          "transitions.json": "507d9fb64ce4b6a615647e3bb14e1ba1c185285fed77199e709bb39784ff71bc"
+          "transitions.json": "4586a21d8ff6e594531ab6a7c6275f4ea7a5205990fdf0e7c4d48048e54a3661"
         },
         "metrics": {
           "behaviours": 0,
@@ -431,26 +432,27 @@
           "motifs": 6,
           "status": "rejected_unstable",
           "transitions": 2
-        }
+        },
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
       }
     }
   },
-  "interpretation_input_sha256": "e31c32765d67f84f7a411d9309f636716a2d071a6dc10f7e54f8cf2c32064ac5",
+  "interpretation_input_sha256": "3eac8e08aafce10c987298f1365d6570865329184e229477b95fd58656929873",
   "interpretation_response_sha256": "b13972cac7c31f6f48118dc22fd384bacff81935ce6770a75ce6ad2e344f6c04",
   "interpretation_publication": {
     "expected": {
-      "schema_version": "interpretation-manifest-v1",
+      "schema_version": "interpretation-manifest-v2",
       "run_id": "DR-000601",
       "behaviour_ids": [
         "B-CB3E7F47FE808F3C",
         "B-D6E06239FB9EC1EF"
       ],
-      "identity_sha256": "9ac1e70f0b8e0af8ce6ef7989aac80e7bc3bc0721c55558d9793345541ea19f2",
+      "identity_sha256": "44d6a722c8d2095b902b2d2e73c4b426b2a63175727f6d3eae56f9d76cffdb6d",
       "artifact_sha256": {
-        "evidence.json": "4ddd6d84860047caf1f47058f38170cb9d082995ea9d62fd6de467864b2cdb1c",
-        "interpretations.json": "a1a78434a82dac56acca707be4123b6dd169b97347b135a6a1afb7bee54d4129"
+        "evidence.json": "6d1f6ee93ad15dc45c69c0a8fd5ba2d5af7b44efe125adbdc8dc8cb5d488e110",
+        "interpretations.json": "a6a759ef2f21d3507a273b11120e5ab01bb57c5907946e5a4aede6a031f961ef"
       },
-      "manifest_sha256": "58d33fc7818b01edfd459daaf188f4fa7d079279cb7d9bc8ec481ea1ce77ffc2"
+      "manifest_sha256": "c2f1249ed0a3558f07e33ca11ebdb007c97a98975d682ca8a2bd576e8add6a60"
     }
   }
 }

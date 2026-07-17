@@ -37,6 +37,7 @@ const compatibilityStates = new Set([
   "source_conflict",
   "source_unavailable",
 ]);
+const transitionAlgorithmVersion = "boundary-aware-dwell-transitions-v2";
 
 let evidence;
 try {
@@ -215,6 +216,7 @@ for (const [key, status] of [
     typeof run.run_id !== "string" ||
     run.status !== status ||
     !sha(run.manifest_sha256) ||
+    run.transition_algorithm_version !== transitionAlgorithmVersion ||
     !Array.isArray(run.behaviour_ids) ||
     run.behaviour_ids.some((value) => typeof value !== "string") ||
     !object(run.metrics) ||
@@ -226,7 +228,11 @@ for (const [key, status] of [
       "development_rows",
     ].every((metric) => count(run.metrics[metric]))
   )
-    fail("fixture replay metrics");
+    fail(
+      run?.transition_algorithm_version !== transitionAlgorithmVersion
+        ? "transition algorithm version"
+        : "fixture replay metrics",
+    );
 }
 const registry = evidence.feature_registry;
 if (
