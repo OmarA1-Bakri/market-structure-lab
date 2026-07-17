@@ -701,7 +701,7 @@
       }
     ]
   },
-  "generated_at": "2026-07-17T09:50:37Z",
+  "generated_at": "2026-07-17T10:47:01Z",
   "phase_gate": {
     "active_phase": "Phase 0: trustworthy foundation",
     "next_required_evidence": "complete RR-000008 and obtain explicit promotion approval",
@@ -744,38 +744,38 @@
     },
     "full_history": {
       "algorithm_version": "row-reconciliation-v3",
-      "audited_keys": 27402651,
+      "audited_keys": 30791654,
       "classification_counts": {
-        "binance_correction": 6375,
-        "binance_fill": 12987115,
-        "exact_match": 14383241,
-        "source_unavailable": 25920
+        "binance_correction": 6451,
+        "binance_fill": 15493319,
+        "exact_match": 15264252,
+        "source_unavailable": 27632
       },
       "completion_state": "partial",
       "cutoff": "2026-07-16T11:23:00Z",
       "differing_field_counts": {
-        "close": 5562,
-        "high": 2622,
-        "low": 2667,
-        "open": 52,
+        "close": 5608,
+        "high": 2650,
+        "low": 2693,
+        "open": 60,
         "quote_volume": 35,
         "trades": 29,
-        "volume": 6369
+        "volume": 6445
       },
       "expected_work_units": 1583,
       "mapping_version": "market-data-candles-v1",
       "promoted_verified_intervals": 0,
       "promotion_receipt_available": false,
-      "replacement_rows": 12993490,
+      "replacement_rows": 15499770,
       "research_eligibility": "blocked_until_complete_and_deliberately_promoted",
       "run_id": "RR-000008",
       "run_manifest_sha256": "1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629",
       "scope_label": "partial full-history audit progress",
-      "verified_manifest_set_sha256": "39266bda7614c20e35d9b9fc80bf758e25d26d2d093fe9075b605cf688f297a3",
-      "verified_work_units": 634,
+      "verified_manifest_set_sha256": "8f511f403a6a34bf1b77b34c2a7c609d92a4e75ff844b407704b623cd8ba1bb1",
+      "verified_work_units": 712,
       "work_unit_status_counts": {
-        "completed": 534,
-        "source_unavailable": 100
+        "completed": 606,
+        "source_unavailable": 106
       }
     }
   },
