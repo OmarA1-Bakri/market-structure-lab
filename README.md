@@ -51,9 +51,20 @@ uv sync --locked
 
 ## Docker
 
-Start PostgreSQL and pgAdmin:
+Create the ignored local environment file before starting PostgreSQL and pgAdmin:
 
 ```bash
+cp .env.example .env
+```
+
+Edit `.env` and set both `POSTGRES_PASSWORD` and `PGADMIN_DEFAULT_PASSWORD` to non-empty local
+secrets. Never commit `.env` or either value. The password entries in `.env.example` are blank
+deliberately so copied configuration will fail closed until both local secrets are supplied.
+
+Validate interpolation, then start the services:
+
+```bash
+docker compose config --quiet
 docker compose up -d
 ```
 
@@ -139,7 +150,11 @@ Load candles in research code:
 ```python
 from market_structure_lab.datasets import load_dataset, load_symbol
 
-btc = load_symbol("BTCUSDT")
+btc = load_symbol(
+    "BTCUSDT",
+    start="2025-01-01T00:00:00Z",
+    end="2025-01-02T00:00:00Z",
+)
 eth = load_dataset(
     symbol="ETHUSDT",
     timeframe="1m",
@@ -291,8 +306,9 @@ uv run pytest -q tests/test_phase4_golden.py
 See [`docs/DISCOVERY_MVP.md`](docs/DISCOVERY_MVP.md) for algorithms, caps, artifact formats,
 Markov-like transition caveats, the frozen AI interpretation handoff, and the Phase 5 boundary.
 
-The discovery software, including PCA/K-means, stability analysis, motifs, and Markov-like
-boundary-aware transitions, is ready for real market experiments. The remaining handoff is
-deliberate: freeze an immutable market snapshot and publish its Phase 3 feature/event dataset.
-Those experiments remain outcome-blind Phase 4 research, not Phase 5 validation or evidence of an
-edge.
+The committed discovery surface is synthetic software-fixture evidence and is not ready for real
+market experiments. After Phase 0, an immutable snapshot and Phase 3 publication are necessary but
+not sufficient: independent provenance verification, cluster and motif stability hardening,
+boundary and transition controls, leakage defenses, and explicit user approval remain mandatory.
+Any later approved experiments remain outcome-blind Phase 4 research, not Phase 5 validation or
+evidence of an edge.

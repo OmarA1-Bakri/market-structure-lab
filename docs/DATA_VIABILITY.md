@@ -272,9 +272,11 @@ profitability, target, MFE/MAE, or future-volatility field is admitted.
 
 The committed Phase 4 golden fixture is a deterministic software-verification dataset, not sampled
 market evidence and not proof of an edge. It exercises two symbols through real split, matrix, PCA,
-K-means, stability, motif, transition, behaviour, evidence, and artifact APIs. Real Phase 4 market
-experiments may begin after a declared immutable snapshot and its Phase 3 feature/event publication
-are frozen. Current snapshot policy correctly rejects partial/provider-absent coverage, so research
+K-means, stability, motif, transition, behaviour, evidence, and artifact APIs. A declared immutable
+snapshot and Phase 3 feature/event publication are necessary but not sufficient for real Phase 4
+market experiments. After Phase 0, independent provenance verification, cluster and motif stability
+hardening, boundary and transition controls, leakage defenses, and explicit user approval remain
+mandatory. Current snapshot policy correctly rejects partial/provider-absent coverage, so research
 must use an approved contiguous/scoped universe or resolve those gaps rather than weaken the gate.
 Stable replay pins
 manifest SHA-256 `86d754f5be1c3d0b5e2a9d403a7af9c814231f7679421a560f14dc1bbc65b8f2`;

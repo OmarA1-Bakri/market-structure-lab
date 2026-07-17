@@ -32,7 +32,7 @@ def iter_dataset_batches(
     mapping: CandleSourceMapping | None = None,
     settings: MarketDataSettings | None = None,
 ) -> Iterator[pl.DataFrame]:
-    """Yield bounded canonical batches for large reads and exports."""
+    """Yield bounded-size canonical batches for streaming reads and exports."""
     return iter_candle_batches(
         symbol=symbol,
         timeframe=timeframe,
@@ -49,14 +49,16 @@ def load_symbol(
     symbol: str,
     *,
     timeframe: str = "1m",
-    start: str | datetime | None = None,
-    end: str | datetime | None = None,
+    start: str | datetime,
+    end: str | datetime,
     batch_size: int = DEFAULT_BATCH_SIZE,
     engine: Engine | Connection | None = None,
     mapping: CandleSourceMapping | None = None,
     settings: MarketDataSettings | None = None,
 ) -> pl.DataFrame:
     """Materialize one intentionally bounded research window."""
+    if start is None or end is None:
+        raise ValueError("materializing candles requires explicit start and end bounds")
     return load_dataset(
         symbol=symbol,
         timeframe=timeframe,
@@ -73,8 +75,8 @@ def load_dataset(
     *,
     symbol: str,
     timeframe: str = "1m",
-    start: str | datetime | None = None,
-    end: str | datetime | None = None,
+    start: str | datetime,
+    end: str | datetime,
     batch_size: int = DEFAULT_BATCH_SIZE,
     engine: Engine | Connection | None = None,
     mapping: CandleSourceMapping | None = None,
@@ -82,9 +84,11 @@ def load_dataset(
 ) -> pl.DataFrame:
     """Materialize canonical candles with ordered, half-open range semantics.
 
-    Use :func:`iter_dataset_batches` for ranges that are not deliberately small
-    enough to fit in memory.
+    Both half-open range bounds are mandatory. Use :func:`iter_dataset_batches`
+    for ranges that are not deliberately small enough to fit in memory.
     """
+    if start is None or end is None:
+        raise ValueError("materializing candles requires explicit start and end bounds")
     return load_candles(
         symbol=symbol,
         timeframe=timeframe,

@@ -29,6 +29,21 @@ def test_database_url_uses_structured_escaping_and_redaction() -> None:
     assert "p@ss/word" not in repr(settings)
 
 
+def test_database_settings_require_an_explicit_nonempty_password(capsys) -> None:
+    with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+        DatabaseSettings()
+    with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+        DatabaseSettings(password="")
+    with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+        DatabaseSettings.from_env({})
+    with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+        DatabaseSettings.from_env({"POSTGRES_PASSWORD": "   "})
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_database_settings_validate_port_and_identifiers() -> None:
     with pytest.raises(ValueError, match="port"):
         DatabaseSettings(port=0)

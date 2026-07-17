@@ -39,7 +39,9 @@ from market_structure_lab.datasets import load_dataset, load_symbol
 timestamp, symbol, timeframe, open, high, low, close, volume
 ```
 
-Time windows are half-open: `start <= timestamp < end`.
+Materializing loaders require both bounds, and time windows are half-open:
+`start <= timestamp < end`. Unbounded ranges are available only through the bounded-size streaming
+iterators.
 
 The data layer is the only package allowed to know source tables or columns. Configuration maps the
 reviewed `market_data.candles` dump fields into canonical UTC OHLCV. After the recovery migration,
@@ -132,10 +134,12 @@ interpretations publish into a separately checksum-verified sibling namespace
 poison ledger enumeration. Synthetic golden replay remains legacy fixture evidence and is never
 counted as a real trial.
 
-Daily PostgreSQL freshness does not automatically create a research dataset. Real Phase 4 market
-experiments begin only after a deliberate immutable candle snapshot and Phase 3 feature/event
-publication. Phase 4 transitions are boundary-aware, event-level and dwell-compressed; they are
-Markov-like conditional summaries, not proof of a stationary first-order Markov process.
+Daily PostgreSQL freshness does not automatically create a research dataset. A deliberate immutable
+candle snapshot and Phase 3 feature/event publication are necessary but not sufficient for real
+Phase 4 market experiments. After Phase 0, independent provenance verification, cluster and motif
+stability hardening, boundary and transition controls, leakage defenses, and explicit user approval
+remain mandatory. Phase 4 transitions are boundary-aware, event-level and dwell-compressed; they
+are Markov-like conditional summaries, not proof of a stationary first-order Markov process.
 
 ## Auction engine
 

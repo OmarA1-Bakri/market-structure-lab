@@ -105,6 +105,8 @@ def test_loader_has_empty_schema_and_adjacent_half_open_windows(
     )
     empty = load_candles(
         symbol="ETHUSDT",
+        start="2024-01-01T00:00:00Z",
+        end="2024-01-01T00:05:00Z",
         engine=candle_engine,
         mapping=sqlite_mapping,
     )
@@ -175,6 +177,55 @@ def test_loader_rejects_naive_bounds(
         load_candles(
             symbol="BTCUSDT",
             start=datetime(2024, 1, 1),
+            end="2024-01-01T00:01:00Z",
+            engine=candle_engine,
+            mapping=sqlite_mapping,
+        )
+
+
+def test_materializing_loader_requires_both_bounds(
+    candle_engine: Engine, sqlite_mapping: CandleSourceMapping
+) -> None:
+    with pytest.raises(TypeError, match="start"):
+        load_candles(  # type: ignore[call-arg]
+            symbol="BTCUSDT",
+            end="2024-01-01T00:05:00Z",
+            engine=candle_engine,
+            mapping=sqlite_mapping,
+        )
+    with pytest.raises(TypeError, match="end"):
+        load_candles(  # type: ignore[call-arg]
+            symbol="BTCUSDT",
+            start="2024-01-01T00:00:00Z",
+            engine=candle_engine,
+            mapping=sqlite_mapping,
+        )
+    with pytest.raises(TypeError, match="start.*end|end.*start"):
+        load_candles(  # type: ignore[call-arg]
+            symbol="BTCUSDT",
+            engine=candle_engine,
+            mapping=sqlite_mapping,
+        )
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (None, "2024-01-01T00:05:00Z"),
+        ("2024-01-01T00:00:00Z", None),
+    ],
+)
+def test_materializing_loader_rejects_explicit_none_bounds(
+    candle_engine: Engine,
+    sqlite_mapping: CandleSourceMapping,
+    start: str | None,
+    end: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="explicit start and end"):
+        load_candles(
+            symbol="BTCUSDT",
+            start=start,  # type: ignore[arg-type]
+            end=end,  # type: ignore[arg-type]
             engine=candle_engine,
             mapping=sqlite_mapping,
         )

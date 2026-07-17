@@ -112,14 +112,16 @@ def load_candles(
     *,
     symbol: str,
     timeframe: str = "1m",
-    start: str | datetime | None = None,
-    end: str | datetime | None = None,
+    start: str | datetime,
+    end: str | datetime,
     batch_size: int = DEFAULT_BATCH_SIZE,
     engine: Engine | Connection | None = None,
     mapping: CandleSourceMapping | None = None,
     settings: MarketDataSettings | None = None,
 ) -> pl.DataFrame:
-    """Materialize a deliberately bounded research window as a canonical frame."""
+    """Materialize an explicitly bounded research window as a canonical frame."""
+    if start is None or end is None:
+        raise ValueError("materializing candles requires explicit start and end bounds")
     batches = list(
         iter_candle_batches(
             symbol=symbol,

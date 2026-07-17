@@ -13,6 +13,7 @@ RESTORE_LIST = REPO_ROOT / "docker" / "postgres" / "init" / "crypto_only_restore
 RESTORE_SCRIPT = REPO_ROOT / "docker" / "postgres" / "init" / "restore_dump.sh"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 DUMP_PATH = REPO_ROOT / "data" / "dumps" / "callscore.dump"
+README = REPO_ROOT / "README.md"
 
 
 def _manifest_value(key: str) -> str:
@@ -106,3 +107,34 @@ def test_compose_mounts_crypto_restore_inputs_at_explicit_paths() -> None:
     assert "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" in compose
     assert "/docker-entrypoint-initdb.d/dumps" not in compose
     assert "/docker-entrypoint-initdb.d/init" not in compose
+
+
+def test_compose_and_example_env_never_supply_usable_password_defaults() -> None:
+    compose = COMPOSE_FILE.read_text()
+    example_env = (REPO_ROOT / ".env.example").read_text()
+
+    assert "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}" in compose
+    assert "${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD must be set}" in compose
+    example_values = dict(
+        line.split("=", maxsplit=1)
+        for line in example_env.splitlines()
+        if line and not line.startswith("#")
+    )
+    assert example_values["POSTGRES_PASSWORD"] == ""
+    assert example_values["PGADMIN_DEFAULT_PASSWORD"] == ""
+
+
+def test_readme_requires_local_secrets_before_compose_startup() -> None:
+    readme = README.read_text()
+
+    copy_index = readme.index("cp .env.example .env")
+    validate_index = readme.index("docker compose config --quiet", copy_index)
+    startup_index = readme.index("docker compose up -d", validate_index)
+    setup = readme[copy_index:startup_index]
+    setup_lower = " ".join(setup.lower().split())
+
+    assert "POSTGRES_PASSWORD" in setup
+    assert "PGADMIN_DEFAULT_PASSWORD" in setup
+    assert "non-empty local secrets" in setup_lower
+    assert "never commit" in setup_lower
+    assert "blank" in setup_lower and "fail closed" in setup_lower

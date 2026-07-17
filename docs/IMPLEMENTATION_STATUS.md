@@ -325,7 +325,11 @@ Repository-wide integrating verification completed after the live freshness work
   `1.0248` MiB peak traced memory, and replayed at `730.15` candles/second. Timing is not an
   acceptance threshold.
 
-The Phase 4 software exit gate is satisfied. Phase 5 remains unstarted and separately gated.
+The recorded synthetic Phase 4 software-fixture verification gate passed; it is not a real-market
+experiment-readiness gate. Under the current Phase 0 review, Phase 4 remains gated pending
+independent provenance-chain verification, cluster and motif hardening, boundary-aware stability and
+transition evidence, leakage controls, and explicit phase approval. Phase 5 remains unstarted and
+separately gated.
 
 ## Daily candle freshness implementation
 
@@ -390,6 +394,9 @@ Exact operator commands, paths, status meanings, resumption procedure, compatibi
 deliberate snapshot policy are documented in
 [`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md).
 
-The Phase 4 software is ready for real outcome-blind market experiments after a deliberate immutable
-snapshot and its Phase 3 feature/event publication are frozen. The committed golden data remain
-software-verification fixtures, not market evidence, a validated signal, or an edge.
+The Phase 4 implementation is synthetic software-fixture evidence only and is **not ready for real
+experiments**. After Phase 0 is complete, Phase 4 still requires independent provenance-chain
+verification, cluster and motif hardening, boundary-aware stability and transition evidence,
+leakage controls, and explicit user approval before any real outcome-blind market experiment. The
+committed golden data remain software-verification fixtures, not market evidence, a validated
+signal, or an edge.

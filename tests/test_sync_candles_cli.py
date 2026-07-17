@@ -102,6 +102,7 @@ def test_run_dry_run_exits_stale_when_gap_complete_symbol_is_provenance_blocked(
 def test_plan_exits_stale_when_gap_complete_symbol_is_provenance_blocked(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    monkeypatch.setenv("POSTGRES_PASSWORD", "test-only")
     manifest = _blocked_but_gap_complete_manifest()
     compatibility = _compatibility()
 
@@ -232,6 +233,7 @@ def test_cli_parser_and_package_entry_point_expose_all_scheduler_operations() ->
 def test_bootstrap_is_idempotent_and_does_not_fetch_source(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    monkeypatch.setenv("POSTGRES_PASSWORD", "test-only")
     compatibility = _compatibility()
     compatibility_path = tmp_path / "compatibility.json"
     write_manifest(compatibility, compatibility_path)
@@ -314,6 +316,7 @@ def test_bootstrap_rejects_dump_mismatch_before_database_open(
 def test_snapshot_is_an_explicit_checksum_verified_handoff(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    monkeypatch.setenv("POSTGRES_PASSWORD", "test-only")
     current = _manifest(recovered=True)
     report = build_freshness_report(
         current,

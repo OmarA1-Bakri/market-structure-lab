@@ -28,7 +28,7 @@ class DatabaseSettings:
     host: str = "localhost"
     port: int = 5432
     user: str = "postgres"
-    password: str = field(default="postgres", repr=False)
+    password: str = field(default="", repr=False)
     database: str = "research"
     drivername: str = "postgresql+psycopg"
 
@@ -39,6 +39,8 @@ class DatabaseSettings:
             raise ValueError("database port must be between 1 and 65535")
         _require_identifier("database user", self.user)
         _require_identifier("database name", self.database)
+        if not self.password.strip():
+            raise ValueError("POSTGRES_PASSWORD must be set and non-empty")
         if self.drivername != "postgresql+psycopg":
             raise ValueError("database driver must be postgresql+psycopg")
 
@@ -69,7 +71,7 @@ class DatabaseSettings:
             host=environ.get("POSTGRES_HOST", "localhost"),
             port=_parse_port(environ.get("POSTGRES_PORT", "5432")),
             user=environ.get("POSTGRES_USER", "postgres"),
-            password=environ.get("POSTGRES_PASSWORD", "postgres"),
+            password=environ.get("POSTGRES_PASSWORD", ""),
             database=environ.get("POSTGRES_DB", "research"),
         )
 

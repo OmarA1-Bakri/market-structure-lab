@@ -16,6 +16,10 @@ from market_structure_lab.data.inspection import (
 )
 
 
+def _test_settings() -> MarketDataSettings:
+    return MarketDataSettings(database=DatabaseSettings(password="test-only"))
+
+
 def test_candidate_detection_accepts_reviewed_source_names_without_table_assumption() -> None:
     mapping = detect_candle_mapping(
         ["id", "symbol", "interval", "open_time", "open", "high", "low", "close", "volume"]
@@ -65,7 +69,7 @@ def test_full_inspection_queries_real_tables_and_quality_metrics() -> None:
 
     report = inspect_database(
         engine,
-        settings=MarketDataSettings(),
+        settings=_test_settings(),
         mode=InspectionMode.FULL,
         sample_limit=2,
         large_gap_minutes=1,
@@ -98,7 +102,7 @@ def test_quick_inspection_skips_expensive_exact_metrics() -> None:
 
     report = inspect_database(
         engine,
-        settings=MarketDataSettings(),
+        settings=_test_settings(),
         mode=InspectionMode.QUICK,
     )
 
@@ -123,7 +127,7 @@ def test_full_inspection_handles_an_empty_candidate_table() -> None:
 
     report = inspect_database(
         engine,
-        settings=MarketDataSettings(),
+        settings=_test_settings(),
         mode=InspectionMode.FULL,
     )
 

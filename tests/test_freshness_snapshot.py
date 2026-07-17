@@ -182,6 +182,7 @@ def test_snapshot_identity_rejects_partial_or_unknown_freshness_evidence() -> No
 def test_publish_streams_canonical_view_to_existing_immutable_exporter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("POSTGRES_PASSWORD", "test-only")
     engine = create_engine("sqlite://")
     with engine.begin() as connection:
         connection.execute(
@@ -238,6 +239,7 @@ def test_publish_streams_canonical_view_to_existing_immutable_exporter(
 def test_publish_rejects_database_state_newer_than_freshness_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("POSTGRES_PASSWORD", "test-only")
     engine = create_engine("sqlite://")
     monkeypatch.setattr(
         "market_structure_lab.data.freshness_snapshot.RecoveryRepository.logical_supplement_hash",

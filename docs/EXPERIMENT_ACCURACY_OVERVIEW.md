@@ -193,7 +193,7 @@ Under the repository phase gate, this review does not authorize a real Phase 4 o
 - `src/market_structure_lab/transitions/__init__.py: 🟢 closed: the raw-adjacent binomial/BH surface is deleted; the canonical API requires boundary-aware observations and publishes dwell-run support plus boundary evidence.`
 - `src/market_structure_lab/experiments/artifacts.py: 🟢 closed: canonical terminal receipts are atomic, checksum-verified, immutable, idempotent, and retain failures/abandonment without swallowing the original exception.`
 - `tests/fixtures/phase4/discovery_run_v1.json:350-356: 🟡 risk: accepted fixture thresholds cannot reject instability. Label it policy-plumbing evidence, not stability evidence.`
-- `src/market_structure_lab/discovery/runs.py:483-507: 🔴 bug: motif groups can bridge dropped rows, gaps, or sessions. Enforce explicit contiguity and add multi-axis motif stability.`
+- `src/market_structure_lab/discovery/runs.py:_motif_payload: 🔴 bug: motif groups can bridge dropped rows, gaps, or sessions. Enforce explicit contiguity and add multi-axis motif stability.`
 - `src/market_structure_lab/discovery/runs.py:54-56: 🟡 risk: 100 bootstraps with fixed block length 2 are under-justified for inference. Make dependence-calibrated settings part of the frozen policy.`
 - `src/market_structure_lab/data/dashboard_evidence.py: 🟢 closed: dashboard freshness is generated from one verified plan/report bundle with committed-publication rollback protection and an explicit evidence cutoff.`
 - `dashboard/src/components/reconciliation-status-panel.tsx: 🟢 closed: reconciliation is labelled as bounded audited keys or partial/complete-unpromoted work-unit evidence; no promotion or research eligibility is inferred without a receipt.`

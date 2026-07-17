@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from market_structure_lab.core.config import CandleSourceMapping
-from market_structure_lab.datasets import load_dataset, load_symbol
+from market_structure_lab.datasets import iter_dataset_batches, load_dataset, load_symbol
 
 SQLITE_MAPPING = CandleSourceMapping(schema="main", table="candles_canonical")
 
@@ -80,7 +80,13 @@ def test_load_dataset_returns_ordered_polars_frame_for_symbol_timeframe_and_wind
 
 
 def test_load_symbol_defaults_to_one_minute_dataset_for_symbol(ohlcv_engine: Engine) -> None:
-    candles = load_symbol("ETHUSDT", engine=ohlcv_engine, mapping=SQLITE_MAPPING)
+    candles = load_symbol(
+        "ETHUSDT",
+        start="2025-01-01T00:00:00Z",
+        end="2025-01-01T00:01:00Z",
+        engine=ohlcv_engine,
+        mapping=SQLITE_MAPPING,
+    )
 
     assert candles.height == 1
     assert candles.row(0, named=True) == {
@@ -93,6 +99,19 @@ def test_load_symbol_defaults_to_one_minute_dataset_for_symbol(ohlcv_engine: Eng
         "close": 201.0,
         "volume": 20.0,
     }
+
+
+def test_streaming_dataset_wrapper_allows_an_unbounded_range(ohlcv_engine: Engine) -> None:
+    batches = list(
+        iter_dataset_batches(
+            symbol="BTCUSDT",
+            engine=ohlcv_engine,
+            mapping=SQLITE_MAPPING,
+            batch_size=2,
+        )
+    )
+
+    assert [batch.height for batch in batches] == [2, 1]
 
 
 @pytest.mark.parametrize(
@@ -128,6 +147,54 @@ def test_load_dataset_rejects_naive_datetime_bounds(ohlcv_engine: Engine) -> Non
         load_dataset(
             symbol="BTCUSDT",
             start=datetime(2025, 1, 1),
+            end="2025-01-01T00:02:00Z",
+            engine=ohlcv_engine,
+            mapping=SQLITE_MAPPING,
+        )
+
+
+def test_materializing_dataset_wrappers_require_both_bounds(ohlcv_engine: Engine) -> None:
+    with pytest.raises(TypeError, match="end"):
+        load_dataset(  # type: ignore[call-arg]
+            symbol="BTCUSDT",
+            start="2025-01-01T00:00:00Z",
+            engine=ohlcv_engine,
+            mapping=SQLITE_MAPPING,
+        )
+    with pytest.raises(TypeError, match="start"):
+        load_symbol(  # type: ignore[call-arg]
+            "BTCUSDT",
+            end="2025-01-01T00:02:00Z",
+            engine=ohlcv_engine,
+            mapping=SQLITE_MAPPING,
+        )
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (None, "2025-01-01T00:02:00Z"),
+        ("2025-01-01T00:00:00Z", None),
+    ],
+)
+def test_materializing_dataset_wrappers_reject_explicit_none_bounds(
+    ohlcv_engine: Engine,
+    start: str | None,
+    end: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="explicit start and end"):
+        load_dataset(
+            symbol="BTCUSDT",
+            start=start,  # type: ignore[arg-type]
+            end=end,  # type: ignore[arg-type]
+            engine=ohlcv_engine,
+            mapping=SQLITE_MAPPING,
+        )
+    with pytest.raises(ValueError, match="explicit start and end"):
+        load_symbol(
+            "BTCUSDT",
+            start=start,  # type: ignore[arg-type]
+            end=end,  # type: ignore[arg-type]
             engine=ohlcv_engine,
             mapping=SQLITE_MAPPING,
         )
