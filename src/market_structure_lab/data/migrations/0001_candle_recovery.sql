@@ -140,6 +140,7 @@ SELECT
     NULL::character(64) AS payload_checksum,
     NULL::uuid AS recovery_run_id
 FROM market_data.candles AS candle
+WHERE candle.open_time >= 1514764800000
 UNION ALL
 SELECT
     NULL::bigint AS source_row_id,
@@ -160,6 +161,7 @@ SELECT
     supplement.run_id AS recovery_run_id
 FROM ranked_supplements AS supplement
 WHERE supplement.source_rank = 1
+  AND supplement.open_time >= 1514764800000
   AND NOT EXISTS (
       SELECT 1
       FROM market_data.candles AS candle
@@ -171,6 +173,6 @@ WHERE supplement.source_rank = 1
 COMMENT ON TABLE market_data.candle_supplements IS
     'Append-only real source observations; never synthesized or used to modify restored candles.';
 COMMENT ON VIEW market_data.candles_canonical IS
-    'Deterministic dump-preferred union of restored and validated supplement candles.';
+    'Deterministic dump-preferred union from 2018-01-01 of restored and validated supplement candles.';
 
 COMMIT;

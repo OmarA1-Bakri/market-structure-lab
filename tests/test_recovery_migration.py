@@ -14,6 +14,7 @@ def test_migration_is_versioned_append_only_and_dump_preferred() -> None:
     assert "candle_supplements_validated_key_unique" in sql
     assert "BEFORE UPDATE OR DELETE" in sql
     assert "CREATE OR REPLACE VIEW market_data.candles_canonical" in sql
+    assert sql.count("open_time >= 1514764800000") == 2
     assert "NOT EXISTS" in sql
     assert "FROM market_data.candles AS candle" in sql
     for application_field in ("regime", "confidence", "returns", "volatility", "volume_ratio"):

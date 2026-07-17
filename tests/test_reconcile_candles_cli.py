@@ -116,7 +116,7 @@ def test_plan_full_envelopes_uses_each_symbols_first_observation_to_cutoff(
             compatibility.sha256(),
             "--full-envelopes",
             "--cutoff",
-            "1970-02-01T00:00:00Z",
+            "2018-02-01T00:00:00Z",
             "--code-commit",
             "deadbeef",
             "--uv-lock-sha256",
@@ -129,10 +129,48 @@ def test_plan_full_envelopes_uses_each_symbols_first_observation_to_cutoff(
     assert exit_code == 0
     run = read_reconciliation_run(output)
     by_symbol = {item.symbol: item for item in run.envelopes}
-    assert by_symbol["BTCUSDT"].start_ms == 0
-    assert by_symbol["ETHUSDT"].start_ms == 60_000
-    assert {item.end_ms for item in run.envelopes} == {2_678_400_000}
+    history_start_ms = int(datetime(2018, 1, 1, tzinfo=UTC).timestamp() * 1_000)
+    assert by_symbol["BTCUSDT"].start_ms == history_start_ms
+    assert by_symbol["ETHUSDT"].start_ms == history_start_ms
+    assert {item.end_ms for item in run.envelopes} == {
+        int(datetime(2018, 2, 1, tzinfo=UTC).timestamp() * 1_000)
+    }
     assert len(run.work_units) == 2
+
+
+def test_plan_rejects_fixed_windows_before_canonical_history_start(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    compatibility_path = tmp_path / "compatibility.json"
+    compatibility = _compatibility(compatibility_path)
+
+    exit_code = main(
+        [
+            "plan",
+            "--run-id",
+            "RR-000098",
+            "--compatibility",
+            str(compatibility_path),
+            "--compatibility-sha256",
+            compatibility.sha256(),
+            "--start",
+            "2017-12-01T00:00:00Z",
+            "--end",
+            "2018-02-01T00:00:00Z",
+            "--cutoff",
+            "2018-02-01T00:00:00Z",
+            "--code-commit",
+            "deadbeef",
+            "--uv-lock-sha256",
+            _sha("b"),
+            "--output",
+            str(tmp_path / "RR-000098.json"),
+        ]
+    )
+
+    assert exit_code == 1
+    assert "canonical history starts at 2018-01-01" in capsys.readouterr().err
 
 
 def test_plan_rejects_unknown_symbols_and_changed_compatibility_hash(

@@ -44,7 +44,9 @@ Time windows are half-open: `start <= timestamp < end`.
 The data layer is the only package allowed to know source tables or columns. Configuration maps the
 reviewed `market_data.candles` dump fields into canonical UTC OHLCV. After the recovery migration,
 `market_data.candles_canonical` publishes a dump-preferred union: immutable restored rows always win,
-and only independently validated append-only supplements can fill absent keys.
+and only independently validated append-only supplements can fill absent keys. The canonical research
+history starts at `2018-01-01T00:00:00Z`; pre-2018 rows remain immutable raw evidence but are excluded
+from canonical views, reconciliation plans, snapshots, and experiments.
 
 Large reads use `market_structure_lab.data.loader.iter_candle_batches`, which executes a server-side
 ordered query and yields validated Polars frames with a configurable maximum batch size. Snapshot

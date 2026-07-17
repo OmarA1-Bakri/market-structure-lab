@@ -35,6 +35,7 @@ from market_structure_lab.data.sources.base import SourceError
 from market_structure_lab.data.sources.binance import BinanceSpotSource
 
 MINUTE_MS = 60_000
+CANONICAL_HISTORY_START = datetime(2018, 1, 1, tzinfo=UTC)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -118,6 +119,9 @@ def _plan(args: argparse.Namespace) -> int:
         raise ValueError(f"symbols are absent from compatibility evidence: {', '.join(sorted(unknown))}")
     cutoff = _parse_minute(args.cutoff, "cutoff")
     cutoff_ms = int(cutoff.timestamp() * 1_000)
+    history_start_ms = int(CANONICAL_HISTORY_START.timestamp() * 1_000)
+    if cutoff <= CANONICAL_HISTORY_START:
+        raise ValueError("cutoff must be after the canonical history start")
     if args.full_envelopes:
         if args.start is not None or args.end is not None:
             raise ValueError("full-envelope planning cannot also specify start or end")
@@ -126,7 +130,7 @@ def _plan(args: argparse.Namespace) -> int:
             TradingEnvelope(
                 symbol,
                 evidence[symbol].timeframe,
-                evidence[symbol].first_open_time_ms,
+                max(evidence[symbol].first_open_time_ms, history_start_ms),
                 cutoff_ms,
             )
             for symbol in sorted(selected)
@@ -138,6 +142,8 @@ def _plan(args: argparse.Namespace) -> int:
             raise ValueError("fixed-window planning requires both start and end")
         start = _parse_minute(args.start, "start")
         end = _parse_minute(args.end, "end")
+        if start < CANONICAL_HISTORY_START:
+            raise ValueError("canonical history starts at 2018-01-01T00:00:00Z")
         if not start < end <= cutoff:
             raise ValueError("reconciliation requires start < end <= cutoff")
         start_ms = int(start.timestamp() * 1_000)

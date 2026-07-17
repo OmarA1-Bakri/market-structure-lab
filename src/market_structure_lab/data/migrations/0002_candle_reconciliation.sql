@@ -163,6 +163,7 @@ SELECT
     NULL::uuid AS recovery_run_id,
     replacement.run_id AS reconciliation_run_id
 FROM active_replacements AS replacement
+WHERE replacement.open_time >= 1514764800000
 UNION ALL
 SELECT
     candle.id AS source_row_id,
@@ -190,7 +191,8 @@ JOIN market_data.candle_reconciliation_coverage AS coverage
  AND coverage."interval" = candle."interval"
  AND coverage.start_time <= candle.open_time
  AND candle.open_time < coverage.end_time
-WHERE NOT EXISTS (
+WHERE candle.open_time >= 1514764800000
+  AND NOT EXISTS (
     SELECT 1
     FROM active_replacements AS replacement
     WHERE replacement.symbol = candle.symbol
@@ -199,6 +201,6 @@ WHERE NOT EXISTS (
 );
 
 COMMENT ON VIEW market_data.candles_reconciled IS
-    'Explicitly promoted Binance-verified corrections/fills plus dump rows inside verified coverage.';
+    'Explicitly promoted Binance-verified corrections/fills plus verified dump rows from 2018-01-01.';
 
 COMMIT;

@@ -94,6 +94,8 @@ is highly fragmented. Other symbols remain usable only after contiguous-window s
 - Treat `market_data.candles` as the immutable dump authority and
   `market_data.candles_canonical` as the dump-preferred research/live source; recompute higher
   timeframes and all research features deterministically.
+- Enforce `2018-01-01T00:00:00Z` as the inclusive canonical history boundary. Preserve older raw
+  evidence, but exclude it from canonical views, reconciliation plans, snapshots, and experiments.
 - Map `open_time` from epoch milliseconds to UTC and `interval` to canonical `timeframe`.
 - Preserve the dump hash, source row ID, mapping version, and dataset version in snapshot manifests.
 - Split every sequence at material gaps; never create profiles or transitions across gaps or symbols.
