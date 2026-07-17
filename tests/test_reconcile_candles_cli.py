@@ -220,6 +220,24 @@ def test_run_and_promote_require_explicit_apply() -> None:
     parser = build_parser()
 
     run = parser.parse_args(["run", "--run", "x.json", "--output-root", "out"])
-    promote = parser.parse_args(["promote", "--run", "x.json", "--output-root", "out"])
+    promote = parser.parse_args(
+        [
+            "promote",
+            "--run",
+            "x.json",
+            "--output-root",
+            "out",
+            "--expected-manifest-sha256",
+            _sha("a"),
+        ]
+    )
     assert run.apply is False
     assert promote.apply is False
+
+
+@pytest.mark.parametrize("operation", ("promote", "report", "eligible"))
+def test_terminal_commands_require_the_expected_run_manifest_sha(operation: str) -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([operation, "--run", "x.json", "--output-root", "out"])

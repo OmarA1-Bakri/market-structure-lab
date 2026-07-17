@@ -154,6 +154,9 @@ class ReconciliationRunManifest:
         return _pretty_json(payload)
 
 
+MAX_LEDGER_ROWS_PER_PART = 100_000
+
+
 @dataclass(frozen=True, slots=True)
 class LedgerPart:
     path: str
@@ -166,6 +169,8 @@ class LedgerPart:
         _require_sha(self.sha256, "ledger part sha256")
         if self.row_count < 1:
             raise ValueError("ledger part row_count must be positive")
+        if self.row_count > MAX_LEDGER_ROWS_PER_PART:
+            raise ValueError("ledger part row_count exceeds the Phase 0 safe maximum")
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +201,8 @@ class WorkUnitManifest:
             raise ValueError("work-unit row counts cannot be negative")
         if self.max_rows_per_part < 1:
             raise ValueError("max_rows_per_part must be positive")
+        if self.max_rows_per_part > MAX_LEDGER_ROWS_PER_PART:
+            raise ValueError("max_rows_per_part exceeds the Phase 0 safe maximum")
         if not 0 <= self.max_buffered_rows <= self.max_rows_per_part:
             raise ValueError("max_buffered_rows exceeds the configured bound")
         if self.status not in ("completed", "source_unavailable", "failed"):
@@ -206,6 +213,8 @@ class WorkUnitManifest:
             raise ValueError("classification counts do not match work-unit row count")
         if sum(item.row_count for item in self.parts) != self.row_count:
             raise ValueError("ledger part counts do not match work-unit row count")
+        if any(item.row_count > self.max_rows_per_part for item in self.parts):
+            raise ValueError("ledger part row_count exceeds the manifest part-size bound")
         paths = tuple(item.path for item in self.parts)
         if paths != tuple(sorted(paths)) or len(paths) != len(set(paths)):
             raise ValueError("ledger parts must have unique canonical order")
@@ -445,6 +454,7 @@ def _pretty_json(value: object) -> str:
 
 
 __all__ = [
+    "MAX_LEDGER_ROWS_PER_PART",
     "LedgerPart",
     "ReconciliationRunManifest",
     "SourceArtifactIdentity",

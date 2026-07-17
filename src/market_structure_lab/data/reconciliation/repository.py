@@ -20,7 +20,7 @@ from market_structure_lab.data.reconciliation.models import (
     MINUTE_MS,
     ReconciliationClass,
 )
-from market_structure_lab.data.recovery import RECOVERY_ADVISORY_LOCK_NAME
+from market_structure_lab.data.recovery import RECOVERY_ADVISORY_LOCK_NAME, RecoveryCandle
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +70,24 @@ class ReconciliationReplacement:
         for value in (self.payload_sha256, self.binance_row_sha256):
             if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
                 raise ValueError("replacement hashes must be lowercase SHA-256 digests")
+        if self.binance_row_sha256 != self.canonical_row_checksum():
+            raise ValueError("declared Binance row checksum does not match the replacement fields")
         _parse_utc(self.retrieved_at)
+
+    def canonical_row_checksum(self) -> str:
+        """Return the frozen RecoveryCandle checksum from exact in-memory values."""
+        return RecoveryCandle(
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            open_time_ms=self.open_time_ms,
+            open=self.open,
+            high=self.high,
+            low=self.low,
+            close=self.close,
+            volume=self.volume,
+            quote_volume=self.quote_volume,
+            trades=self.trades,
+        ).row_checksum()
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +113,26 @@ class ReconciliationPromotion:
     replacement_logical_sha256: str
     canonical_logical_sha256: str
     promoted_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationDatabasePreflight:
+    """Read-only database state and exact idempotent writes for one promotion request."""
+
+    run_registration_rows_to_insert: int
+    work_unit_rows_to_insert: int
+    replacement_rows_to_insert: int
+    verified_replacement_rows: int
+    verified_replacement_logical_sha256: str
+    coverage_rows_existing: int
+    coverage_rows_to_insert: int
+    promotion_rows_to_insert: int
+    active_run_before: str | None
+    active_run_after: str
+    reconciled_view_will_switch: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 class ReconciliationRepository:
@@ -217,10 +254,17 @@ ON CONFLICT (run_id, symbol, "interval", open_time) DO NOTHING
         run: ReconciliationRunManifest,
         work_units: Sequence[WorkUnitManifest],
         coverage: Sequence[VerifiedCoverageInterval],
+        *,
+        candidate_replacement_logical_sha256: str,
     ) -> ReconciliationPromotion:
         self._acquire_lock()
         self._verify_registered_run(run, work_units)
-        intervals = _validate_coverage(run, coverage)
+        intervals = validate_reconciliation_coverage(run, coverage)
+        replacement_hash, _ = self._verify_candidate_replacements(
+            run,
+            work_units,
+            candidate_replacement_logical_sha256=candidate_replacement_logical_sha256,
+        )
         for item in intervals:
             self.connection.execute(
                 text(
@@ -239,7 +283,6 @@ ON CONFLICT (run_id, symbol, "interval", start_time, end_time) DO NOTHING
                     "end_ms": item.end_ms,
                 },
             )
-        replacement_hash = _database_replacement_hash(self.connection, run.run_id)
         canonical_hash = _run_canonical_hash(self.connection, run.run_id)
         self.connection.execute(
             text(
@@ -283,6 +326,101 @@ WHERE run_id=:run_id
             raise ValueError("existing reconciliation promotion contains different content")
         return promotion
 
+    def inspect_promotion(
+        self,
+        run: ReconciliationRunManifest,
+        work_units: Sequence[WorkUnitManifest],
+        coverage: Sequence[VerifiedCoverageInterval],
+        *,
+        candidate_replacement_logical_sha256: str,
+    ) -> ReconciliationDatabasePreflight:
+        """Inspect exact durable state without inserting or activating a promotion."""
+        self._acquire_lock()
+        self._verify_registered_run(run, work_units)
+        intervals = validate_reconciliation_coverage(run, coverage)
+        replacement_hash, replacement_count = self._verify_candidate_replacements(
+            run,
+            work_units,
+            candidate_replacement_logical_sha256=candidate_replacement_logical_sha256,
+        )
+
+        rows = self.connection.execute(
+            text(
+                """
+SELECT symbol, "interval", start_time, end_time
+FROM market_data.candle_reconciliation_coverage
+WHERE run_id=:run_id
+ORDER BY symbol, "interval", start_time
+"""
+            ).execution_options(stream_results=True),
+            {"run_id": run.run_id},
+        )
+        existing_coverage_rows: list[VerifiedCoverageInterval] = []
+        for row in rows:
+            if len(existing_coverage_rows) >= len(intervals):
+                raise ValueError("database coverage rows exceed the verified candidate")
+            existing_coverage_rows.append(
+                VerifiedCoverageInterval(row.symbol, row.interval, row.start_time, row.end_time)
+            )
+        existing_coverage = tuple(existing_coverage_rows)
+        candidate_coverage = set(intervals)
+        stored_coverage = set(existing_coverage)
+        if len(stored_coverage) != len(existing_coverage):
+            raise ValueError("database coverage contains duplicate intervals")
+        if not stored_coverage <= candidate_coverage:
+            raise ValueError("database coverage contains intervals outside the verified candidate")
+
+        existing_promotion = self.connection.execute(
+            text(
+                """
+SELECT promotion_id, run_id, manifest_sha256, replacement_logical_sha256,
+       canonical_logical_sha256
+FROM market_data.candle_reconciliation_promotions
+WHERE run_id=:run_id
+"""
+            ),
+            {"run_id": run.run_id},
+        ).one_or_none()
+        active = self.connection.execute(
+            text(
+                """
+SELECT promotion_id, run_id
+FROM market_data.candle_reconciliation_promotions
+ORDER BY promotion_id DESC
+LIMIT 1
+"""
+            )
+        ).one_or_none()
+        active_before = None if active is None else str(active.run_id)
+        if existing_promotion is not None:
+            if stored_coverage != candidate_coverage:
+                raise ValueError("existing promotion coverage differs from the verified candidate")
+            canonical_hash = _run_canonical_hash(self.connection, run.run_id)
+            if (
+                existing_promotion.manifest_sha256 != run.manifest_sha256
+                or existing_promotion.replacement_logical_sha256 != replacement_hash
+                or existing_promotion.canonical_logical_sha256 != canonical_hash
+            ):
+                raise ValueError("existing reconciliation promotion contains different content")
+            promotion_rows_to_insert = 0
+            active_after = active_before or run.run_id
+        else:
+            promotion_rows_to_insert = 1
+            active_after = run.run_id
+        return ReconciliationDatabasePreflight(
+            run_registration_rows_to_insert=0,
+            work_unit_rows_to_insert=0,
+            replacement_rows_to_insert=0,
+            verified_replacement_rows=replacement_count,
+            verified_replacement_logical_sha256=replacement_hash,
+            coverage_rows_existing=len(existing_coverage),
+            coverage_rows_to_insert=len(candidate_coverage - stored_coverage),
+            promotion_rows_to_insert=promotion_rows_to_insert,
+            active_run_before=active_before,
+            active_run_after=active_after,
+            reconciled_view_will_switch=active_before != active_after,
+        )
+
     def _verify_registered_run(
         self,
         run: ReconciliationRunManifest,
@@ -305,10 +443,16 @@ WHERE run_id=:run_id
             text(
                 "SELECT work_unit_id, manifest_sha256, status "
                 "FROM market_data.candle_reconciliation_work_units WHERE run_id=:run_id"
-            ),
+            ).execution_options(stream_results=True),
             {"run_id": run.run_id},
-        ).all()
-        actual = {row.work_unit_id: (row.manifest_sha256, row.status) for row in rows}
+        )
+        actual: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            if len(actual) >= len(expected):
+                raise ValueError("database work-unit rows exceed the frozen manifest")
+            if row.work_unit_id in actual:
+                raise ValueError("database contains duplicate reconciliation work units")
+            actual[row.work_unit_id] = (row.manifest_sha256, row.status)
         if set(actual) != expected:
             raise ValueError("database does not contain every frozen reconciliation work unit")
         for manifest in work_units:
@@ -316,6 +460,22 @@ WHERE run_id=:run_id
                 raise ValueError("database work-unit evidence differs from the supplied manifest")
             if manifest.status == "failed":
                 raise ValueError("failed reconciliation work units cannot be promoted")
+
+    def _verify_candidate_replacements(
+        self,
+        run: ReconciliationRunManifest,
+        work_units: Sequence[WorkUnitManifest],
+        *,
+        candidate_replacement_logical_sha256: str,
+    ) -> tuple[str, int]:
+        expected_count = sum(item.replacement_row_count for item in work_units)
+        replacement_count = _database_run_replacement_count(self.connection, run.run_id)
+        if replacement_count != expected_count:
+            raise ValueError("database replacements differ from the verified promotion candidate")
+        replacement_hash = _database_replacement_hash(self.connection, run.run_id)
+        if replacement_hash != candidate_replacement_logical_sha256:
+            raise ValueError("database replacements differ from the verified promotion candidate")
+        return replacement_hash, replacement_count
 
     def _acquire_lock(self) -> None:
         self.connection.execute(
@@ -361,19 +521,61 @@ def _verify_database_replacements(
     rows = connection.execute(
         text(
             """
-SELECT symbol, "interval", open_time, binance_row_sha256
+SELECT symbol, "interval", open_time, binance_row_sha256,
+       classification, open, high, low, close, volume, quote_volume, trades,
+       source_name, source_revision, payload_sha256, retrieved_at
 FROM market_data.candle_reconciliation_replacements
 WHERE run_id=:run_id AND work_unit_id=:work_unit_id
 ORDER BY symbol, "interval", open_time
 """
-        ),
+        ).execution_options(stream_results=True),
         {"run_id": manifest.run_id, "work_unit_id": manifest.work_unit_id},
-    ).all()
-    actual = tuple(
-        (row.symbol, row.interval, row.open_time, row.binance_row_sha256) for row in rows
     )
+    actual_rows: list[tuple[object, ...]] = []
+    for row in rows:
+        if len(actual_rows) >= len(expected):
+            raise ValueError("database replacements differ from the verified work-unit evidence")
+        actual_rows.append(
+            (
+                row.symbol,
+                row.interval,
+                row.open_time,
+                row.classification,
+                row.open,
+                row.high,
+                row.low,
+                row.close,
+                row.volume,
+                row.quote_volume,
+                row.trades,
+                row.source_name,
+                row.source_revision,
+                row.payload_sha256,
+                row.binance_row_sha256,
+                row.retrieved_at.astimezone(UTC),
+            )
+        )
+    actual = tuple(actual_rows)
     wanted = tuple(
-        (row.symbol, row.timeframe, row.open_time_ms, row.binance_row_sha256) for row in expected
+        (
+            row.symbol,
+            row.timeframe,
+            row.open_time_ms,
+            row.classification.value,
+            row.open,
+            row.high,
+            row.low,
+            row.close,
+            row.volume,
+            row.quote_volume,
+            row.trades,
+            row.source_name,
+            row.source_revision,
+            row.payload_sha256,
+            row.binance_row_sha256,
+            _parse_utc(row.retrieved_at),
+        )
+        for row in expected
     )
     if actual != wanted:
         raise ValueError("database replacements differ from the verified work-unit evidence")
@@ -394,7 +596,19 @@ def _database_replacement_count(
     )
 
 
-def _validate_coverage(
+def _database_run_replacement_count(connection: Connection, run_id: str) -> int:
+    return int(
+        connection.execute(
+            text(
+                "SELECT count(*) FROM market_data.candle_reconciliation_replacements "
+                "WHERE run_id=:run_id"
+            ),
+            {"run_id": run_id},
+        ).scalar_one()
+    )
+
+
+def validate_reconciliation_coverage(
     run: ReconciliationRunManifest,
     coverage: Sequence[VerifiedCoverageInterval],
 ) -> tuple[VerifiedCoverageInterval, ...]:
@@ -509,8 +723,10 @@ def _parse_utc(value: str) -> datetime:
 
 
 __all__ = [
+    "ReconciliationDatabasePreflight",
     "ReconciliationPromotion",
     "ReconciliationReplacement",
     "ReconciliationRepository",
     "VerifiedCoverageInterval",
+    "validate_reconciliation_coverage",
 ]

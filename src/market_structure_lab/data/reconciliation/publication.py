@@ -15,6 +15,7 @@ import polars as pl
 
 from market_structure_lab.data.reconciliation.manifests import (
     LedgerPart,
+    MAX_LEDGER_ROWS_PER_PART,
     ReconciliationRunManifest,
     SourceArtifactIdentity,
     WorkUnitManifest,
@@ -52,6 +53,8 @@ def publish_work_unit(
     """Write and verify one immutable work-unit ledger without unbounded buffering."""
     if max_rows_per_part < 1:
         raise ValueError("max_rows_per_part must be positive")
+    if max_rows_per_part > MAX_LEDGER_ROWS_PER_PART:
+        raise ValueError("max_rows_per_part exceeds the Phase 0 safe maximum")
     if work_unit not in run.work_units:
         raise ValueError("work unit is not frozen in the reconciliation run")
     publication_path = _publication_path(run.run_id, work_unit)
@@ -131,7 +134,7 @@ def _write_stage(
         parts.append(
             LedgerPart(
                 path=path.name,
-                sha256=_sha256_file(path),
+                sha256=sha256_file(path),
                 row_count=len(buffer),
             )
         )
@@ -242,7 +245,7 @@ def verify_work_unit_publication(directory: Path) -> WorkUnitManifest:
         raise ValueError("work-unit publication contains missing or unmanifested Parquet parts")
     for part in manifest.parts:
         path = directory / part.path
-        if _sha256_file(path) != part.sha256:
+        if sha256_file(path) != part.sha256:
             raise ValueError("work-unit Parquet part checksum does not match the manifest")
         row_count = int(
             pl.scan_parquet(path)
@@ -255,6 +258,169 @@ def verify_work_unit_publication(directory: Path) -> WorkUnitManifest:
     return manifest
 
 
+def verify_reconciliation_run_publication(
+    output_root: Path,
+    run: ReconciliationRunManifest,
+    *,
+    expected_manifest_sha256: str,
+) -> tuple[WorkUnitManifest, ...]:
+    """Verify the exact terminal publication set for one frozen run."""
+    if run.manifest_sha256 != expected_manifest_sha256:
+        raise ValueError("reconciliation run manifest does not match the expected SHA-256")
+    run_root = output_root / f"run_id={run.run_id}"
+    stages = tuple(sorted(path for path in run_root.glob("**/.*.stage") if path.is_dir()))
+    if stages:
+        raise ValueError("reconciliation run contains stale staging directories")
+
+    candidates = tuple(sorted(run_root.glob("**/manifest.json")))
+    parsed: dict[str, tuple[Path, WorkUnitManifest]] = {}
+    for path in candidates:
+        manifest = read_work_unit_manifest(path)
+        if manifest.work_unit_id in parsed:
+            raise ValueError("reconciliation run contains a duplicate work-unit publication")
+        parsed[manifest.work_unit_id] = (path.parent, manifest)
+
+    expected_by_id = {item.work_unit_id: item for item in run.work_units}
+    expected = set(expected_by_id)
+    found = set(parsed)
+    if found != expected:
+        missing = sorted(expected - found)
+        extra = sorted(found - expected)
+        raise ValueError(f"work-unit evidence is incomplete; missing={missing}, extra={extra}")
+
+    verified: dict[str, WorkUnitManifest] = {}
+    for work_unit_id, (directory, parsed_manifest) in parsed.items():
+        manifest = verify_work_unit_publication(directory)
+        if manifest != parsed_manifest:
+            raise ValueError("work-unit publication changed during verification")
+        unit = expected_by_id[work_unit_id]
+        publication_path = _publication_path(run.run_id, unit)
+        if (
+            manifest.run_id != run.run_id
+            or manifest.publication_path != publication_path
+            or directory != output_root / publication_path
+        ):
+            raise ValueError("work-unit publication path does not match the frozen run")
+        if manifest.status == "failed":
+            raise ValueError("failed reconciliation work units are not terminal evidence")
+        expected_rows = (unit.end_ms - unit.start_ms) // MINUTE_MS
+        if manifest.row_count != expected_rows:
+            raise ValueError("work-unit row count does not match the frozen minute count")
+        _verify_ledger_against_work_unit(directory, manifest, unit)
+        verified[work_unit_id] = manifest
+    return tuple(verified[item.work_unit_id] for item in run.work_units)
+
+
+def _verify_ledger_against_work_unit(
+    directory: Path,
+    manifest: WorkUnitManifest,
+    work_unit: ReconciliationWorkUnit,
+) -> None:
+    expected_timestamp = work_unit.start_ms
+    classifications: Counter[str] = Counter()
+    differing_fields: Counter[str] = Counter()
+    replacement_count = 0
+    replacement_digest = hashlib.sha256()
+    for part in manifest.parts:
+        frame = pl.read_parquet(directory / part.path)
+        if frame.schema != _LEDGER_SCHEMA:
+            raise ValueError("work-unit ledger schema does not match the canonical schema")
+        for raw in frame.iter_rows(named=True):
+            try:
+                classification = ReconciliationClass(str(raw["classification"]))
+                decoded_fields = json.loads(str(raw["differing_fields_json"]))
+            except (ValueError, json.JSONDecodeError) as error:
+                raise ValueError(
+                    "work-unit ledger contains invalid classification evidence"
+                ) from error
+            if not isinstance(decoded_fields, list) or not all(
+                isinstance(item, str) for item in decoded_fields
+            ):
+                raise ValueError("work-unit ledger contains invalid differing-field evidence")
+            record = ReconciliationRecord(
+                symbol=str(raw["symbol"]),
+                timeframe=str(raw["timeframe"]),
+                open_time_ms=int(raw["open_time_ms"]),
+                classification=classification,
+                dump_row_sha256=(
+                    None if raw["dump_row_sha256"] is None else str(raw["dump_row_sha256"])
+                ),
+                binance_row_sha256=(
+                    None if raw["binance_row_sha256"] is None else str(raw["binance_row_sha256"])
+                ),
+                differing_fields=tuple(decoded_fields),
+            )
+            _validate_record_semantics(record)
+            if (
+                str(raw["run_id"]) != manifest.run_id
+                or str(raw["work_unit_id"]) != work_unit.work_unit_id
+                or record.symbol != work_unit.symbol
+                or record.timeframe != work_unit.timeframe
+                or record.open_time_ms != expected_timestamp
+            ):
+                raise ValueError(
+                    "work-unit ledger does not match the frozen identity and minute order"
+                )
+            expected_timestamp += MINUTE_MS
+            classifications[record.classification.value] += 1
+            differing_fields.update(record.differing_fields)
+            if record.classification in (
+                ReconciliationClass.BINANCE_CORRECTION,
+                ReconciliationClass.BINANCE_FILL,
+            ):
+                if record.binance_row_sha256 is None:
+                    raise ValueError("replacement evidence requires a Binance row hash")
+                replacement_count += 1
+                replacement_digest.update(
+                    json.dumps(
+                        {
+                            "binance_row_sha256": record.binance_row_sha256,
+                            "open_time_ms": record.open_time_ms,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                )
+    if expected_timestamp != work_unit.end_ms:
+        raise ValueError("work-unit ledger does not cover every frozen minute")
+    if tuple(sorted(classifications.items())) != manifest.classification_counts:
+        raise ValueError("work-unit ledger classifications do not match the manifest")
+    expected_status = (
+        "source_unavailable"
+        if classifications[ReconciliationClass.SOURCE_UNAVAILABLE.value]
+        else "completed"
+    )
+    if manifest.status != expected_status:
+        raise ValueError("work-unit terminal status does not match the verified ledger")
+    if tuple(sorted(differing_fields.items())) != manifest.differing_field_counts:
+        raise ValueError("work-unit ledger differing fields do not match the manifest")
+    if replacement_count != manifest.replacement_row_count:
+        raise ValueError("work-unit ledger replacements do not match the manifest count")
+    if replacement_digest.hexdigest() != manifest.replacement_logical_sha256:
+        raise ValueError("work-unit ledger replacements do not match the manifest hash")
+
+
+def _validate_record_semantics(record: ReconciliationRecord) -> None:
+    dump_hash = record.dump_row_sha256
+    binance_hash = record.binance_row_sha256
+    differing = record.differing_fields
+    if record.classification is ReconciliationClass.EXACT_MATCH:
+        valid = dump_hash is not None and dump_hash == binance_hash and not differing
+    elif record.classification is ReconciliationClass.BINANCE_CORRECTION:
+        valid = (
+            dump_hash is not None
+            and binance_hash is not None
+            and dump_hash != binance_hash
+            and bool(differing)
+        )
+    elif record.classification is ReconciliationClass.BINANCE_FILL:
+        valid = dump_hash is None and binance_hash is not None and not differing
+    else:
+        valid = binance_hash is None and not differing
+    if not valid:
+        raise ValueError("work-unit ledger classification does not match its row-hash evidence")
+
+
 def _publication_path(run_id: str, work_unit: ReconciliationWorkUnit) -> str:
     start = datetime.fromtimestamp(work_unit.start_ms / 1_000, tz=UTC)
     return (
@@ -262,7 +428,8 @@ def _publication_path(run_id: str, work_unit: ReconciliationWorkUnit) -> str:
     )
 
 
-def _sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str:
+    """Return a bounded-memory SHA-256 digest for one publication file."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while chunk := handle.read(1024 * 1024):
@@ -273,5 +440,7 @@ def _sha256_file(path: Path) -> str:
 __all__ = [
     "publish_work_unit",
     "read_work_unit_manifest",
+    "sha256_file",
+    "verify_reconciliation_run_publication",
     "verify_work_unit_publication",
 ]

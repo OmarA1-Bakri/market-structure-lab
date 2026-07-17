@@ -6,12 +6,10 @@ import argparse
 import hashlib
 import json
 import sys
-from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-import polars as pl
 from sqlalchemy import create_engine, text
 
 from market_structure_lab.core.config import load_settings
@@ -24,12 +22,13 @@ from market_structure_lab.data.migrations import (
 from market_structure_lab.data.reconciliation import (
     ReconciliationRepository,
     TradingEnvelope,
-    VerifiedCoverageInterval,
+    build_reconciliation_promotion_preflight,
     execute_work_unit,
     freeze_reconciliation_run,
     monthly_work_units,
     read_reconciliation_run,
-    read_work_unit_manifest,
+    validate_reconciliation_coverage,
+    verify_reconciliation_run_publication,
     write_reconciliation_run,
 )
 from market_structure_lab.data.sources.base import SourceError
@@ -77,17 +76,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     promote.add_argument("--run", type=Path, required=True)
     promote.add_argument("--output-root", type=Path, required=True)
+    promote.add_argument("--expected-manifest-sha256", required=True)
     promote.add_argument("--apply", action="store_true")
 
     report = commands.add_parser("report", help="report checksum-verified reconciliation evidence")
     report.add_argument("--run", type=Path, required=True)
     report.add_argument("--output-root", type=Path, required=True)
+    report.add_argument("--expected-manifest-sha256", required=True)
 
     eligible = commands.add_parser(
         "eligible", help="emit verified contiguous intervals eligible for snapshots"
     )
     eligible.add_argument("--run", type=Path, required=True)
     eligible.add_argument("--output-root", type=Path, required=True)
+    eligible.add_argument("--expected-manifest-sha256", required=True)
     return parser
 
 
@@ -252,19 +254,42 @@ def _run(args: argparse.Namespace) -> int:
 
 def _promote(args: argparse.Namespace) -> int:
     run = read_reconciliation_run(args.run)
-    manifests = _load_work_unit_manifests(run, args.output_root)
-    coverage = _coverage_for_run(run, manifests, args.output_root)
+    manifests = _load_work_unit_manifests(
+        run,
+        args.output_root,
+        expected_manifest_sha256=args.expected_manifest_sha256,
+    )
+    preflight = build_reconciliation_promotion_preflight(
+        args.output_root,
+        run,
+        manifests,
+    )
+    coverage = validate_reconciliation_coverage(run, preflight.coverage)
     if not args.apply:
-        print(
-            _json(
-                {
-                    "applied": False,
-                    "coverage_intervals": len(coverage),
-                    "run_id": run.run_id,
-                    "work_units": len(manifests),
-                }
-            )
-        )
+        settings = load_settings()
+        engine = create_engine(settings.database.url)
+        try:
+            with engine.begin() as connection:
+                database = ReconciliationRepository(connection).inspect_promotion(
+                    run,
+                    manifests,
+                    coverage,
+                    candidate_replacement_logical_sha256=str(
+                        preflight.payload["candidate_replacement_logical_sha256"]
+                    ),
+                )
+        finally:
+            engine.dispose()
+        payload = dict(preflight.payload)
+        payload["database_preflight"] = database.to_dict()
+        payload["apply_sequence"] = [
+            "ensure reconciliation schema, append-only triggers, and reconciled view",
+            "verify frozen run registration",
+            "verify every work-unit and replacement row",
+            "insert missing verified coverage rows",
+            "insert the append-only promotion row if absent",
+        ]
+        print(_json(payload))
         return 0
     settings = load_settings()
     engine = create_engine(settings.database.url)
@@ -273,7 +298,14 @@ def _promote(args: argparse.Namespace) -> int:
             connection.execute(text(candle_reconciliation_migration_sql()))
             repository = ReconciliationRepository(connection)
             repository.register_run(run)
-            promotion = repository.promote(run, manifests, coverage)
+            promotion = repository.promote(
+                run,
+                manifests,
+                coverage,
+                candidate_replacement_logical_sha256=str(
+                    preflight.payload["candidate_replacement_logical_sha256"]
+                ),
+            )
     finally:
         engine.dispose()
     print(
@@ -292,42 +324,29 @@ def _promote(args: argparse.Namespace) -> int:
 
 def _report(args: argparse.Namespace) -> int:
     run = read_reconciliation_run(args.run)
-    manifests = _load_work_unit_manifests(run, args.output_root)
-    classifications: Counter[str] = Counter()
-    differing: Counter[str] = Counter()
-    for manifest in manifests:
-        classifications.update(dict(manifest.classification_counts))
-        differing.update(dict(manifest.differing_field_counts))
-    payload = {
-        "classification_counts": dict(sorted(classifications.items())),
-        "differing_field_counts": dict(sorted(differing.items())),
-        "manifest_sha256": run.manifest_sha256,
-        "replacement_rows": sum(item.replacement_row_count for item in manifests),
-        "row_count": sum(item.row_count for item in manifests),
-        "run_id": run.run_id,
-        "statuses": dict(sorted(Counter(item.status for item in manifests).items())),
-        "work_units": len(manifests),
-    }
-    print(_json(payload))
+    manifests = _load_work_unit_manifests(
+        run,
+        args.output_root,
+        expected_manifest_sha256=args.expected_manifest_sha256,
+    )
+    preflight = build_reconciliation_promotion_preflight(args.output_root, run, manifests)
+    print(_json(preflight.payload))
     return 0
 
 
 def _eligible(args: argparse.Namespace) -> int:
     run = read_reconciliation_run(args.run)
-    manifests = _load_work_unit_manifests(run, args.output_root)
-    intervals = _merge_coverage(_coverage_for_run(run, manifests, args.output_root))
+    manifests = _load_work_unit_manifests(
+        run,
+        args.output_root,
+        expected_manifest_sha256=args.expected_manifest_sha256,
+    )
+    preflight = build_reconciliation_promotion_preflight(args.output_root, run, manifests)
     print(
         _json(
             {
-                "intervals": [
-                    {
-                        "end": _iso_ms(item.end_ms),
-                        "start": _iso_ms(item.start_ms),
-                        "symbol": item.symbol,
-                        "timeframe": item.timeframe,
-                    }
-                    for item in intervals
-                ],
+                "intervals": preflight.payload["coverage"],
+                "manifest_sha256": run.manifest_sha256,
                 "run_id": run.run_id,
             }
         )
@@ -335,71 +354,17 @@ def _eligible(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_work_unit_manifests(run, output_root: Path):
-    found = {
-        manifest.work_unit_id: manifest
-        for path in output_root.glob(f"run_id={run.run_id}/**/manifest.json")
-        for manifest in (read_work_unit_manifest(path),)
-    }
-    expected = {item.work_unit_id for item in run.work_units}
-    if set(found) != expected:
-        missing = sorted(expected - set(found))
-        extra = sorted(set(found) - expected)
-        raise ValueError(f"work-unit evidence is incomplete; missing={missing}, extra={extra}")
-    return tuple(found[item.work_unit_id] for item in run.work_units)
-
-
-def _coverage_for_run(run, manifests, output_root: Path):
-    by_id = {item.work_unit_id: item for item in manifests}
-    intervals: list[VerifiedCoverageInterval] = []
-    for unit in run.work_units:
-        manifest = by_id[unit.work_unit_id]
-        publication = output_root / manifest.publication_path
-        start: int | None = None
-        for part in manifest.parts:
-            frame = pl.read_parquet(
-                publication / part.path,
-                columns=["open_time_ms", "classification"],
-            )
-            for timestamp, classification in frame.iter_rows():
-                timestamp = int(timestamp)
-                if classification == "source_unavailable":
-                    if start is not None:
-                        intervals.append(
-                            VerifiedCoverageInterval(unit.symbol, unit.timeframe, start, timestamp)
-                        )
-                        start = None
-                elif start is None:
-                    start = timestamp
-        if start is not None:
-            intervals.append(
-                VerifiedCoverageInterval(unit.symbol, unit.timeframe, start, unit.end_ms)
-            )
-    return tuple(intervals)
-
-
-def _merge_coverage(intervals):
-    merged: list[VerifiedCoverageInterval] = []
-    for item in sorted(
-        intervals, key=lambda value: (value.symbol, value.timeframe, value.start_ms)
-    ):
-        if (
-            merged
-            and (merged[-1].symbol, merged[-1].timeframe) == (item.symbol, item.timeframe)
-            and merged[-1].end_ms == item.start_ms
-        ):
-            prior = merged.pop()
-            merged.append(
-                VerifiedCoverageInterval(
-                    item.symbol,
-                    item.timeframe,
-                    prior.start_ms,
-                    item.end_ms,
-                )
-            )
-        else:
-            merged.append(item)
-    return tuple(merged)
+def _load_work_unit_manifests(
+    run,
+    output_root: Path,
+    *,
+    expected_manifest_sha256: str,
+):
+    return verify_reconciliation_run_publication(
+        output_root,
+        run,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
 
 
 def _verify_source_identity(connection, run) -> None:
@@ -419,10 +384,6 @@ def _parse_minute(value: str, name: str) -> datetime:
     if parsed.second or parsed.microsecond:
         raise ValueError(f"{name} must be minute-aligned")
     return parsed
-
-
-def _iso_ms(value: int) -> str:
-    return datetime.fromtimestamp(value / 1_000, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def _sha256_file(path: Path) -> str:

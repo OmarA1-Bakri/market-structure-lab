@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -14,6 +16,7 @@ from market_structure_lab.data.migrations import (
     candle_reconciliation_migration_sql,
     candle_recovery_migration_sql,
 )
+from market_structure_lab.data.recovery import RecoveryCandle
 from market_structure_lab.data.reconciliation import (
     ReconciliationClass,
     ReconciliationRecord,
@@ -100,6 +103,30 @@ def _run():
 
 def _ledger(tmp_path: Path):
     run, unit = _run()
+    correction_checksum = RecoveryCandle(
+        "BTCUSDT",
+        "1m",
+        60_000,
+        Decimal("30"),
+        Decimal("31"),
+        Decimal("29"),
+        Decimal("30"),
+        Decimal("3"),
+        Decimal("90"),
+        3,
+    ).row_checksum()
+    fill_checksum = RecoveryCandle(
+        "BTCUSDT",
+        "1m",
+        120_000,
+        Decimal("35"),
+        Decimal("36"),
+        Decimal("34"),
+        Decimal("35"),
+        Decimal("3.5"),
+        Decimal("122.5"),
+        4,
+    ).row_checksum()
     records = (
         ReconciliationRecord(
             "BTCUSDT",
@@ -116,7 +143,7 @@ def _ledger(tmp_path: Path):
             60_000,
             ReconciliationClass.BINANCE_CORRECTION,
             _sha("2"),
-            _sha("3"),
+            correction_checksum,
             ("open", "high", "low", "close", "volume", "quote_volume", "trades"),
         ),
         ReconciliationRecord(
@@ -125,7 +152,7 @@ def _ledger(tmp_path: Path):
             120_000,
             ReconciliationClass.BINANCE_FILL,
             None,
-            _sha("4"),
+            fill_checksum,
             (),
         ),
     )
@@ -162,7 +189,7 @@ def _ledger(tmp_path: Path):
             source_name="binance_spot",
             source_revision="fixture-v1",
             payload_sha256=_sha("c"),
-            binance_row_sha256=_sha("3"),
+            binance_row_sha256=correction_checksum,
             retrieved_at="2026-07-16T00:00:00Z",
         ),
         ReconciliationReplacement(
@@ -182,7 +209,7 @@ def _ledger(tmp_path: Path):
             source_name="binance_spot",
             source_revision="fixture-v1",
             payload_sha256=_sha("c"),
-            binance_row_sha256=_sha("4"),
+            binance_row_sha256=fill_checksum,
             retrieved_at="2026-07-16T00:00:00Z",
         ),
     )
@@ -194,6 +221,21 @@ def test_promoted_view_uses_verified_dump_correction_and_fill_only(
     tmp_path: Path,
 ) -> None:
     run, manifest, replacements = _ledger(tmp_path)
+    replacement_digest = hashlib.sha256()
+    for replacement in replacements:
+        replacement_digest.update(
+            json.dumps(
+                {
+                    "binance_row_sha256": replacement.binance_row_sha256,
+                    "open_time_ms": replacement.open_time_ms,
+                    "symbol": replacement.symbol,
+                    "timeframe": replacement.timeframe,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+    candidate_replacement_logical_sha256 = replacement_digest.hexdigest()
     with reconciliation_postgres.begin() as connection:
         repository = ReconciliationRepository(connection)
         repository.register_run(run)
@@ -202,11 +244,13 @@ def test_promoted_view_uses_verified_dump_correction_and_fill_only(
             run,
             (manifest,),
             (VerifiedCoverageInterval("BTCUSDT", "1m", 0, 180_000),),
+            candidate_replacement_logical_sha256=candidate_replacement_logical_sha256,
         )
         replay = repository.promote(
             run,
             (manifest,),
             (VerifiedCoverageInterval("BTCUSDT", "1m", 0, 180_000),),
+            candidate_replacement_logical_sha256=candidate_replacement_logical_sha256,
         )
         rows = connection.execute(
             text(
