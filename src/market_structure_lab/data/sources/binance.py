@@ -510,7 +510,7 @@ def iter_archive_klines(
     end_ms: int,
     on_exclusion: Callable[[ArchiveRowExclusion], None] | None = None,
 ) -> Iterator[SourceKline]:
-    seen: set[int] = set()
+    previous_open_time_ms: int | None = None
     try:
         with zipfile.ZipFile(archive_path) as archive:
             members = sorted(name for name in archive.namelist() if name.lower().endswith(".csv"))
@@ -529,11 +529,18 @@ def iter_archive_klines(
                             continue
                         row = parse_kline_row(raw, symbol=symbol, timeframe=timeframe)
                         if start_ms <= row.open_time_ms < end_ms:
-                            if row.open_time_ms in seen:
+                            if row.open_time_ms == previous_open_time_ms:
                                 raise SourceIntegrityError(
                                     "Binance archive contains a duplicate candle key"
                                 )
-                            seen.add(row.open_time_ms)
+                            if (
+                                previous_open_time_ms is not None
+                                and row.open_time_ms < previous_open_time_ms
+                            ):
+                                raise SourceIntegrityError(
+                                    "Binance archive candle keys are not strictly increasing"
+                                )
+                            previous_open_time_ms = row.open_time_ms
                             yield row
     except (OSError, zipfile.BadZipFile) as error:
         raise SourceIntegrityError("Binance archive is not a readable ZIP") from error

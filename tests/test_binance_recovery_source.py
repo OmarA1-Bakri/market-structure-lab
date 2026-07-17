@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import tracemalloc
 import zipfile
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -178,6 +179,143 @@ def test_archive_iterator_rejects_duplicate_keys(tmp_path) -> None:
                 end_ms=start + 60_000,
             )
         )
+
+
+def test_archive_iterator_rejects_non_adjacent_duplicate_keys(tmp_path) -> None:
+    start = 1_735_689_600_000
+    archive_path = tmp_path / "non-adjacent-duplicate.zip"
+    archive_path.write_bytes(
+        _zip_bytes(
+            [
+                _row(start * 1_000),
+                _row((start + 60_000) * 1_000),
+                _row(start),
+            ]
+        )
+    )
+    with pytest.raises(SourceIntegrityError, match="duplicate|strictly increasing"):
+        list(
+            iter_archive_klines(
+                archive_path,
+                symbol="BTCUSDT",
+                timeframe="1m",
+                start_ms=start,
+                end_ms=start + 120_000,
+            )
+        )
+
+
+def test_archive_iterator_rejects_mixed_unit_normalized_collision(tmp_path) -> None:
+    start = 1_735_689_600_000
+    archive_path = tmp_path / "normalized-duplicate.zip"
+    archive_path.write_bytes(_zip_bytes([_row(start), _row(start * 1_000)]))
+    with pytest.raises(SourceIntegrityError, match="duplicate"):
+        list(
+            iter_archive_klines(
+                archive_path,
+                symbol="BTCUSDT",
+                timeframe="1m",
+                start_ms=start,
+                end_ms=start + 60_000,
+            )
+        )
+
+
+def test_archive_iterator_rejects_non_monotonic_keys(tmp_path) -> None:
+    start = 1_735_689_600_000
+    archive_path = tmp_path / "out-of-order.zip"
+    archive_path.write_bytes(
+        _zip_bytes(
+            [
+                _row((start + 60_000) * 1_000),
+                _row(start * 1_000),
+            ]
+        )
+    )
+    with pytest.raises(SourceIntegrityError, match="strictly increasing"):
+        list(
+            iter_archive_klines(
+                archive_path,
+                symbol="BTCUSDT",
+                timeframe="1m",
+                start_ms=start,
+                end_ms=start + 120_000,
+            )
+        )
+
+
+def test_archive_iterator_orders_across_csv_members(tmp_path) -> None:
+    start = 1_735_689_600_000
+    archive_path = tmp_path / "multi-member.zip"
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("a.csv", ",".join(map(str, _row((start + 60_000) * 1_000))))
+        archive.writestr("b.csv", ",".join(map(str, _row(start * 1_000))))
+
+    with pytest.raises(SourceIntegrityError, match="strictly increasing"):
+        list(
+            iter_archive_klines(
+                archive_path,
+                symbol="BTCUSDT",
+                timeframe="1m",
+                start_ms=start,
+                end_ms=start + 120_000,
+            )
+        )
+
+
+def test_archive_iterator_order_state_excludes_out_of_range_rows(tmp_path) -> None:
+    start = 1_735_689_600_000
+    archive_path = tmp_path / "bounded-order.zip"
+    archive_path.write_bytes(
+        _zip_bytes(
+            [
+                _row((start + 60_000) * 1_000),
+                _row(start * 1_000),
+            ]
+        )
+    )
+
+    rows = list(
+        iter_archive_klines(
+            archive_path,
+            symbol="BTCUSDT",
+            timeframe="1m",
+            start_ms=start,
+            end_ms=start + 60_000,
+        )
+    )
+
+    assert [row.open_time_ms for row in rows] == [start]
+
+
+def test_archive_iterator_duplicate_tracking_has_constant_memory(tmp_path) -> None:
+    start = 1_735_689_600_000
+    peaks: list[int] = []
+    for row_count in (1_000, 50_000):
+        archive_path = tmp_path / f"{row_count}.zip"
+        archive_path.write_bytes(
+            _zip_bytes([_row(start + index * 60_000) for index in range(row_count)])
+        )
+        tracemalloc.start()
+        try:
+            observed = sum(
+                1
+                for _ in iter_archive_klines(
+                    archive_path,
+                    symbol="BTCUSDT",
+                    timeframe="1m",
+                    start_ms=start,
+                    end_ms=start + row_count * 60_000,
+                )
+            )
+            _, peak_bytes = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert observed == row_count
+        peaks.append(peak_bytes)
+
+    assert peaks[1] < max(peaks[0] * 4, 1024 * 1024)
 
 
 def test_archive_quarantines_off_grid_rows_with_durable_provenance(tmp_path) -> None:
