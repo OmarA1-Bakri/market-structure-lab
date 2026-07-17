@@ -19,6 +19,7 @@ from market_structure_lab.data.gaps import read_manifest
 from market_structure_lab.data.migrations import (
     candle_reconciliation_migration_sql,
     candle_recovery_migration_sql,
+    reconciliation_migration_lock_sql,
 )
 from market_structure_lab.data.reconciliation import (
     ReconciliationRepository,
@@ -206,6 +207,7 @@ def _run(args: argparse.Namespace) -> int:
     try:
         if args.apply:
             with engine.begin() as connection:
+                connection.execute(text(reconciliation_migration_lock_sql()))
                 connection.execute(text(candle_recovery_migration_sql()))
                 connection.execute(text(candle_reconciliation_migration_sql()))
                 _verify_source_identity(connection, run)

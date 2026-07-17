@@ -2,6 +2,8 @@
 
 from importlib.resources import files
 
+RECONCILIATION_MIGRATION_LOCK_ID = 4_875_179_636_632_247_649
+
 
 def candle_recovery_migration_sql() -> str:
     return (
@@ -19,4 +21,13 @@ def candle_reconciliation_migration_sql() -> str:
     )
 
 
-__all__ = ["candle_reconciliation_migration_sql", "candle_recovery_migration_sql"]
+def reconciliation_migration_lock_sql() -> str:
+    """Serialize idempotent reconciliation DDL across parallel workers."""
+    return f"SELECT pg_advisory_xact_lock({RECONCILIATION_MIGRATION_LOCK_ID})"
+
+
+__all__ = [
+    "candle_reconciliation_migration_sql",
+    "candle_recovery_migration_sql",
+    "reconciliation_migration_lock_sql",
+]

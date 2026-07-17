@@ -3,7 +3,10 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
 
-from market_structure_lab.data.migrations import candle_reconciliation_migration_sql
+from market_structure_lab.data.migrations import (
+    candle_reconciliation_migration_sql,
+    reconciliation_migration_lock_sql,
+)
 
 
 def test_reconciliation_migration_is_append_only_and_promotion_gated() -> None:
@@ -34,3 +37,10 @@ def test_reconciliation_migration_compiles_for_psycopg_percent_rules() -> None:
     compiled = str(text(candle_reconciliation_migration_sql()).compile(dialect=PGDialect_psycopg()))
 
     assert "open_time %% 60000" in compiled
+
+
+def test_reconciliation_migration_lock_is_transaction_scoped_and_stable() -> None:
+    sql = reconciliation_migration_lock_sql()
+
+    assert sql == "SELECT pg_advisory_xact_lock(4875179636632247649)"
+    assert "pg_try_advisory" not in sql
