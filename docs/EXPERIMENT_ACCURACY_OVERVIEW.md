@@ -190,3 +190,4 @@ Under the repository phase gate, this review does not authorize a real Phase 4 o
 | Task | Commit | Remote verification | Evidence |
 |---|---|---|---|
 | Restore cross-platform golden replay | `0db02354ff344e441864afbe093f5477625ce13f` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-17 | 86 targeted tests passed on Linux and Windows; Ruff; Mypy discovery; independent specification and code-quality approvals |
+| Publish a source-backed experiment evidence contract | `e83a4c3d4bb27a5486ea5b79a8875f803dfbb5d2` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-17 | 35 focused Python tests; Ruff; Mypy; Node contract verification; dashboard typecheck, lint, and production build; three-page Chromium visual verdict 97/100; independent specification and code-quality approvals |
