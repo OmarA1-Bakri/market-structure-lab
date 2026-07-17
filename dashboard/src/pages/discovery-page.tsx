@@ -74,7 +74,18 @@ export function DiscoveryPage() {
               "_",
               " ",
             )}
-            .
+            . By mode: {Object.entries(
+              evidence.data.experiment_accuracy.verified_real_trial_artifacts
+                .by_mode,
+            )
+              .map(([mode, count]) => `${mode} ${count}`)
+              .join(", ")}. Terminal statuses: {Object.entries(
+              evidence.data.experiment_accuracy.verified_real_trial_artifacts
+                .by_status,
+            )
+              .map(([status, count]) => `${status} ${count}`)
+              .join(", ")}. Receipt hashes are verified; the asserted derivation
+            chain is not yet verified.
           </AlertDescription>
         </Alert>
       </section>
@@ -106,7 +117,7 @@ export function DiscoveryPage() {
         </div>
       </section>
 
-      <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
         <MetricBlock
           label="Behaviours"
           value={metrics.behaviours}

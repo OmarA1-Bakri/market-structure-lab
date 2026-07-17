@@ -47,6 +47,13 @@ export function OverviewPage({
   const freshness = data.freshness;
   const history = data.reconciliation.full_history;
   const bounded = data.reconciliation.bounded_audit;
+  const accuracy = data.experiment_accuracy;
+  const trialCounts = accuracy.verified_real_trial_artifacts;
+  const modeCounts = Object.entries(
+    data.experiment_accuracy.verified_real_trial_artifacts.by_mode,
+  )
+    .map(([mode, count]) => `${mode} ${count}`)
+    .join(", ");
 
   return (
     <motion.div
@@ -77,10 +84,9 @@ export function OverviewPage({
             A research console built around what the evidence can prove.
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-relaxed text-muted-foreground md:text-lg">
-            Data recovery and reconciliation remain incomplete. This contract
-            supplies no verified real-market experiment artifacts, so future
-            experiment accuracy is not estimable and no numeric success rate is
-            shown.
+            {history.completion_state === "partial"
+              ? "Data recovery and full-history reconciliation remain incomplete."
+              : "Full-history reconciliation is complete but unpromoted."} {accuracy.claim}
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
             <Button
@@ -156,8 +162,10 @@ export function OverviewPage({
               <div>
                 <p className="text-sm font-medium">Validation remains sealed</p>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  This contract counts zero verified real discovery, validation,
-                  or strategy artifacts; the trial ledger is not implemented.
+                  Ledger status: {accuracy.trial_ledger_status.replaceAll("_", " ")}.
+                  Verified real receipts: {trialCounts.total}. By mode: {modeCounts}.
+                  Receipt integrity is checked; derivation-chain verification is{" "}
+                  {accuracy.derivation_chain_verified ? "complete" : "not yet complete"}.
                 </p>
               </div>
             </div>
@@ -186,8 +194,8 @@ export function OverviewPage({
         />
         <MetricBlock
           label="Verified real-trial artifacts"
-          value={data.experiment_accuracy.verified_real_trial_artifacts.total}
-          detail="Trial ledger not implemented; accuracy not estimable"
+          value={trialCounts.total}
+          detail={accuracy.claim}
         />
       </motion.section>
 

@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import market_structure_lab.discovery.runs as discovery_runs
 
 from market_structure_lab.discovery import (
     AIInterpretation,
@@ -28,6 +29,12 @@ from market_structure_lab.features.registry import (
     FeatureValueKind,
     LeakageClass,
     MissingPolicy,
+)
+from market_structure_lab.experiments import (
+    ExperimentMode,
+    TerminalStatus,
+    read_trial_ledger,
+    verify_trial_receipt,
 )
 
 
@@ -166,6 +173,12 @@ def _fixture(tmp_path, *, rejected: bool = False):
         stability_policy=policy,
         code_commit="abcdef1",
         lock_sha256=hashlib.sha256(b"lock").hexdigest(),
+        feature_publication_id="FP-000501",
+        feature_publication_sha256=hashlib.sha256(b"feature-publication").hexdigest(),
+        normalizer_id="NZ-000501",
+        normalizer_sha256=hashlib.sha256(b"normalizer").hexdigest(),
+        started_at=datetime(2026, 7, 17, 3, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 17, 3, 1, tzinfo=UTC),
     )
     return {
         "config": config,
@@ -230,6 +243,14 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     assert published_manifest["schema_version"] == "discovery-run-manifest-v2"
     assert published_manifest["transition_matrix"] == published_transitions
     assert replay.transition_matrix == first.transition_matrix
+    receipt = verify_trial_receipt(tmp_path / first.run_id)
+    assert receipt.mode is ExperimentMode.DISCOVERY
+    assert receipt.status is TerminalStatus.COMPLETED
+    assert receipt.feature_publication.identifier == "FP-000501"
+    assert receipt.normalizer.identifier == "NZ-000501"
+    assert receipt.hypothesis is None
+    assert receipt.outcome_policy is None
+    assert receipt.cost_policy is None
     assert not (tmp_path / ".DR-000501.staging").exists()
     assert first_bytes == {
         path.relative_to(tmp_path / first.run_id): path.read_bytes()
@@ -244,6 +265,7 @@ def test_unstable_discovery_run_is_retained_as_rejected_without_behaviours(tmp_p
     assert manifest.status == "rejected_unstable"
     assert manifest.behaviours == ()
     assert (tmp_path / "DR-000502" / "manifest.json").exists()
+    assert verify_trial_receipt(tmp_path / "DR-000502").status is TerminalStatus.REJECTED
 
 
 def test_discovery_run_detects_stale_stage_tamper_and_identity_conflict(tmp_path) -> None:
@@ -268,6 +290,53 @@ def test_discovery_run_detects_stale_stage_tamper_and_identity_conflict(tmp_path
     )
     with pytest.raises(RuntimeError, match="identity conflict"):
         _run(changed)
+
+
+def test_discovery_replay_rejects_unmanifested_extra_file(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+    manifest = _run(arguments)
+    (tmp_path / manifest.run_id / "extra.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _run(arguments)
+
+
+def test_discovery_replay_rejects_symlinked_artifact_without_outside_read(tmp_path) -> None:
+    arguments = _fixture(tmp_path / "ledger")
+    manifest = _run(arguments)
+    metrics_path = arguments["output_root"] / manifest.run_id / "metrics.json"
+    outside = tmp_path / "outside-metrics.json"
+    outside.write_bytes(metrics_path.read_bytes())
+    metrics_path.unlink()
+    try:
+        metrics_path.symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symlinks are unavailable: {error}")
+
+    with pytest.raises(RuntimeError, match="symlink|regular"):
+        _run(arguments)
+
+
+def test_discovery_algorithm_failure_is_receipted_without_swallowing_original(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path)
+    original = ArithmeticError("sensitive detector detail")
+
+    def fail_projection(*args, **kwargs):
+        raise original
+
+    monkeypatch.setattr(discovery_runs, "fit_pca", fail_projection)
+
+    with pytest.raises(ArithmeticError) as raised:
+        _run(arguments)
+
+    assert raised.value is original
+    receipt = verify_trial_receipt(tmp_path / "DR-000501")
+    assert receipt.status is TerminalStatus.FAILED
+    assert receipt.conclusion == "Trial execution raised ArithmeticError."
+    assert "sensitive detector detail" not in (tmp_path / "DR-000501" / "receipt.json").read_text()
 
 
 def test_discovery_run_rejects_config_version_drift_from_feature_rows(tmp_path) -> None:
@@ -304,6 +373,7 @@ def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
     tmp_path,
 ) -> None:
     run_manifest = _run(_fixture(tmp_path))
+    receipt = verify_trial_receipt(tmp_path / run_manifest.run_id)
     evidence = tuple(
         BehaviourEvidencePack(
             run_id=run_manifest.run_id,
@@ -338,7 +408,11 @@ def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
     assert first.behaviour_ids == tuple(
         sorted(behaviour.behaviour_id for behaviour in run_manifest.behaviours)
     )
-    assert not (tmp_path / "DR-000501" / ".interpretations.staging").exists()
+    interpretation_root = tmp_path.parent / f"{tmp_path.name}-interpretations"
+    assert not (interpretation_root / ".DR-000501.staging").exists()
+    assert (interpretation_root / "DR-000501" / "manifest.json").is_file()
+    assert verify_trial_receipt(tmp_path / "DR-000501") == receipt
+    assert read_trial_ledger(tmp_path) == (receipt,)
 
     boundary_evidence = run_manifest.transition_matrix.boundary_evidence
     forged_matrix = replace(
@@ -396,7 +470,8 @@ def test_interpretation_publication_rejects_forged_run_manifest_identity(tmp_pat
             output_root=tmp_path,
         )
 
-    assert not (tmp_path / run_manifest.run_id / "interpretations").exists()
+    interpretation_root = tmp_path.parent / f"{tmp_path.name}-interpretations"
+    assert not (interpretation_root / run_manifest.run_id).exists()
 
 
 def test_interpretation_publication_rejects_forged_frozen_behaviour_identity(tmp_path) -> None:

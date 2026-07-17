@@ -149,6 +149,7 @@ def _run_arguments(
         stability_policy=policy,
         code_commit=fixture["code_commit"],
         lock_sha256=fixture["lock_sha256"],
+        legacy_fixture_schema="phase4-discovery-fixture-v2",
     )
     return {
         "config": config,
@@ -297,9 +298,8 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     published_manifest = _load_json(stable_first_dir / "manifest.json")
     published_transitions = _load_json(stable_first_dir / "transitions.json")
     assert published_manifest["transition_matrix"] == published_transitions
-    assert (
-        published_manifest["transition_matrix"]["boundary_evidence"]
-        == asdict(stable_first.transition_matrix.boundary_evidence)
+    assert published_manifest["transition_matrix"]["boundary_evidence"] == asdict(
+        stable_first.transition_matrix.boundary_evidence
     )
     assert _load_json(stable_first_dir / "projection.json")["algorithm_version"] == (
         "deterministic-pca-v2"

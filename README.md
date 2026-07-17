@@ -148,22 +148,33 @@ eth = load_dataset(
 )
 ```
 
-Save reproducible experiment output:
+Publish an immutable terminal trial receipt from a fully preregistered config:
 
 ```python
-from market_structure_lab.experiments import ExperimentConfig, save_experiment_result
+from datetime import UTC, datetime
 
+from market_structure_lab.experiments import TerminalStatus, save_experiment_result
+
+# preregistered_config is an ExperimentConfig containing the exact snapshot,
+# feature publication, registry, normalizer, split, detector/candidate, commit,
+# lock, canonical parameters, seed, universe/ranges, parents, and metric schema.
 result = save_experiment_result(
-    config=ExperimentConfig(
-        run_id="value-migration-001",
-        name="Value migration baseline",
-        question="Does value migrate after imbalance?",
-        hypothesis="Accepted upside imbalance shifts later value higher.",
-    ),
+    config=preregistered_config,
+    status=TerminalStatus.COMPLETED,
     metrics={"observations": 1250},
-    summary="Initial deterministic baseline.",
+    conclusion="Frozen detector completed without outcome access.",
+    started_at=datetime(2026, 7, 17, 3, 0, tzinfo=UTC),
+    completed_at=datetime(2026, 7, 17, 3, 1, tzinfo=UTC),
 )
 ```
+
+New writes use canonical `trial-receipt-v2` bundles under `data/exports/trials/`. Publication uses a
+sibling staging directory, verifies canonical JSON and every artifact hash, and atomically renames
+without overwriting published bytes. Identical replay is idempotent; conflicting run-ID reuse,
+staging residue, checksum drift, or extra files fail closed. Use `execute_trial_attempt` when calling
+an algorithm so raised failures and explicit abandonment are terminally recorded before the original
+exception is re-raised. Historical `experiment-manifest-v1` bundles remain readable only as
+explicitly legacy records; missing provenance is never synthesized.
 
 ## Research principles
 

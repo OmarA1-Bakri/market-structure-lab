@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { isTrialCounts, type TrialCounts } from "@/data/trial-counts";
 
 export const TRANSITION_ALGORITHM_VERSION =
   "boundary-aware-dwell-transitions-v2" as const;
@@ -133,12 +134,11 @@ export interface LabEvidence {
   };
   experiment_accuracy: {
     status: "not_estimable";
-    verified_real_trial_artifacts: Record<
-      "discovery" | "hypothesis" | "validation" | "strategy" | "total",
-      number
-    >;
-    trial_ledger_status: "not_implemented";
+    verified_real_trial_artifacts: TrialCounts;
+    trial_ledger_status: "implemented_empty" | "implemented_with_receipts";
+    trial_receipt_schema: "trial-receipt-v2";
     fixture_trials_counted_as_real: false;
+    derivation_chain_verified: false;
     scope: string;
     claim: string;
   };
@@ -204,24 +204,6 @@ function hasReplayMetrics(value: unknown): value is Record<string, number> {
       "discovery_rows",
       "development_rows",
     ].every((key) => isNonNegative(value[key]))
-  );
-}
-
-function isZeroTrialCounts(
-  value: unknown,
-): value is LabEvidence["experiment_accuracy"]["verified_real_trial_artifacts"] {
-  if (!isCountMap(value)) return false;
-  const keys = [
-    "discovery",
-    "hypothesis",
-    "validation",
-    "strategy",
-    "total",
-  ] as const;
-  return (
-    keys.every((key) => value[key] === 0) &&
-    value.total ===
-      value.discovery + value.hypothesis + value.validation + value.strategy
   );
 }
 
@@ -440,9 +422,14 @@ export function isLabEvidence(value: unknown): value is LabEvidence {
     isFeatureRegistry(registry) &&
     isObject(accuracy) &&
     accuracy.status === "not_estimable" &&
-    isZeroTrialCounts(accuracy.verified_real_trial_artifacts) &&
-    accuracy.trial_ledger_status === "not_implemented" &&
+    isTrialCounts(accuracy.verified_real_trial_artifacts) &&
+    accuracy.trial_ledger_status ===
+      (accuracy.verified_real_trial_artifacts.total === 0
+        ? "implemented_empty"
+        : "implemented_with_receipts") &&
+    accuracy.trial_receipt_schema === "trial-receipt-v2" &&
     accuracy.fixture_trials_counted_as_real === false &&
+    accuracy.derivation_chain_verified === false &&
     typeof accuracy.scope === "string" &&
     typeof accuracy.claim === "string" &&
     isObject(phase) &&

@@ -64,3 +64,11 @@ The explicit `generated_at` is publication time. `freshness.evidence_timestamp` 
 cutoff. Deployments cannot regenerate from ignored/private inputs, so the prebuild verifier rejects
 malformed or internally inconsistent checked JSON instead. Refresh the artifact deliberately after
 source evidence changes; never expose credentials or infer promotion from partial reconciliation.
+
+The generator also boundedly scans `data/exports/trials/` through the canonical receipt verifier.
+It reports exact counts by experiment mode and terminal status only after every receipt, artifact
+hash, path, and file set verifies. Synthetic golden fixtures are outside that ledger and are never
+counted. The current checked snapshot truthfully reports an implemented-but-empty ledger, zero real
+trials, and accuracy not estimable. Receipt identities are asserted and byte-verified; the complete
+snapshot-to-feature-to-normalizer derivation chain is not yet verified.
+That proof belongs to a later, post-Phase-0 Phase 4 hardening gate.

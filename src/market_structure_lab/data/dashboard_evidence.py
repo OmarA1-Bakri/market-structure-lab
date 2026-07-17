@@ -17,6 +17,7 @@ from market_structure_lab.data.reconciliation import (
     verify_work_unit_publication,
 )
 from market_structure_lab.features import builtin_feature_registry
+from market_structure_lab.experiments import ExperimentMode, TerminalStatus, read_trial_ledger
 
 LAB_EVIDENCE_SCHEMA_VERSION = 1
 
@@ -29,6 +30,7 @@ def generate_lab_evidence(
     """Return a browser-safe contract after verifying every referenced artifact."""
     freshness_root = repository_root / "data" / "exports" / "freshness"
     reconciliation_root = repository_root / "data" / "exports" / "reconciliation"
+    trial_root = repository_root / "data" / "exports" / "trials"
     freshness = read_latest_freshness_artifacts(freshness_root)
     report = freshness.report
     bounded_run = read_reconciliation_run(reconciliation_root / "RR-000002.run.json")
@@ -38,8 +40,19 @@ def generate_lab_evidence(
     history_complete = history["verified_work_units"] == history["expected_work_units"]
     replay = _phase4_fixture_evidence(repository_root)
     registry = builtin_feature_registry()
+    trials = read_trial_ledger(trial_root)
+    trials_by_mode = {mode.value: 0 for mode in ExperimentMode}
+    trials_by_status = {status.value: 0 for status in TerminalStatus}
+    trials_by_mode_and_status = {
+        mode.value: {status.value: 0 for status in TerminalStatus} for mode in ExperimentMode
+    }
+    for trial in trials:
+        trials_by_mode[trial.mode.value] += 1
+        trials_by_status[trial.status.value] += 1
+        trials_by_mode_and_status[trial.mode.value][trial.status.value] += 1
     timestamp = _canonical_publication_timestamp(
-        generated_at or datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        generated_at
+        or datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
     statuses = Counter(item.status.value for item in report.symbols)
 
@@ -112,16 +125,22 @@ def generate_lab_evidence(
         "experiment_accuracy": {
             "status": "not_estimable",
             "verified_real_trial_artifacts": {
-                "discovery": 0,
-                "hypothesis": 0,
-                "validation": 0,
-                "strategy": 0,
-                "total": 0,
+                "by_mode": trials_by_mode,
+                "by_status": trials_by_status,
+                "by_mode_and_status": trials_by_mode_and_status,
+                "total": len(trials),
             },
-            "trial_ledger_status": "not_implemented",
+            "trial_ledger_status": ("implemented_with_receipts" if trials else "implemented_empty"),
+            "trial_receipt_schema": "trial-receipt-v2",
             "fixture_trials_counted_as_real": False,
+            "derivation_chain_verified": False,
             "scope": "verified real-trial artifacts supplied to this dashboard contract",
-            "claim": "No verified real-trial artifacts are supplied; numeric accuracy is not estimable.",
+            "claim": (
+                "Verified terminal receipts exist, but predictive accuracy remains not estimable."
+                if trials
+                else "The immutable ledger is implemented but contains zero verified real trials; "
+                "numeric accuracy is not estimable."
+            ),
         },
         "phase_gate": {
             "active_phase": "Phase 0: trustworthy foundation",
@@ -220,13 +239,28 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
     interpretation_input = _read_json_object(input_path)
     response = _read_json_object(response_path)
     expected_top = {
-        "schema_version", "dataset_snapshot", "source_identity", "registry", "split",
-        "feature_names", "caps", "code_commit", "lock_sha256", "discovery_rows",
-        "development_rows", "event_ids", "durations_seconds", "runs",
-        "interpretation_input_sha256", "interpretation_response_sha256",
+        "schema_version",
+        "dataset_snapshot",
+        "source_identity",
+        "registry",
+        "split",
+        "feature_names",
+        "caps",
+        "code_commit",
+        "lock_sha256",
+        "discovery_rows",
+        "development_rows",
+        "event_ids",
+        "durations_seconds",
+        "runs",
+        "interpretation_input_sha256",
+        "interpretation_response_sha256",
         "interpretation_publication",
     }
-    if set(fixture) != expected_top or fixture.get("schema_version") != "phase4-discovery-fixture-v2":
+    if (
+        set(fixture) != expected_top
+        or fixture.get("schema_version") != "phase4-discovery-fixture-v2"
+    ):
         raise ValueError("unsupported Phase 4 fixture schema")
     input_sha = _sha256_file(input_path)
     response_sha = _sha256_file(response_path)
@@ -312,8 +346,7 @@ def _fixture_run(value: object, *, expected_status: str) -> dict[str, Any]:
         or expected.get("status") != expected_status
         or not _is_sha256(expected.get("manifest_sha256"))
         or not isinstance(expected.get("behaviour_ids"), list)
-        or expected.get("transition_algorithm_version")
-        != "boundary-aware-dwell-transitions-v2"
+        or expected.get("transition_algorithm_version") != "boundary-aware-dwell-transitions-v2"
         or not isinstance(metrics, dict)
     ):
         raise ValueError("Phase 4 run fixture contract is invalid")
@@ -328,7 +361,9 @@ def _fixture_run(value: object, *, expected_status: str) -> dict[str, Any]:
 
 
 def _is_sha256(value: object) -> bool:
-    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+    return (
+        isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+    )
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

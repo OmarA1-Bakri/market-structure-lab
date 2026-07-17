@@ -108,19 +108,29 @@ code commit. This prevents a daily scheduler from silently replacing a frozen re
 
 ## Experiment artifacts
 
-Use `market_structure_lab.experiments.save_experiment_result` for small generic research records.
-Canonical Phase 4 discovery uses checksum-pinned `DR-*` publication with frozen detector,
-stability, motif, transition, representative, and interpretation evidence. The generic writer
-writes:
+`market_structure_lab.experiments` is the sole terminal trial-accounting contract. Every new
+discovery, hypothesis, validation, or strategy attempt publishes one canonical
+`trial-receipt-v2` bundle under `data/exports/trials/`. The receipt pins the dataset snapshot,
+feature publication, registry, normalizer, frozen split, detector/candidate, code and lock,
+canonical parameters, seed, universe/ranges, parents, metric schema, warnings, conclusion, UTC
+lifecycle timestamps, terminal status, and every artifact hash. Validation and strategy additionally
+require frozen outcome and cost policies. These identities are required and receipt/artifact bytes
+are verified here; proof of the complete snapshot-to-feature-to-normalizer derivation chain remains
+a later, post-Phase-0 Phase 4 hardening gate.
 
-- `config.json`
-- `metrics.json`
-- `summary.md`
-- `plots/`
-- `artifacts/`
+Publication writes a sibling staging directory, verifies canonical bytes, and atomically renames it.
+Published bytes are never overwritten: identical replay is idempotent, while content conflicts,
+stale staging, missing files, extra files, and checksum drift fail closed. The execution boundary
+records `failed` or `abandoned` before re-raising the original algorithm exception. Normal output
+must end `completed`, `rejected`, or `inconclusive`. `experiment-manifest-v1` remains a readable,
+explicitly legacy format and receives no invented provenance.
 
-The artifact writer is intentionally small. It records outputs; it does not schedule jobs, optimize
-strategies, or own research logic.
+Canonical Phase 4 discovery includes its checksum-pinned detector, stability, motif, transition,
+representative, and discovery-manifest files as artifacts of the same terminal receipt. Later AI
+interpretations publish into a separately checksum-verified sibling namespace
+`data/exports/trials-interpretations/`; they never add files below an immutable receipt directory or
+poison ledger enumeration. Synthetic golden replay remains legacy fixture evidence and is never
+counted as a real trial.
 
 Daily PostgreSQL freshness does not automatically create a research dataset. Real Phase 4 market
 experiments begin only after a deliberate immutable candle snapshot and Phase 3 feature/event

@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const path = process.argv[2]
-  ? new URL(process.argv[2], `file://${process.cwd()}/`)
+  ? pathToFileURL(resolve(process.argv[2]))
   : new URL("../public/data/lab-evidence-v1.json", import.meta.url);
 const fail = (message) => {
   throw new Error(`invalid lab evidence: ${message}`);
@@ -12,6 +14,10 @@ const count = (value) => Number.isInteger(value) && value >= 0;
 const sha = (value) =>
   typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 const counts = (value) => object(value) && Object.values(value).every(count);
+const exactKeys = (value, keys) =>
+  object(value) &&
+  Object.keys(value).length === keys.length &&
+  keys.every((key) => Object.hasOwn(value, key));
 const local = (value) =>
   typeof value === "string" && value.length > 0 && !/[\\/]/.test(value);
 const timestamp = (value) =>
@@ -145,22 +151,44 @@ const completeUnpromoted =
 if (!partialHistory && !completeUnpromoted) fail("full-history semantics");
 const accuracy = evidence.experiment_accuracy;
 const trials = accuracy?.verified_real_trial_artifacts;
+const modeKeys = ["discovery", "hypothesis", "validation", "strategy"];
+const statusKeys = ["failed", "inconclusive", "abandoned", "rejected", "completed"];
+const byMode = trials?.by_mode;
+const byStatus = trials?.by_status;
+const matrix = trials?.by_mode_and_status;
+const validMatrix =
+  exactKeys(matrix, modeKeys) &&
+  modeKeys.every(
+    (mode) =>
+      exactKeys(matrix[mode], statusKeys) &&
+      counts(matrix[mode]) &&
+      statusKeys.reduce((sum, status) => sum + matrix[mode][status], 0) ===
+        byMode?.[mode],
+  ) &&
+  statusKeys.every(
+    (status) =>
+      modeKeys.reduce((sum, mode) => sum + matrix[mode][status], 0) ===
+      byStatus?.[status],
+  );
 if (
   !object(accuracy) ||
   accuracy.status !== "not_estimable" ||
-  accuracy.trial_ledger_status !== "not_implemented" ||
+  accuracy.trial_receipt_schema !== "trial-receipt-v2" ||
+  accuracy.derivation_chain_verified !== false ||
   accuracy.fixture_trials_counted_as_real !== false ||
-  !counts(trials) ||
-  trials.total !==
-    trials.discovery +
-      trials.hypothesis +
-      trials.validation +
-      trials.strategy ||
-  ["discovery", "hypothesis", "validation", "strategy", "total"].some(
-    (key) => trials[key] !== 0,
-  )
+  !exactKeys(trials, ["by_mode", "by_status", "by_mode_and_status", "total"]) ||
+  !exactKeys(byMode, modeKeys) ||
+  !counts(byMode) ||
+  !exactKeys(byStatus, statusKeys) ||
+  !counts(byStatus) ||
+  !count(trials.total) ||
+  trials.total !== modeKeys.reduce((sum, mode) => sum + byMode[mode], 0) ||
+  trials.total !== statusKeys.reduce((sum, status) => sum + byStatus[status], 0) ||
+  !validMatrix ||
+  accuracy.trial_ledger_status !==
+    (trials.total === 0 ? "implemented_empty" : "implemented_with_receipts")
 )
-  fail("experiment scope");
+  fail("trial ledger contract");
 const replay = evidence.software_replay;
 if (
   !object(replay) ||

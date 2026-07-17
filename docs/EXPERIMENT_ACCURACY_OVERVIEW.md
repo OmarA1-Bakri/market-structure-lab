@@ -12,7 +12,7 @@
 
 **The repository cannot currently support a defensible numeric estimate of the accuracy of future market experiments.**
 
-There are no completed real-market discovery trials, no completed Phase 5 validation trials, no cost-adjusted outcome results, and no empirical trial history from which to estimate a discovery or promotion rate. `docs/RESEARCH_LOG.md` contains no completed research session, `docs/HYPOTHESES.md` is an unpopulated template, and the only committed `DR-*` evidence is a synthetic golden replay. The current empirical count is therefore `n = 0`; any single accuracy percentage would be invented.
+There are no completed real-market discovery trials, no completed Phase 5 validation trials, no cost-adjusted outcome results, and no empirical trial history from which to estimate a discovery or promotion rate. `docs/RESEARCH_LOG.md` contains no completed research session, `docs/HYPOTHESES.md` is an unpopulated template, and the only committed `DR-*` evidence is a synthetic golden replay. The immutable `trial-receipt-v2` ledger is now implemented, but the verified repository ledger is empty. The current empirical count is therefore `n = 0`; any single accuracy percentage would be invented.
 
 The correct object is not classification accuracy. Future experiments must report a **reliability vector**:
 
@@ -57,6 +57,13 @@ Fresh post-repair verification ran the 86-test discovery, behaviour, evidence, a
 
 No real Phase 3 feature/event publication feeding discovery, real `DR-*` bundle, completed research-log entry, populated hypothesis record, Phase 5 outcome attachment, or cost-aware validation artifact exists. The only visible candle snapshot is a one-day, one-symbol XRPUSDT snapshot with 1,440 rows and a dirty commit identity (`data/exports/snapshots/dataset_version=phase0-xrpusdt-20180505-v1/manifest.json:1-23`).
 
+The absence is now machine-readable rather than inferred from optimistic UI defaults. The dashboard
+generator verifies the canonical ledger and reports exact mode/status counts: all four modes and all
+five terminal statuses are zero. It rejects malformed receipts, checksum drift, extra files, and
+interrupted staging, and it never counts the synthetic Phase 4 fixture as a real trial. Required
+snapshot, feature-publication, registry, and normalizer identities are receipt-bound assertions;
+this task does not prove their complete derivation chain.
+
 Consequently:
 
 - real detector stability is unknown;
@@ -74,7 +81,8 @@ Consequently:
 | Full-universe temporal coverage | Weak and uneven | High | 7.739M minutes remain absent; 9 source conflicts; 12 provider-absent statuses |
 | Existing-row venue reconciliation | In progress | High | RR-000008 is nonterminal; RR-000002 found material corrections |
 | Outcome-blind access boundary | Structurally strong | High | Holdout rows are rejected and future/outcome feature classes are blocked |
-| End-to-end normalization provenance | Insufficiently bound | High | Discovery config/input identity does not require the fitted normalizer or feature-publication hash |
+| End-to-end normalization provenance | Required identities, derivation still unverified | High | Canonical receipts require snapshot, feature-publication, registry, and normalizer identities; source-backed chain verification remains a post-Phase-0 Phase 4 hardening gate |
+| Immutable trial accounting | Implemented but empirically empty | High | Canonical terminal receipts are atomic, idempotent, fail closed, and counted by verified mode/status; repository count is `n=0` |
 | Real detector/cluster stability | Unknown | High | No real discovery run exists |
 | Motif stability and boundary safety | Insufficient | High | Motifs are not stability-tested and orchestration lacks explicit time/session-contiguity checks |
 | Transition description | Structurally safe, statistically descriptive | High | The sole public path dwell-compresses, preserves boundary evidence, and exposes no adjacent-binomial/BH inference API |
@@ -85,13 +93,19 @@ Consequently:
 
 1. **No empirical experiment exists.** There is nothing from which to estimate predictive accuracy, false-discovery rate, or promotion yield.
 2. **Full-history reconciliation is unfinished.** A research snapshot frozen before RR-000008 completes and is deliberately promoted could preserve known row-value errors.
-3. **Normalization provenance is not end-to-end bound.** `DiscoveryRunConfig` carries snapshot, registry, commit, and lock hashes, but not a required train-fitted normalizer artifact or feature-publication manifest (`src/market_structure_lab/discovery/runs.py:67-86,403-447`; `src/market_structure_lab/discovery/matrix.py:48-60`).
-4. **Trial accounting is incomplete.** Discovery manifests have only `completed` and `rejected_unstable`; pre-publication failures/abandonment are not durable. The generic experiment writer can overwrite an existing run ID and does not require the full PRD provenance/decision record (`src/market_structure_lab/discovery/runs.py`; `src/market_structure_lab/experiments/artifacts.py`).
-5. **The fixture does not validate meaningful stability thresholds.** Its accepted run uses maximally permissive ARI/JS/coverage thresholds, so it proves policy plumbing rather than empirical stability (`tests/fixtures/phase4/discovery_run_v1.json`).
-6. **Motif evidence is weaker than cluster evidence.** Motifs are computed once, only on the first selected feature, and are not tested across seeds, subsamples, adjacent periods, assets, or parameter perturbations. Grouping lacks explicit timestamp/session-contiguity checks after null-row removal (`src/market_structure_lab/discovery/runs.py`).
-7. **Transition uncertainty defaults are descriptive only.** The canonical path correctly dwell-compresses and boundary-checks, but orchestration pins just 100 bootstrap iterations and block length two without a dependence diagnostic or sensitivity analysis (`src/market_structure_lab/discovery/runs.py`).
-8. **Dataset hashes are asserted, not linked through the full derivation chain.** Exact supplied rows are hashed, but the discovery layer does not prove that they came from the claimed snapshot, feature publication, normalizer, and commit.
-9. **Semantic leakage remains a developer-declared risk.** Structural guards are good, but an improperly implemented future-derived feature with an innocuous name and incorrect leakage declaration could still pass.
+3. **Provenance derivation is not end-to-end verified.** Canonical receipts now require snapshot,
+   feature-publication, registry, and normalizer identities, but Task 5 verifies the asserted
+   identities and published bytes rather than independently reconstructing their complete
+   derivation chain (`src/market_structure_lab/discovery/runs.py`;
+   `src/market_structure_lab/experiments/artifacts.py`).
+4. **The fixture does not validate meaningful stability thresholds.** Its accepted run uses maximally permissive ARI/JS/coverage thresholds, so it proves policy plumbing rather than empirical stability (`tests/fixtures/phase4/discovery_run_v1.json`).
+5. **Motif evidence is weaker than cluster evidence.** Motifs are computed once, only on the first selected feature, and are not tested across seeds, subsamples, adjacent periods, assets, or parameter perturbations. Grouping lacks explicit timestamp/session-contiguity checks after null-row removal (`src/market_structure_lab/discovery/runs.py`).
+6. **Transition uncertainty defaults are descriptive only.** The canonical path correctly dwell-compresses and boundary-checks, but orchestration pins just 100 bootstrap iterations and block length two without a dependence diagnostic or sensitivity analysis (`src/market_structure_lab/discovery/runs.py`).
+7. **Required hashes are asserted, not yet linked through the full derivation chain.** Receipt
+   verification prevents mutation or omission, but the discovery layer does not yet independently
+   prove that supplied rows came from the claimed snapshot, feature publication, normalizer, and
+   commit.
+8. **Semantic leakage remains a developer-declared risk.** Structural guards are good, but an improperly implemented future-derived feature with an innocuous name and incorrect leakage declaration could still pass.
 
 ## Canonical gates for future accuracy claims
 
@@ -175,9 +189,9 @@ Under the repository phase gate, this review does not authorize a real Phase 4 o
 - `docs/RESEARCH_LOG.md:20-22: 🔴 blocker: no completed real research trial exists. Do not report experiment accuracy until trial artifacts exist.`
 - `docs/benchmarks/phase4-golden-drift-diagnosis.md: 🟢 closed: cross-platform PCA identity drift is versioned, fail-closed, and verified by 86 passing tests on both Linux and Windows.`
 - `data/exports/reconciliation/RR-000008.run.json:work_units: 🟡 risk: full-history audit is nonterminal. Block snapshot eligibility until every unit and promotion hash verify.`
-- `src/market_structure_lab/discovery/runs.py:67-86: 🔴 risk: run identity omits required normalizer/publication provenance. Bind train-fitted normalizer and feature manifest hashes.`
+- `src/market_structure_lab/discovery/runs.py: 🟡 risk: receipts require normalizer/publication identities, but the full derivation chain is not independently verified.`
 - `src/market_structure_lab/transitions/__init__.py: 🟢 closed: the raw-adjacent binomial/BH surface is deleted; the canonical API requires boundary-aware observations and publishes dwell-run support plus boundary evidence.`
-- `src/market_structure_lab/experiments/artifacts.py:44-85: 🔴 risk: repeated run IDs overwrite evidence and failed trials are lost. Make trial records immutable and terminal-status complete.`
+- `src/market_structure_lab/experiments/artifacts.py: 🟢 closed: canonical terminal receipts are atomic, checksum-verified, immutable, idempotent, and retain failures/abandonment without swallowing the original exception.`
 - `tests/fixtures/phase4/discovery_run_v1.json:350-356: 🟡 risk: accepted fixture thresholds cannot reject instability. Label it policy-plumbing evidence, not stability evidence.`
 - `src/market_structure_lab/discovery/runs.py:483-507: 🔴 bug: motif groups can bridge dropped rows, gaps, or sessions. Enforce explicit contiguity and add multi-axis motif stability.`
 - `src/market_structure_lab/discovery/runs.py:54-56: 🟡 risk: 100 bootstraps with fixed block length 2 are under-justified for inference. Make dependence-calibrated settings part of the frozen policy.`

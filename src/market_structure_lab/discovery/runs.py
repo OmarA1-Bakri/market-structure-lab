@@ -11,9 +11,16 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, Mapping, Sequence
 
+from market_structure_lab.core.artifact_io import (
+    bounded_regular_files,
+    path_exists_no_follow,
+    read_bounded_regular,
+    regular_file_matches,
+    sha256_regular,
+)
 from market_structure_lab.discovery.behaviours import FrozenBehaviour, freeze_behaviours
 from market_structure_lab.discovery.evidence import (
     AIInterpretation,
@@ -39,6 +46,15 @@ from market_structure_lab.discovery.transitions import (
 )
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import FeatureRegistry
+from market_structure_lab.experiments import (
+    ArtifactIdentity,
+    ExperimentConfig,
+    ExperimentMode,
+    TerminalStatus,
+    TrialRange,
+    save_experiment_result,
+    verify_trial_receipt,
+)
 
 _RUN_ID = re.compile(r"^DR-[0-9]{6}$")
 _DATASET_ID = re.compile(r"^DS-[0-9]{6}$")
@@ -46,6 +62,8 @@ _FEATURE_SET_ID = re.compile(r"^FS-[0-9]{6}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _CODE_COMMIT = re.compile(r"^[A-Fa-f0-9]{7,64}$")
 _MAX_INTERPRETATIONS = 1_000
+_MAX_BUNDLE_ENTRIES = 20_000
+_MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _SUBSAMPLE_FRACTION = 0.75
 _MOTIF_MAX_WINDOW_LENGTH = 4
 _MOTIF_EXCLUSION_ZONE = 2
@@ -83,6 +101,13 @@ class DiscoveryRunConfig:
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
+    feature_publication_id: str | None = None
+    feature_publication_sha256: str | None = None
+    normalizer_id: str | None = None
+    normalizer_sha256: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    legacy_fixture_schema: Literal["phase4-discovery-fixture-v2"] | None = None
 
     def __post_init__(self) -> None:
         _require_pattern(self.run_id, _RUN_ID, "run_id")
@@ -125,6 +150,23 @@ class DiscoveryRunConfig:
             raise TypeError("stability_policy must be a StabilityPolicy")
         _require_pattern(self.code_commit, _CODE_COMMIT, "code_commit")
         _require_sha256(self.lock_sha256, "lock_sha256")
+        if self.legacy_fixture_schema is None:
+            _require_text(self.feature_publication_id, "feature_publication_id")
+            _require_sha256(
+                _require_text(self.feature_publication_sha256, "feature_publication_sha256"),
+                "feature_publication_sha256",
+            )
+            _require_text(self.normalizer_id, "normalizer_id")
+            _require_sha256(
+                _require_text(self.normalizer_sha256, "normalizer_sha256"),
+                "normalizer_sha256",
+            )
+            started_at = _require_utc_datetime(self.started_at, "started_at")
+            completed_at = _require_utc_datetime(self.completed_at, "completed_at")
+            if started_at > completed_at:
+                raise ValueError("started_at cannot be after completed_at")
+        elif self.legacy_fixture_schema != "phase4-discovery-fixture-v2":
+            raise ValueError("unsupported legacy fixture schema")
         if not isinstance(self.parent_run_ids, tuple) or len(set(self.parent_run_ids)) != len(
             self.parent_run_ids
         ):
@@ -189,7 +231,62 @@ def run_discovery(
     durations_seconds: Sequence[float],
     output_root: Path,
 ) -> DiscoveryRunManifest:
-    """Execute and atomically publish one bounded outcome-blind discovery run."""
+    """Execute one bounded outcome-blind attempt with an immutable terminal receipt."""
+
+    if not isinstance(config, DiscoveryRunConfig):
+        raise TypeError("config must be a DiscoveryRunConfig")
+    if config.legacy_fixture_schema is not None:
+        return _run_discovery_implementation(
+            config=config,
+            discovery=discovery,
+            development=development,
+            registry=registry,
+            event_ids=event_ids,
+            durations_seconds=durations_seconds,
+            output_root=output_root,
+        )
+    trial_config = _trial_config(config, discovery, development, registry)
+    try:
+        return _run_discovery_implementation(
+            config=config,
+            discovery=discovery,
+            development=development,
+            registry=registry,
+            event_ids=event_ids,
+            durations_seconds=durations_seconds,
+            output_root=output_root,
+        )
+    except Exception as error:
+        try:
+            save_experiment_result(
+                config=trial_config,
+                status=TerminalStatus.FAILED,
+                metrics={},
+                conclusion=f"Trial execution raised {type(error).__name__}.",
+                warnings=("discovery algorithm did not produce normal output",),
+                started_at=_required_timestamp(config.started_at, "started_at"),
+                completed_at=_required_timestamp(config.completed_at, "completed_at"),
+                root=output_root,
+            )
+        except Exception as publication_error:
+            error.add_note(
+                "terminal discovery receipt publication also failed: "
+                f"{type(publication_error).__name__}"
+            )
+        raise
+
+
+def _run_discovery_implementation(
+    *,
+    config: DiscoveryRunConfig,
+    discovery: DiscoveryInput,
+    development: DiscoveryInput,
+    registry: FeatureRegistry,
+    event_ids: Sequence[str],
+    durations_seconds: Sequence[float],
+    output_root: Path,
+) -> DiscoveryRunManifest:
+    """Compute and publish one discovery bundle after the attempt boundary is established."""
 
     _validate_run_inputs(config, discovery, development, registry, output_root)
     final_dir = output_root / config.run_id
@@ -255,6 +352,18 @@ def run_discovery(
         "durations_seconds": durations,
     }
     identity_sha256 = _sha256(_canonical_json(identity_payload))
+    metrics_payload = {
+        "status": status,
+        "discovery_rows": len(discovery_matrix.values),
+        "development_rows": len(development_matrix.values),
+        "dropped_null_rows": {
+            "discovery": discovery_matrix.dropped_null_rows,
+            "development": development_matrix.dropped_null_rows,
+        },
+        "behaviours": len(behaviours),
+        "motifs": _motif_count(motif_payload),
+        "transitions": transition_matrix.total_transitions,
+    }
     payloads: dict[str, bytes] = {
         "config.json": _json_file(config_payload),
         "projection.json": _json_file(projection),
@@ -263,20 +372,7 @@ def run_discovery(
         "behaviours.json": _json_file(behaviours),
         "motifs.json": _json_file(motif_payload),
         "transitions.json": _json_file(transition_matrix),
-        "metrics.json": _json_file(
-            {
-                "status": status,
-                "discovery_rows": len(discovery_matrix.values),
-                "development_rows": len(development_matrix.values),
-                "dropped_null_rows": {
-                    "discovery": discovery_matrix.dropped_null_rows,
-                    "development": development_matrix.dropped_null_rows,
-                },
-                "behaviours": len(behaviours),
-                "motifs": _motif_count(motif_payload),
-                "transitions": transition_matrix.total_transitions,
-            }
-        ),
+        "metrics.json": _json_file(metrics_payload),
         "summary.md": (
             f"# {config.run_id}\n\nStatus: {status}\n\n"
             "Outcome-blind discovery; final holdout was not accessed.\n"
@@ -305,16 +401,34 @@ def run_discovery(
         manifest_sha256=_sha256(_canonical_json(manifest_without_hash)),
     )
     manifest_bytes = _json_file(manifest.to_dict())
-    if final_dir.exists():
-        existing = _verify_bundle(final_dir)
-        if existing.get("identity_sha256") != identity_sha256:
-            raise RuntimeError("discovery run identity conflict")
-        if (final_dir / "manifest.json").read_bytes() != manifest_bytes:
-            raise RuntimeError("discovery run content conflict")
-        return manifest
-
     payloads["manifest.json"] = manifest_bytes
-    _publish_bundle(stage_dir, final_dir, payloads)
+    if config.legacy_fixture_schema is not None:
+        if path_exists_no_follow(final_dir):
+            existing = _verify_bundle(final_dir)
+            if existing.get("identity_sha256") != identity_sha256:
+                raise RuntimeError("discovery run identity conflict")
+            if not regular_file_matches(final_dir / "manifest.json", manifest_bytes):
+                raise RuntimeError("discovery run content conflict")
+            return manifest
+        _publish_bundle(stage_dir, final_dir, payloads)
+        return manifest
+    save_experiment_result(
+        config=_trial_config(config, discovery, development, registry),
+        status=(TerminalStatus.COMPLETED if status == "completed" else TerminalStatus.REJECTED),
+        metrics=metrics_payload,
+        conclusion=(
+            "Outcome-blind discovery completed; final holdout was not accessed."
+            if status == "completed"
+            else "Outcome-blind detector was rejected by the frozen stability policy."
+        ),
+        warnings=(
+            () if status == "completed" else ("frozen stability policy rejected the detector",)
+        ),
+        started_at=_required_timestamp(config.started_at, "started_at"),
+        completed_at=_required_timestamp(config.completed_at, "completed_at"),
+        artifacts={name: content for name, content in payloads.items() if name != "metrics.json"},
+        root=output_root,
+    )
     return manifest
 
 
@@ -354,8 +468,13 @@ def publish_ai_interpretations(
             raise ValueError("AI interpretation detector fields changed")
 
     _verify_run_manifest_identity(run_dir, run_manifest)
-    stage_dir = run_dir / ".interpretations.staging"
-    final_dir = run_dir / "interpretations"
+    if (run_dir / "receipt.json").is_file():
+        interpretation_root = output_root.parent / f"{output_root.name}-interpretations"
+        stage_dir = interpretation_root / f".{run_manifest.run_id}.staging"
+        final_dir = interpretation_root / run_manifest.run_id
+    else:
+        stage_dir = run_dir / ".interpretations.staging"
+        final_dir = run_dir / "interpretations"
     if stage_dir.exists():
         raise RuntimeError(f"stale interpretation staging directory exists: {stage_dir}")
     evidence_payload = [item.to_dict() for item in packs]
@@ -389,11 +508,11 @@ def publish_ai_interpretations(
         manifest_sha256=_sha256(_canonical_json(manifest_without_hash)),
     )
     manifest_bytes = _json_file(manifest.to_dict())
-    if final_dir.exists():
-        existing = _verify_bundle(final_dir)
+    if path_exists_no_follow(final_dir):
+        existing = _verify_bundle(final_dir, exact=True)
         if existing.get("identity_sha256") != identity_sha256:
             raise RuntimeError("interpretation identity conflict")
-        if (final_dir / "manifest.json").read_bytes() != manifest_bytes:
+        if not regular_file_matches(final_dir / "manifest.json", manifest_bytes):
             raise RuntimeError("interpretation content conflict")
         return manifest
     payloads["manifest.json"] = manifest_bytes
@@ -560,7 +679,7 @@ def _motif_count(payload: Sequence[Mapping[str, object]]) -> int:
 
 
 def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "run_id": config.run_id,
         "dataset_snapshot_id": config.dataset_snapshot_id,
         "dataset_snapshot_sha256": config.dataset_snapshot_sha256,
@@ -597,6 +716,93 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
             "transition_confidence_level": _TRANSITION_CONFIDENCE_LEVEL,
         },
     }
+    if config.legacy_fixture_schema is None:
+        payload.update(
+            {
+                "feature_publication_id": config.feature_publication_id,
+                "feature_publication_sha256": config.feature_publication_sha256,
+                "normalizer_id": config.normalizer_id,
+                "normalizer_sha256": config.normalizer_sha256,
+                "started_at": _jsonable(config.started_at),
+                "completed_at": _jsonable(config.completed_at),
+            }
+        )
+    return payload
+
+
+def _trial_config(
+    config: DiscoveryRunConfig,
+    discovery: DiscoveryInput,
+    development: DiscoveryInput,
+    registry: FeatureRegistry,
+) -> ExperimentConfig:
+    if config.legacy_fixture_schema is not None:
+        raise ValueError("legacy fixture replay does not create a canonical trial receipt")
+    feature_publication_id = _require_text(config.feature_publication_id, "feature_publication_id")
+    feature_publication_sha256 = _require_text(
+        config.feature_publication_sha256, "feature_publication_sha256"
+    )
+    normalizer_id = _require_text(config.normalizer_id, "normalizer_id")
+    normalizer_sha256 = _require_text(config.normalizer_sha256, "normalizer_sha256")
+    rows = discovery.rows + development.rows
+    symbols = tuple(sorted({row.symbol for row in rows}))
+    timeframes = tuple(sorted({row.timeframe for row in rows}))
+    partitions = (config.split.discovery, config.split.development, config.split.holdout)
+    ranges = tuple(
+        sorted(
+            (
+                TrialRange(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start=_utc_string(partition.start),
+                    end=_utc_string(partition.end),
+                )
+                for partition in partitions
+                for symbol in partition.symbols
+                for timeframe in timeframes
+            ),
+            key=lambda item: (item.symbol, item.timeframe, item.start, item.end),
+        )
+    )
+    return ExperimentConfig(
+        run_id=config.run_id,
+        mode=ExperimentMode.DISCOVERY,
+        dataset_snapshot=ArtifactIdentity(
+            config.dataset_snapshot_id, config.dataset_snapshot_sha256
+        ),
+        feature_publication=ArtifactIdentity(feature_publication_id, feature_publication_sha256),
+        feature_registry=ArtifactIdentity(registry.registry_id, registry.sha256),
+        normalizer=ArtifactIdentity(normalizer_id, normalizer_sha256),
+        frozen_split={
+            "split_id": config.split.split_id,
+            "sha256": config.split.sha256,
+            "discovery": config.split.discovery.to_dict(),
+            "development": config.split.development.to_dict(),
+            "holdout": config.split.holdout.to_dict(),
+            "asset_holdouts": list(config.split.asset_holdouts),
+        },
+        detector_version="outcome-blind-discovery-v2",
+        candidate_id=None,
+        candidate_version=None,
+        code_commit=config.code_commit,
+        lock_sha256=config.lock_sha256,
+        canonical_config=_config_payload(config),
+        seed=config.seeds[0],
+        symbols=symbols,
+        timeframes=timeframes,
+        ranges=ranges,
+        parent_ids=config.parent_run_ids,
+        metrics_schema={
+            "behaviours": "integer",
+            "discovery_rows": "integer",
+            "development_rows": "integer",
+            "dropped_null_rows": "object",
+            "motifs": "integer",
+            "status": "string",
+            "transitions": "integer",
+        },
+        hypothesis=None,
+    )
 
 
 def _input_sha256(input_value: DiscoveryInput) -> str:
@@ -613,24 +819,37 @@ def _input_sha256(input_value: DiscoveryInput) -> str:
     )
 
 
-def _verify_bundle(directory: Path) -> Mapping[str, object]:
+def _verify_bundle(directory: Path, *, exact: bool = False) -> Mapping[str, object]:
+    actual_files = set(bounded_regular_files(directory, maximum=_MAX_BUNDLE_ENTRIES))
+    has_receipt = "receipt.json" in actual_files
+    if has_receipt:
+        verify_trial_receipt(directory)
     manifest_path = directory / "manifest.json"
-    if not manifest_path.is_file():
+    if "manifest.json" not in actual_files:
         raise RuntimeError("published bundle is missing its manifest")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        manifest = json.loads(read_bounded_regular(manifest_path, _MAX_MANIFEST_BYTES).decode())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError("published bundle manifest is tampered") from error
+    if not isinstance(manifest, dict):
+        raise RuntimeError("published bundle manifest is tampered")
     hashes = manifest.get("artifact_sha256")
     if not isinstance(hashes, dict):
         raise RuntimeError("published bundle manifest is tampered")
+    artifact_names = {_safe_bundle_name(name) for name in hashes}
+    if has_receipt or exact:
+        expected_files = {"manifest.json", *artifact_names}
+        if has_receipt:
+            expected_files.add("receipt.json")
+        if actual_files != expected_files:
+            raise RuntimeError("published bundle contains unexpected files")
     for name, expected in hashes.items():
-        path = directory / name
+        safe_name = _safe_bundle_name(name)
+        path = directory / PurePosixPath(safe_name)
         if (
-            not isinstance(name, str)
-            or not isinstance(expected, str)
-            or not path.is_file()
-            or _sha256(path.read_bytes()) != expected
+            not isinstance(expected, str)
+            or safe_name not in actual_files
+            or sha256_regular(path) != expected
         ):
             raise RuntimeError("published bundle artifact tamper detected")
     supplied_manifest_hash = manifest.pop("manifest_sha256", None)
@@ -651,10 +870,19 @@ def _verify_run_manifest_identity(
     supplied_payload = supplied.to_dict()
     if verified != supplied_payload:
         raise RuntimeError("supplied discovery run manifest identity does not match publication")
-    if (directory / "manifest.json").read_bytes() != _json_file(supplied_payload):
+    if not regular_file_matches(directory / "manifest.json", _json_file(supplied_payload)):
         raise RuntimeError("supplied discovery run manifest identity is not byte-identical")
-    if (directory / "behaviours.json").read_bytes() != _json_file(supplied.behaviours):
+    if not regular_file_matches(directory / "behaviours.json", _json_file(supplied.behaviours)):
         raise RuntimeError("supplied discovery run behaviour identity does not match publication")
+
+
+def _safe_bundle_name(value: object) -> str:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise RuntimeError("published bundle manifest contains an unsafe artifact path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise RuntimeError("published bundle manifest contains an unsafe artifact path")
+    return path.as_posix()
 
 
 def _publish_bundle(stage_dir: Path, final_dir: Path, payloads: Mapping[str, bytes]) -> None:
@@ -747,6 +975,25 @@ def _require_text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be non-empty")
     return value
+
+
+def _require_utc_datetime(value: object, label: str) -> datetime:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() != UTC.utcoffset(value)
+        or value.microsecond != 0
+    ):
+        raise ValueError(f"{label} must be a whole-second UTC datetime")
+    return value
+
+
+def _required_timestamp(value: datetime | None, label: str) -> datetime:
+    return _require_utc_datetime(value, label)
+
+
+def _utc_string(value: datetime) -> str:
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _positive_integer(value: object, label: str) -> int:

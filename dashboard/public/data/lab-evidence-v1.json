@@ -1,17 +1,58 @@
 {
   "connection_mode": "deployment_snapshot",
   "experiment_accuracy": {
-    "claim": "No verified real-trial artifacts are supplied; numeric accuracy is not estimable.",
+    "claim": "The immutable ledger is implemented but contains zero verified real trials; numeric accuracy is not estimable.",
+    "derivation_chain_verified": false,
     "fixture_trials_counted_as_real": false,
     "scope": "verified real-trial artifacts supplied to this dashboard contract",
     "status": "not_estimable",
-    "trial_ledger_status": "not_implemented",
+    "trial_ledger_status": "implemented_empty",
+    "trial_receipt_schema": "trial-receipt-v2",
     "verified_real_trial_artifacts": {
-      "discovery": 0,
-      "hypothesis": 0,
-      "strategy": 0,
-      "total": 0,
-      "validation": 0
+      "by_mode": {
+        "discovery": 0,
+        "hypothesis": 0,
+        "strategy": 0,
+        "validation": 0
+      },
+      "by_mode_and_status": {
+        "discovery": {
+          "abandoned": 0,
+          "completed": 0,
+          "failed": 0,
+          "inconclusive": 0,
+          "rejected": 0
+        },
+        "hypothesis": {
+          "abandoned": 0,
+          "completed": 0,
+          "failed": 0,
+          "inconclusive": 0,
+          "rejected": 0
+        },
+        "strategy": {
+          "abandoned": 0,
+          "completed": 0,
+          "failed": 0,
+          "inconclusive": 0,
+          "rejected": 0
+        },
+        "validation": {
+          "abandoned": 0,
+          "completed": 0,
+          "failed": 0,
+          "inconclusive": 0,
+          "rejected": 0
+        }
+      },
+      "by_status": {
+        "abandoned": 0,
+        "completed": 0,
+        "failed": 0,
+        "inconclusive": 0,
+        "rejected": 0
+      },
+      "total": 0
     }
   },
   "feature_registry": {
@@ -660,7 +701,7 @@
       }
     ]
   },
-  "generated_at": "2026-07-17T08:33:43Z",
+  "generated_at": "2026-07-17T09:50:37Z",
   "phase_gate": {
     "active_phase": "Phase 0: trustworthy foundation",
     "next_required_evidence": "complete RR-000008 and obtain explicit promotion approval",
@@ -703,38 +744,38 @@
     },
     "full_history": {
       "algorithm_version": "row-reconciliation-v3",
-      "audited_keys": 22326427,
+      "audited_keys": 27402651,
       "classification_counts": {
-        "binance_correction": 6198,
-        "binance_fill": 10135975,
-        "exact_match": 12161102,
-        "source_unavailable": 23152
+        "binance_correction": 6375,
+        "binance_fill": 12987115,
+        "exact_match": 14383241,
+        "source_unavailable": 25920
       },
       "completion_state": "partial",
       "cutoff": "2026-07-16T11:23:00Z",
       "differing_field_counts": {
-        "close": 5435,
-        "high": 2559,
-        "low": 2599,
-        "open": 46,
-        "quote_volume": 33,
-        "trades": 27,
-        "volume": 6192
+        "close": 5562,
+        "high": 2622,
+        "low": 2667,
+        "open": 52,
+        "quote_volume": 35,
+        "trades": 29,
+        "volume": 6369
       },
       "expected_work_units": 1583,
       "mapping_version": "market-data-candles-v1",
       "promoted_verified_intervals": 0,
       "promotion_receipt_available": false,
-      "replacement_rows": 10142173,
+      "replacement_rows": 12993490,
       "research_eligibility": "blocked_until_complete_and_deliberately_promoted",
       "run_id": "RR-000008",
       "run_manifest_sha256": "1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629",
       "scope_label": "partial full-history audit progress",
-      "verified_manifest_set_sha256": "e4f150c0acb0b22a1cc5aa6a8bda988a08a5f9d4057ac0122d9e39c9213b47a4",
-      "verified_work_units": 516,
+      "verified_manifest_set_sha256": "39266bda7614c20e35d9b9fc80bf758e25d26d2d093fe9075b605cf688f297a3",
+      "verified_work_units": 634,
       "work_unit_status_counts": {
-        "completed": 431,
-        "source_unavailable": 85
+        "completed": 534,
+        "source_unavailable": 100
       }
     }
   },
