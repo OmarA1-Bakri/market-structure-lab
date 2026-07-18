@@ -2,13 +2,14 @@
 
 ## Decision
 
-**Status on 2026-07-18:** RR-000008 is complete, independently preflight-verified, and deliberately
-unpromoted. The Phase 0 pre-promotion evidence gate is ready for review. Final Phase 0 closure is
-not claimed because promotion, its immutable receipt, and the post-promotion canonical-view checks
-require explicit approval.
+**Status on 2026-07-18:** RR-000008 is complete, explicitly approved, atomically promoted, and
+post-promotion verified. The active reconciled view is bound to the checksum-pinned RR-000008
+candidate. Phase 0 is complete; Phase 4 hardening remains separately approval-gated and no real
+discovery, validation, strategy, or trading run has started.
 
-No command in this remediation applied reconciliation promotion, changed the immutable dump,
-reset PostgreSQL, dropped durable schemas, or crossed into a later research phase.
+The approved promotion appended one immutable promotion row and 285 verified-coverage rows. No
+command changed the immutable dump, reset PostgreSQL, dropped durable schemas, interpolated
+unavailable minutes, or crossed into a later research phase.
 
 ## Frozen identities
 
@@ -64,7 +65,7 @@ repair and was pushed before the final preflight.
 | Audited keys | 68,474,492 |
 | Replacement rows | 31,894,927 |
 | Work-unit ID set SHA-256 | `4d98af4a826be79f69d728743b1c2348f70cf0005bef6f60a9ecd8d7ee3b39a9` |
-| RR-000008 promotion rows | 0 |
+| RR-000008 promotion rows | 1 |
 
 The supervisor completion receipt is
 `data/exports/reconciliation/recovery/RR-000008/supervisor-complete-20260718T120644.653202Z.json`,
@@ -127,15 +128,16 @@ These ranges remain explicit unavailable evidence. They were not interpolated, f
 
 ## Dashboard evidence
 
-`dashboard/public/data/lab-evidence-v1.json`, generated at `2026-07-18T12:54:39Z`, has SHA-256
-`22399d82363fcd288e9de09a759664c5d9d8bc01725ed4d9f0a3751a956650d9` before the final
-documentation checkpoint. It reports:
+`dashboard/public/data/lab-evidence-v1.json`, generated at `2026-07-18T18:59:48Z`, has SHA-256
+`61d4bc89f9a87a2ed5a57250f18388f00014e525e72f5095ac94cee8e32c04ba`. It is regenerated from
+the checksum-verified promotion receipt and reports:
 
-- `complete_unpromoted` and `full-history audit complete; unpromoted`;
+- `complete_promoted` and `full-history reconciliation promoted`;
 - 1,583 expected and 1,583 verified work units;
 - 68,474,492 audited keys and 31,894,927 replacements;
-- zero promoted verified intervals and no promotion receipt;
-- research eligibility blocked pending deliberate promotion;
+- 285 promoted verified intervals and the immutable promotion receipt identities;
+- reconciliation provenance established, while snapshot eligibility remains blocked until a new
+  immutable research snapshot is explicitly frozen;
 - zero real trials and accuracy `not_estimable`.
 
 The dashboard does not convert software completeness into market evidence or an edge claim.
@@ -146,14 +148,13 @@ The dashboard does not convert software completeness into market evidence or an 
 |---|---|
 | Migration test-first regression | RED on the missing file, then 7 migration tests passed |
 | New lookup index against disposable PostgreSQL | 2 passed, 9 deselected; exact metadata and index-only plan verified |
-| Publication/preflight regression surface | 43 passed |
-| Dashboard Python evidence tests | 18 passed |
-| Dashboard evidence contract | Passed |
+| Promotion receipt, bounded hash/view, publication, preflight, and dashboard regression surface | 58 passed |
+| Dashboard evidence contract | Passed against the promoted receipt-bound snapshot |
 | Dashboard TypeScript check, ESLint, and production build | Passed |
-| Full Windows-native Python suite | 904 passed, 7 PostgreSQL profiles skipped |
-| All PostgreSQL integration profiles against a disposable PostgreSQL 17 database | 7 passed |
-| Ruff format and lint | Passed |
-| Mypy | No issues in 77 source files |
+| Full Windows-native Python suite | 908 passed, 8 isolated-PostgreSQL profiles skipped |
+| All PostgreSQL integration profiles against a disposable PostgreSQL 17 database | 8 passed |
+| Ruff format and lint | 143 files formatted; all checks passed |
+| Mypy | No issues in 78 source files |
 | `uv sync --locked` and `uv lock --check` | Passed |
 | Source distribution and wheel build | Passed |
 | Docker Compose configuration with non-secret validation values | Passed |
@@ -165,23 +166,39 @@ Windows-task-runner tests rejected when Linux pytest created scripts under a WSL
 path. Those same 13 cases passed under the Windows-native Python environment, and the complete
 Windows-native suite passed. No product assertion failed on its supported host path.
 
-The PostgreSQL integration fixtures were moved from Unix-epoch timestamps to the canonical view's
-documented 2018 lower boundary after the complete integration run exposed the stale fixture. All
-seven isolated profiles then passed together against disposable PostgreSQL 17.
+The PostgreSQL integration fixtures use the canonical view's documented 2018 lower boundary. All
+eight isolated profiles passed together against disposable PostgreSQL 17, including the new
+bounded-view query-plan regression.
+
+## Approved promotion and post-promotion invariants
+
+The explicitly approved promotion committed at `2026-07-18T16:47:13.507011Z`. The immutable
+receipt is
+`data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json`, with content SHA-256
+`19315f0c52c6d3e9a91a5127921ce349fe50e60944c0ccc1a209b5637b3b9cf6` and file SHA-256
+`cb399ac01d0beeea4666da071d9186e9a144f3f7fe5e4d1bf760696c631e8529`. It binds:
+
+- manifest SHA-256 `1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629`;
+- replacement logical SHA-256
+  `2f45102a45b261b99c38484e0cf10df71121237320deb27c11877de2aa1b9182`;
+- canonical logical SHA-256
+  `8dd1af045a92d53b7a8e898764e9f9a90bc456373c16b7c9ac2670ee2c47608c`;
+- exactly 285 non-overlapping verified-coverage intervals.
+
+Post-promotion database checks found exactly one RR-000008 promotion row, exactly 285 coverage
+rows, zero coverage self-overlaps, zero replacements outside verified coverage, and RR-000008 as
+the active run. The reconciled public surface contains `35,738,056` verified dump matches,
+`31,884,870` Binance fills, and `10,057` Binance corrections: `67,632,983` unique canonical rows.
+The `841,509` source-unavailable minutes are absent rather than fabricated. Reapplying the exact
+promotion candidate returned the original hashes and timestamp, retained one promotion row and 285
+coverage rows, and left the receipt byte-identical.
 
 ## Approval boundary and remaining risks
 
-The next operation would insert one immutable RR-000008 promotion row, 285 verified-coverage rows,
-and switch the reconciled view from RR-000002 to RR-000008. That is a deliberate data-publication
-mutation and was not executed.
-
-After explicit approval, Phase 0 closure still requires:
-
-1. apply exactly the checksum-pinned preflight candidate;
-2. publish and verify the immutable promotion receipt;
-3. prove the active reconciled view is RR-000008 and matches the candidate logical hashes;
-4. refresh post-promotion viability/dashboard evidence;
-5. rerun the affected verification surface and publish a final Phase 0 gate decision.
+Phase 0 is closed at the promoted reconciliation boundary. The next operation is not another data
+publication: it is the separately gated Phase 4 hardening program for provenance reconstruction,
+outcome-blind discovery, stability, leakage controls, and trial accounting. It requires a new
+explicit approval before implementation or a real market experiment begins.
 
 Independent of promotion, `841,509` minutes remain explicitly unavailable, nine venue-conflict
 symbols remain quarantined by the earlier compatibility review, and there are still zero real

@@ -94,11 +94,11 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task | Status | Evidence / blocker |
 |---|---|---|
 | Task 1 — golden replay | Complete | Cross-platform deterministic PCA repair and reviewed fixture migration; 86 discovery/golden tests passed on Linux and Windows. |
-| Task 2 — RR-000008 | Pre-promotion complete; approval gated | All 1,583 frozen work units are terminal and verified: 1,359 `completed`, 224 `source_unavailable`, 68,474,492 audited rows, and 31,894,927 replacements. The read-only promotion preflight passed; RR-000008 still has zero promotion rows. |
-| Task 3 — dashboard contract | Complete at the unpromoted boundary | The source-backed snapshot reports `complete_unpromoted`, 1,583/1,583 verified units, and `not_estimable` experiment accuracy without inferring research eligibility. |
+| Task 2 — RR-000008 | Complete and explicitly promoted | All 1,583 frozen work units are terminal and verified. The approved append-only promotion has one row, 285 non-overlapping coverage intervals, an immutable receipt, exact origin counts, zero out-of-coverage replacements, and byte-identical replay. |
+| Task 3 — dashboard contract | Complete at the promoted Phase 0 boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, 285 receipt-bound intervals, snapshot-not-frozen eligibility, and `not_estimable` experiment accuracy. |
 | Task 4 — transition safety | Complete | Raw adjacent binomial/BH research surface removed; boundary-aware dwell/event path is canonical. |
 | Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; verified real-trial count remains `n=0`. |
-| Task 6 — Phase 0 gate | Ready for explicit promotion decision | Pre-promotion verification and the written evidence gate are complete. Final Phase 0 closure still requires explicit approval, an immutable promotion receipt, and post-promotion canonical-view verification. No promotion was applied automatically. |
+| Task 6 — Phase 0 gate | Verification complete; checkpoint pending | Promotion, canonical-view audit, dashboard, written evidence, full Python/PostgreSQL/dashboard/build/config verification are complete. The Lore commit and remote SHA check remain before the Phase B stop gate. |
 | Tasks 7–14 | Approval-gated | Do not execute until the preceding written phase gate is accepted. |
 
 ## Skill and workflow routing
@@ -139,20 +139,20 @@ The authoritative sweep is `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`.
 
 ### Phase 0 exit criteria
 
-- [ ] RR-000008 has exactly one terminal verified manifest for every frozen work unit.
-- [ ] Promotion preflight proves no missing/extra work units, hash drift, unresolved keys, or
+- [x] RR-000008 has exactly one terminal verified manifest for every frozen work unit.
+- [x] Promotion preflight proves no missing/extra work units, hash drift, unresolved keys, or
       conflicting intervals.
-- [ ] Any promotion occurs only after explicit user confirmation and produces a verified immutable
+- [x] Any promotion occurs only after explicit user confirmation and produces a verified immutable
       promotion manifest.
-- [ ] The corrected canonical view has no duplicate keys, no invalid OHLC rows, and no unverified
+- [x] The corrected canonical view has no duplicate keys, no invalid OHLC rows, and no unverified
       fallback inside promoted intervals.
-- [ ] Legacy transition inference cannot be invoked without boundary-aware event/dwell inputs.
-- [ ] Experiment artifacts cannot overwrite an existing run with different content and retain all
+- [x] Legacy transition inference cannot be invoked without boundary-aware event/dwell inputs.
+- [x] Experiment artifacts cannot overwrite an existing run with different content and retain all
       terminal outcomes.
-- [ ] Dashboard freshness and reconciliation labels match checksum-verified current artifacts.
-- [ ] The Phase 4 golden integration tests pass byte-identically without unexplained fixture updates.
-- [ ] Ruff, Mypy, targeted tests, the full Pytest suite, package build, and Compose validation pass.
-- [ ] A Phase 0 evidence report lists every command, hash, residual risk, and the remaining phase
+- [x] Dashboard freshness and reconciliation labels match checksum-verified current artifacts.
+- [x] The Phase 4 golden integration tests pass byte-identically without unexplained fixture updates.
+- [x] Ruff, Mypy, targeted tests, the full Pytest suite, package build, and Compose validation pass.
+- [x] A Phase 0 evidence report lists every command, hash, residual risk, and the remaining phase
       gates. Stop here for explicit approval.
 - [ ] Every completed Phase 0 task has a verified remote commit SHA recorded in the evidence report.
 
@@ -326,38 +326,38 @@ The audit must fail for a missing unit, duplicate unit, extra unit, stale stage,
 part hash mismatch, row-count mismatch, nonterminal status, changed run plan, or overlapping promoted
 interval.
 
-- [ ] **Step 5: Reconcile the complete filesystem/database ledgers**
+- [x] **Step 5: Reconcile the complete filesystem/database ledgers**
 
 Require exactly 1,583 unique frozen work-unit IDs in each ledger, identical manifest/status/row and
 replacement-count/hash evidence per ID, zero filesystem-only units, zero database-only units, and
 classification/field-difference conservation. Re-verify every `_SUCCESS`, manifest, part set,
 Parquet checksum, streamed row count, and replacement logical hash before preflight.
 
-- [ ] **Step 6: Produce a read-only promotion preflight**
+- [x] **Step 6: Produce a read-only promotion preflight**
 
 Preflight output must include all 1,583 expected units, terminal-status counts, classification and
 field-difference totals by symbol/era, candidate replacement logical hash, residual unavailable
 ranges, and exact database/view changes that promotion would make.
 
-- [ ] **Step 7: Refresh dashboard and run the Phase 0 verification suite**
+- [x] **Step 7: Refresh dashboard and run the Phase 0 verification suite**
 
 Regenerate the dashboard snapshot only from the fully verified RR bundle. Run the targeted tests,
 full Pytest suite, Ruff format/check, Mypy, lock check, package build, Compose validation, dashboard
 evidence verification, typecheck, lint, and production build. Update the Phase 0 evidence report and
 push a Lore-compliant checkpoint whose remote SHA is re-read and recorded.
 
-- [ ] **Step 8: Stop for explicit promotion confirmation**
+- [x] **Step 8: Stop for explicit promotion confirmation**
 
 Promotion mutates durable research state. Do not promote automatically. After confirmation, use the
 existing explicit promotion command; never reinitialize PostgreSQL or replace the dump.
 
-- [ ] **Step 9: After approval only, verify the promoted corrected view**
+- [x] **Step 9: After approval only, verify the promoted corrected view**
 
 Prove unique canonical keys, correct precedence, no fallback inside promoted intervals, no
 supplements/corrections outside verified intervals, exact counts/hashes, bounded reads, and stable
 replay of the promotion manifest.
 
-- [ ] **Step 10: After approval only, freeze the promoted reconciliation evidence report**
+- [x] **Step 10: After approval only, freeze the promoted reconciliation evidence report**
 
 Update `docs/DATA_VIABILITY.md` and `docs/IMPLEMENTATION_STATUS.md` only from checksum-verified final
 artifacts. Do not declare experiment eligibility until a deliberate snapshot is separately frozen.
@@ -513,8 +513,8 @@ trial counts can be reconstructed without scanning chat history or overwriting e
 - Update: `docs/EXPERIMENT_ACCURACY_OVERVIEW.md`
 - Create: `docs/PHASE0_REMEDIATION_EVIDENCE.md`
 
-- [ ] **Step 1: Run targeted suites from Tasks 1–5**
-- [ ] **Step 2: Run the complete verification chain**
+- [x] **Step 1: Run targeted suites from Tasks 1–5**
+- [x] **Step 2: Run the complete verification chain**
 
 ```powershell
 uv sync --locked
@@ -527,7 +527,7 @@ docker compose config --quiet
 git diff --check
 ```
 
-- [ ] **Step 3: Perform manual integrity review**
+- [x] **Step 3: Perform manual integrity review**
 
 Check secrets, dump hash, large/generated files, ignored volumes, bounded-memory paths, UTC handling,
 outcome leakage, symbol/session/gap boundaries, exact docs/artifact agreement, and no final-holdout

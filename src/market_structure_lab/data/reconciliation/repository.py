@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import batched
+from typing import Any, Protocol
 
 from sqlalchemy import Connection, text
 
@@ -21,6 +22,10 @@ from market_structure_lab.data.reconciliation.models import (
     ReconciliationClass,
 )
 from market_structure_lab.data.recovery import RECOVERY_ADVISORY_LOCK_NAME, RecoveryCandle
+
+
+class _Digest(Protocol):
+    def update(self, value: bytes) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,7 +288,7 @@ ON CONFLICT (run_id, symbol, "interval", start_time, end_time) DO NOTHING
                     "end_ms": item.end_ms,
                 },
             )
-        canonical_hash = _run_canonical_hash(self.connection, run.run_id)
+        canonical_hash = _run_canonical_hash(self.connection, run)
         self.connection.execute(
             text(
                 """
@@ -395,7 +400,7 @@ LIMIT 1
         if existing_promotion is not None:
             if stored_coverage != candidate_coverage:
                 raise ValueError("existing promotion coverage differs from the verified candidate")
-            canonical_hash = _run_canonical_hash(self.connection, run.run_id)
+            canonical_hash = _run_canonical_hash(self.connection, run)
             if (
                 existing_promotion.manifest_sha256 != run.manifest_sha256
                 or existing_promotion.replacement_logical_sha256 != replacement_hash
@@ -663,48 +668,104 @@ ORDER BY symbol, "interval", open_time
     return digest.hexdigest()
 
 
-def _run_canonical_hash(connection: Connection, run_id: str) -> str:
+def _run_canonical_hash(connection: Connection, run: ReconciliationRunManifest) -> str:
     digest = hashlib.sha256()
-    rows = connection.execute(
+    optimizer_settings = connection.execute(
         text(
             """
-WITH replacements AS (
-    SELECT symbol, "interval", open_time, open::text AS open, high::text AS high,
-           low::text AS low, close::text AS close, volume::text AS volume,
-           quote_volume::text AS quote_volume, trades::text AS trades,
-           classification AS origin
-    FROM market_data.candle_reconciliation_replacements
-    WHERE run_id=:run_id
-),
-verified_dump AS (
-    SELECT candle.symbol, candle."interval", candle.open_time,
-           candle.open::text AS open, candle.high::text AS high,
-           candle.low::text AS low, candle.close::text AS close,
-           candle.volume::text AS volume, candle.quote_volume::text AS quote_volume,
-           candle.trades::text AS trades, 'dump_verified_match'::text AS origin
-    FROM market_data.candles AS candle
-    JOIN market_data.candle_reconciliation_coverage AS coverage
-      ON coverage.run_id=:run_id
-     AND coverage.symbol=candle.symbol
-     AND coverage."interval"=candle."interval"
-     AND coverage.start_time <= candle.open_time
-     AND candle.open_time < coverage.end_time
-    WHERE NOT EXISTS (
-        SELECT 1 FROM replacements
-        WHERE replacements.symbol=candle.symbol
-          AND replacements."interval"=candle."interval"
-          AND replacements.open_time=candle.open_time
-    )
-)
-SELECT * FROM replacements
-UNION ALL
-SELECT * FROM verified_dump
-ORDER BY symbol, "interval", open_time
+SELECT set_config('enable_seqscan', 'off', true),
+       set_config('enable_bitmapscan', 'off', true),
+       set_config('max_parallel_workers_per_gather', '0', true)
 """
-        ).execution_options(stream_results=True),
-        {"run_id": run_id},
+        )
     )
-    for row in rows:
+    close_settings = getattr(optimizer_settings, "close", None)
+    if close_settings is not None:
+        close_settings()
+    markets = sorted({(item.symbol, item.timeframe) for item in run.envelopes})
+    replacement_statement = text(
+        """
+SELECT symbol, "interval", open_time, open::text AS open, high::text AS high,
+       low::text AS low, close::text AS close, volume::text AS volume,
+       quote_volume::text AS quote_volume, trades::text AS trades,
+       classification AS origin
+FROM market_data.candle_reconciliation_replacements
+WHERE run_id=:run_id AND symbol=:symbol AND "interval"=:timeframe
+ORDER BY open_time
+"""
+    ).execution_options(stream_results=True)
+    verified_dump_statement = text(
+        """
+SELECT candle.symbol, candle."interval", candle.open_time,
+       candle.open::text AS open, candle.high::text AS high,
+       candle.low::text AS low, candle.close::text AS close,
+       candle.volume::text AS volume, candle.quote_volume::text AS quote_volume,
+       candle.trades::text AS trades, 'dump_verified_match'::text AS origin
+FROM market_data.candles AS candle
+WHERE candle.symbol=:symbol AND candle."interval"=:timeframe
+  AND EXISTS (
+      SELECT 1
+      FROM market_data.candle_reconciliation_coverage AS coverage
+      WHERE coverage.run_id=:run_id
+        AND coverage.symbol=candle.symbol
+        AND coverage."interval"=candle."interval"
+        AND coverage.start_time <= candle.open_time
+        AND candle.open_time < coverage.end_time
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM market_data.candle_reconciliation_replacements AS replacement
+      WHERE replacement.run_id=:run_id
+        AND replacement.symbol=candle.symbol
+        AND replacement."interval"=candle."interval"
+        AND replacement.open_time=candle.open_time
+  )
+ORDER BY candle.open_time
+"""
+    ).execution_options(stream_results=True)
+    for symbol, timeframe in markets:
+        parameters = {
+            "run_id": run.run_id,
+            "symbol": symbol,
+            "timeframe": timeframe,
+        }
+        replacements = connection.execute(replacement_statement, parameters)
+        verified_dump = connection.execute(verified_dump_statement, parameters)
+        try:
+            _update_canonical_hash(digest, replacements, verified_dump)
+        finally:
+            for rows in (replacements, verified_dump):
+                close = getattr(rows, "close", None)
+                if close is not None:
+                    close()
+    return digest.hexdigest()
+
+
+def _update_canonical_hash(
+    digest: _Digest,
+    replacements: Iterable[Any],
+    verified_dump: Iterable[Any],
+) -> None:
+    replacement_rows = iter(replacements)
+    dump_rows = iter(verified_dump)
+    replacement = next(replacement_rows, None)
+    dump = next(dump_rows, None)
+    while replacement is not None or dump is not None:
+        if dump is None:
+            row = replacement
+            replacement = next(replacement_rows, None)
+        elif replacement is None:
+            row = dump
+            dump = next(dump_rows, None)
+        elif replacement.open_time < dump.open_time:
+            row = replacement
+            replacement = next(replacement_rows, None)
+        elif dump.open_time < replacement.open_time:
+            row = dump
+            dump = next(dump_rows, None)
+        else:
+            raise ValueError("canonical hash inputs contain a duplicate market timestamp")
+        assert row is not None
         digest.update(
             json.dumps(
                 dict(row._mapping),
@@ -712,7 +773,6 @@ ORDER BY symbol, "interval", open_time
                 separators=(",", ":"),
             ).encode()
         )
-    return digest.hexdigest()
 
 
 def _parse_utc(value: str) -> datetime:

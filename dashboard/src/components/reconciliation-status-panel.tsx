@@ -15,7 +15,8 @@ export function ReconciliationStatusPanel({
   const bounded = evidence.bounded_audit;
   const history = evidence.full_history;
   const progress = history.verified_work_units / history.expected_work_units;
-  const historyComplete = history.completion_state === "complete_unpromoted";
+  const historyComplete = history.completion_state !== "partial";
+  const historyPromoted = history.completion_state === "complete_promoted";
   return (
     <div className="rounded-[1.6rem] border border-primary/20 bg-primary/[0.045] p-5 panel-edge md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -32,8 +33,8 @@ export function ReconciliationStatusPanel({
             Bounded Binance row audit
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            Checksum-verified work-unit evidence. No browser database
-            connection, promotion receipt, or full-history eligibility claim.
+            Checksum-verified work-unit and promotion evidence. No browser
+            database connection or research-eligibility inference.
           </p>
         </div>
         <DatabaseIcon size={20} className="text-primary" />
@@ -56,7 +57,9 @@ export function ReconciliationStatusPanel({
       <div className="mt-5 border-t border-primary/15 pt-4">
         <div className="flex items-center justify-between gap-3 text-[0.68rem] text-muted-foreground">
           <span>
-            {historyComplete
+            {historyPromoted
+              ? "RR-000008 promoted reconciliation active"
+              : historyComplete
               ? "RR-000008 complete audit; unpromoted"
               : "RR-000008 partial audit progress"}
           </span>
@@ -69,7 +72,9 @@ export function ReconciliationStatusPanel({
         <div className="mt-4 flex gap-2 text-xs text-muted-foreground">
           <WarningCircleIcon size={16} className="shrink-0 text-primary" />
           <span>
-            {historyComplete
+            {historyPromoted
+              ? "Promotion establishes corrected reconciliation provenance; a research snapshot remains separately gated."
+              : historyComplete
               ? "Audit completion does not imply promotion or research eligibility."
               : "Partial evidence is not promotable."}{" "}
             Promoted verified intervals reported:{" "}
@@ -119,7 +124,9 @@ export function ReconciliationStatusPanel({
             </p>
             {run.run_id === "RR-000008" ? (
               <p className="mt-3 text-[0.65rem] text-muted-foreground">
-                {historyComplete
+                {historyPromoted
+                  ? "Promoted receipt verified; snapshot not frozen"
+                  : historyComplete
                   ? "Complete audit, still unpromoted"
                   : "Partial, nonpromotable audit"}{" "}
                 snapshot published at {generatedAt}.

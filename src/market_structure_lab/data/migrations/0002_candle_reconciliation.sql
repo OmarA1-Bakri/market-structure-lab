@@ -136,11 +136,6 @@ WITH active_promotion AS (
     FROM market_data.candle_reconciliation_promotions AS promotion
     ORDER BY promotion.promotion_id DESC
     LIMIT 1
-),
-active_replacements AS (
-    SELECT replacement.*
-    FROM market_data.candle_reconciliation_replacements AS replacement
-    JOIN active_promotion AS promotion ON promotion.run_id = replacement.run_id
 )
 SELECT
     NULL::bigint AS source_row_id,
@@ -160,7 +155,8 @@ SELECT
     replacement.payload_sha256 AS payload_checksum,
     NULL::uuid AS recovery_run_id,
     replacement.run_id AS reconciliation_run_id
-FROM active_replacements AS replacement
+FROM market_data.candle_reconciliation_replacements AS replacement
+JOIN active_promotion AS promotion ON promotion.run_id = replacement.run_id
 WHERE replacement.open_time >= 1514764800000
 UNION ALL
 SELECT
@@ -190,13 +186,14 @@ JOIN market_data.candle_reconciliation_coverage AS coverage
  AND coverage.start_time <= candle.open_time
  AND candle.open_time < coverage.end_time
 WHERE candle.open_time >= 1514764800000
-  AND NOT EXISTS (
-    SELECT 1
-    FROM active_replacements AS replacement
-    WHERE replacement.symbol = candle.symbol
+  AND (
+    SELECT replacement.replacement_id
+    FROM market_data.candle_reconciliation_replacements AS replacement
+    WHERE replacement.run_id = promotion.run_id
+      AND replacement.symbol = candle.symbol
       AND replacement."interval" = candle."interval"
       AND replacement.open_time = candle.open_time
-);
+  ) IS NULL;
 
 COMMENT ON VIEW market_data.candles_reconciled IS
     'Explicitly promoted Binance-verified corrections/fills plus verified dump rows from 2018-01-01.';

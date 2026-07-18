@@ -44,6 +44,13 @@ from market_structure_lab.data.reconciliation.repository import (
     VerifiedCoverageInterval,
     validate_reconciliation_coverage,
 )
+from market_structure_lab.data.reconciliation.receipts import (
+    PROMOTION_RECEIPT_SCHEMA_VERSION,
+    ReconciliationPromotionReceipt,
+    promotion_receipt_path,
+    read_reconciliation_promotion_receipt,
+    write_reconciliation_promotion_receipt,
+)
 
 __all__ = [
     "ReconciliationClass",
@@ -51,6 +58,7 @@ __all__ = [
     "ReconciledCandle",
     "ReconciliationRecord",
     "ReconciliationPromotion",
+    "ReconciliationPromotionReceipt",
     "ReconciliationPromotionPreflight",
     "ReconciliationReplacement",
     "ReconciliationRepository",
@@ -68,12 +76,16 @@ __all__ = [
     "iter_dump_rows",
     "monthly_work_units",
     "publish_work_unit",
+    "promotion_receipt_path",
+    "PROMOTION_RECEIPT_SCHEMA_VERSION",
+    "read_reconciliation_promotion_receipt",
     "read_work_unit_manifest",
     "sha256_file",
     "read_reconciliation_run",
     "reconcile_ordered_candles",
     "reconcile_ordered_rows",
     "write_reconciliation_run",
+    "write_reconciliation_promotion_receipt",
     "verify_reconciliation_run_publication",
     "verify_work_unit_publication",
 ]

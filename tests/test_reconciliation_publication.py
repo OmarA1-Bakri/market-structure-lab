@@ -5,6 +5,7 @@ import hashlib
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -23,6 +24,7 @@ from market_structure_lab.data.reconciliation import (
     verify_reconciliation_run_publication,
     verify_work_unit_publication,
 )
+from market_structure_lab.data.reconciliation import repository as reconciliation_repository
 from market_structure_lab.data.reconciliation.repository import ReconciliationRepository
 
 
@@ -127,6 +129,112 @@ class _RegisterConnection:
         if "SELECT manifest_sha256" in sql:
             return _ScalarResult(self.manifest_sha256)
         return _ScalarResult(None)
+
+
+class _CanonicalHashConnection:
+    def __init__(self, rows_by_query: dict[tuple[str, str, str], list[object]]) -> None:
+        self.rows_by_query = rows_by_query
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def execute(self, statement: object, parameters: object = None) -> list[object]:
+        sql = str(statement)
+        bound = dict(parameters or {})
+        self.calls.append((sql, bound))
+        if "set_config" in sql:
+            return []
+        branch = "dump" if "FROM market_data.candles AS candle" in sql else "replacement"
+        return self.rows_by_query[(str(bound["symbol"]), str(bound["timeframe"]), branch)]
+
+
+def _canonical_row(symbol: str, open_time: int, origin: str) -> object:
+    mapping = {
+        "symbol": symbol,
+        "interval": "1m",
+        "open_time": open_time,
+        "open": "1",
+        "high": "2",
+        "low": "0.5",
+        "close": "1.5",
+        "volume": "10",
+        "quote_volume": "15",
+        "trades": "2",
+        "origin": origin,
+    }
+    return SimpleNamespace(_mapping=mapping, open_time=open_time)
+
+
+def test_canonical_hash_streams_each_frozen_market_without_a_global_sort() -> None:
+    btc = ReconciliationWorkUnit.create("BTCUSDT", "1m", 0, 180_000)
+    eth = ReconciliationWorkUnit.create("ETHUSDT", "1m", 0, 180_000)
+    run = freeze_reconciliation_run(
+        run_id="RR-000001",
+        cutoff=datetime(2026, 7, 16, tzinfo=UTC),
+        dump_sha256=_sha("a"),
+        source_row_count=6,
+        mapping_version="mapping-v1",
+        candidate_venue="binance",
+        market_type="spot",
+        source_revision="binance-public-data-v1",
+        algorithm_version="row-reconciliation-v1",
+        code_commit="aedd375",
+        uv_lock_sha256=_sha("b"),
+        envelopes=(
+            TradingEnvelope("BTCUSDT", "1m", 0, 180_000),
+            TradingEnvelope("ETHUSDT", "1m", 0, 180_000),
+        ),
+        work_units=(btc, eth),
+    )
+    rows_by_query = {
+        ("BTCUSDT", "1m", "replacement"): [_canonical_row("BTCUSDT", 60_000, "binance_correction")],
+        ("BTCUSDT", "1m", "dump"): [
+            _canonical_row("BTCUSDT", 0, "dump_verified_match"),
+            _canonical_row("BTCUSDT", 120_000, "dump_verified_match"),
+        ],
+        ("ETHUSDT", "1m", "replacement"): [_canonical_row("ETHUSDT", 120_000, "binance_fill")],
+        ("ETHUSDT", "1m", "dump"): [
+            _canonical_row("ETHUSDT", 0, "dump_verified_match"),
+            _canonical_row("ETHUSDT", 60_000, "dump_verified_match"),
+        ],
+    }
+    connection = _CanonicalHashConnection(rows_by_query)
+    expected = hashlib.sha256()
+    for symbol, open_time, origin in (
+        ("BTCUSDT", 0, "dump_verified_match"),
+        ("BTCUSDT", 60_000, "binance_correction"),
+        ("BTCUSDT", 120_000, "dump_verified_match"),
+        ("ETHUSDT", 0, "dump_verified_match"),
+        ("ETHUSDT", 60_000, "dump_verified_match"),
+        ("ETHUSDT", 120_000, "binance_fill"),
+    ):
+        expected.update(
+            json.dumps(
+                _canonical_row(symbol, open_time, origin)._mapping,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+
+    actual = reconciliation_repository._run_canonical_hash(  # noqa: SLF001
+        connection,  # type: ignore[arg-type]
+        run,
+    )
+
+    assert actual == expected.hexdigest()
+    optimizer_sql, optimizer_parameters = connection.calls[0]
+    assert optimizer_parameters == {}
+    assert "set_config('enable_seqscan', 'off', true)" in optimizer_sql
+    assert "set_config('enable_bitmapscan', 'off', true)" in optimizer_sql
+    assert "set_config('max_parallel_workers_per_gather', '0', true)" in optimizer_sql
+    canonical_calls = connection.calls[1:]
+    assert len(canonical_calls) == 4
+    assert [call[1] for call in canonical_calls] == [
+        {"run_id": run.run_id, "symbol": "BTCUSDT", "timeframe": "1m"},
+        {"run_id": run.run_id, "symbol": "BTCUSDT", "timeframe": "1m"},
+        {"run_id": run.run_id, "symbol": "ETHUSDT", "timeframe": "1m"},
+        {"run_id": run.run_id, "symbol": "ETHUSDT", "timeframe": "1m"},
+    ]
+    assert all(":symbol" in sql and ":timeframe" in sql for sql, _ in canonical_calls)
+    assert all('ORDER BY symbol, "interval", open_time' not in sql for sql, _ in canonical_calls)
 
 
 def test_repository_waits_for_the_global_publication_lock() -> None:

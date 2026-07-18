@@ -55,8 +55,13 @@ export interface ReconciliationEvidence {
   differing_field_counts: Record<string, number>;
   scope_label: string;
   completion_state: string;
-  promotion_receipt_available: false;
-  promoted_verified_intervals: 0;
+  promotion_receipt_available: boolean;
+  promoted_verified_intervals: number;
+  promoted_at?: string;
+  promotion_receipt_content_sha256?: string;
+  promotion_coverage_logical_sha256?: string;
+  replacement_logical_sha256?: string;
+  canonical_logical_sha256?: string;
   research_eligibility: string;
 }
 
@@ -144,7 +149,7 @@ export interface LabEvidence {
   };
   phase_gate: {
     active_phase: string;
-    status: "remediation_in_progress";
+    status: "remediation_in_progress" | "complete_awaiting_phase_approval";
     next_required_evidence: string;
   };
 }
@@ -194,6 +199,14 @@ function isCanonicalUtcTimestamp(value: unknown): value is string {
   );
 }
 
+function isUtcTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value) &&
+    !Number.isNaN(new Date(value).valueOf())
+  );
+}
+
 function hasReplayMetrics(value: unknown): value is Record<string, number> {
   return (
     isObject(value) &&
@@ -240,6 +253,17 @@ function isSymbol(value: unknown): value is SymbolHealth {
 
 function isReconciliation(value: unknown): value is ReconciliationEvidence {
   if (!isObject(value)) return false;
+  const validPromotion =
+    (value.promotion_receipt_available === false &&
+      value.promoted_verified_intervals === 0) ||
+    (value.promotion_receipt_available === true &&
+      isNonNegative(value.promoted_verified_intervals) &&
+      value.promoted_verified_intervals > 0 &&
+      isUtcTimestamp(value.promoted_at) &&
+      isSha256(value.promotion_receipt_content_sha256) &&
+      isSha256(value.promotion_coverage_logical_sha256) &&
+      isSha256(value.replacement_logical_sha256) &&
+      isSha256(value.canonical_logical_sha256));
   return (
     typeof value.run_id === "string" &&
     typeof value.cutoff === "string" &&
@@ -257,8 +281,7 @@ function isReconciliation(value: unknown): value is ReconciliationEvidence {
     value.expected_work_units >= value.verified_work_units &&
     typeof value.scope_label === "string" &&
     typeof value.completion_state === "string" &&
-    value.promotion_receipt_available === false &&
-    value.promoted_verified_intervals === 0 &&
+    validPromotion &&
     typeof value.research_eligibility === "string"
   );
 }
@@ -417,7 +440,15 @@ export function isLabEvidence(value: unknown): value is LabEvidence {
         reconciliation.full_history.verified_work_units ===
           reconciliation.full_history.expected_work_units &&
         reconciliation.full_history.research_eligibility ===
-          "blocked_pending_deliberate_promotion_receipt")) &&
+          "blocked_pending_deliberate_promotion_receipt") ||
+      (reconciliation.full_history.scope_label ===
+        "full-history reconciliation promoted" &&
+        reconciliation.full_history.completion_state ===
+          "complete_promoted" &&
+        reconciliation.full_history.verified_work_units ===
+          reconciliation.full_history.expected_work_units &&
+        reconciliation.full_history.research_eligibility ===
+          "reconciliation_provenance_established_snapshot_not_frozen")) &&
     isReplay(replay) &&
     isFeatureRegistry(registry) &&
     isObject(accuracy) &&
@@ -433,8 +464,10 @@ export function isLabEvidence(value: unknown): value is LabEvidence {
     typeof accuracy.scope === "string" &&
     typeof accuracy.claim === "string" &&
     isObject(phase) &&
-    phase.status === "remediation_in_progress" &&
-    phase.active_phase === "Phase 0: trustworthy foundation" &&
+    ((phase.status === "remediation_in_progress" &&
+      phase.active_phase === "Phase 0: trustworthy foundation") ||
+      (phase.status === "complete_awaiting_phase_approval" &&
+        phase.active_phase === "Phase 0: complete")) &&
     typeof phase.next_required_evidence === "string" &&
     phase.next_required_evidence.length > 0
   );

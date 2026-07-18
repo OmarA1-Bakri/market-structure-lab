@@ -25,6 +25,10 @@ const timestamp = (value) =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) &&
   !Number.isNaN(new Date(value).valueOf()) &&
   new Date(value).toISOString().replace(".000Z", "Z") === value;
+const utcTimestamp = (value) =>
+  typeof value === "string" &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value) &&
+  !Number.isNaN(new Date(value).valueOf());
 const symbolStatuses = new Set([
   "up_to_date",
   "recovered",
@@ -105,6 +109,17 @@ if (
 const reconciliation = evidence.reconciliation;
 for (const key of ["bounded_audit", "full_history"]) {
   const run = reconciliation?.[key];
+  const validPromotion =
+    (run?.promotion_receipt_available === false &&
+      run?.promoted_verified_intervals === 0) ||
+    (run?.promotion_receipt_available === true &&
+      count(run?.promoted_verified_intervals) &&
+      run.promoted_verified_intervals > 0 &&
+      utcTimestamp(run?.promoted_at) &&
+      sha(run?.promotion_receipt_content_sha256) &&
+      sha(run?.promotion_coverage_logical_sha256) &&
+      sha(run?.replacement_logical_sha256) &&
+      sha(run?.canonical_logical_sha256));
   if (
     !object(run) ||
     typeof run.run_id !== "string" ||
@@ -123,8 +138,7 @@ for (const key of ["bounded_audit", "full_history"]) {
     !counts(run.differing_field_counts) ||
     typeof run.scope_label !== "string" ||
     typeof run.completion_state !== "string" ||
-    run.promotion_receipt_available !== false ||
-    run.promoted_verified_intervals !== 0 ||
+    !validPromotion ||
     typeof run.research_eligibility !== "string"
   )
     fail(`reconciliation ${key}`);
@@ -148,7 +162,14 @@ const completeUnpromoted =
   history.scope_label === "full-history audit complete; unpromoted" &&
   history.research_eligibility ===
     "blocked_pending_deliberate_promotion_receipt";
-if (!partialHistory && !completeUnpromoted) fail("full-history semantics");
+const completePromoted =
+  history.completion_state === "complete_promoted" &&
+  history.verified_work_units === history.expected_work_units &&
+  history.scope_label === "full-history reconciliation promoted" &&
+  history.research_eligibility ===
+    "reconciliation_provenance_established_snapshot_not_frozen";
+if (!partialHistory && !completeUnpromoted && !completePromoted)
+  fail("full-history semantics");
 const accuracy = evidence.experiment_accuracy;
 const trials = accuracy?.verified_real_trial_artifacts;
 const modeKeys = ["discovery", "hypothesis", "validation", "strategy"];
@@ -296,8 +317,12 @@ for (const item of registry.definitions)
 const phase = evidence.phase_gate;
 if (
   !object(phase) ||
-  phase.status !== "remediation_in_progress" ||
-  phase.active_phase !== "Phase 0: trustworthy foundation" ||
+  !(
+    (phase.status === "remediation_in_progress" &&
+      phase.active_phase === "Phase 0: trustworthy foundation") ||
+    (phase.status === "complete_awaiting_phase_approval" &&
+      phase.active_phase === "Phase 0: complete")
+  ) ||
   typeof phase.next_required_evidence !== "string" ||
   phase.next_required_evidence.length === 0
 )

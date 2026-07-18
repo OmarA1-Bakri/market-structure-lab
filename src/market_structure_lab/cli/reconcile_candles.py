@@ -30,6 +30,7 @@ from market_structure_lab.data.reconciliation import (
     read_reconciliation_run,
     validate_reconciliation_coverage,
     verify_reconciliation_run_publication,
+    write_reconciliation_promotion_receipt,
     write_reconciliation_run,
 )
 from market_structure_lab.data.sources.base import SourceError
@@ -313,12 +314,20 @@ def _promote(args: argparse.Namespace) -> int:
             )
     finally:
         engine.dispose()
+    receipt = write_reconciliation_promotion_receipt(
+        args.output_root,
+        run,
+        promotion,
+        coverage,
+    )
     print(
         _json(
             {
                 "applied": True,
                 "canonical_logical_sha256": promotion.canonical_logical_sha256,
                 "promoted_at": promotion.promoted_at,
+                "promotion_receipt_content_sha256": receipt.content_sha256,
+                "promotion_receipt_path": receipt.path.as_posix(),
                 "replacement_logical_sha256": promotion.replacement_logical_sha256,
                 "run_id": promotion.run_id,
             }

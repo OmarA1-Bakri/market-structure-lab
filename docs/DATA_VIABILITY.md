@@ -263,6 +263,32 @@ with missed-trigger catch-up and overlapping instances disabled. Retryable failu
 pending frozen plan; terminal coverage limitations are archived as alerts so the next daily cutoff
 can advance.
 
+## RR-000008 full-history reconciliation publication
+
+The frozen RR-000008 ledger is terminal across all `1,583` work units and audited `68,474,492`
+candidate keys. After an independently frozen read-only preflight and explicit approval, the run
+was atomically promoted at `2026-07-18T16:47:13.507011Z`. The immutable promotion receipt is
+`data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json`, content SHA-256
+`19315f0c52c6d3e9a91a5127921ce349fe50e60944c0ccc1a209b5637b3b9cf6`. It binds:
+
+- run-manifest SHA-256 `1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629`;
+- replacement logical SHA-256
+  `2f45102a45b261b99c38484e0cf10df71121237320deb27c11877de2aa1b9182`;
+- canonical logical SHA-256
+  `8dd1af045a92d53b7a8e898764e9f9a90bc456373c16b7c9ac2670ee2c47608c`;
+- `285` non-overlapping verified-coverage intervals.
+
+The active reconciled view contains `67,632,983` unique canonical rows: `35,738,056` verified dump
+matches, `31,884,870` Binance fills, and `10,057` Binance corrections. All replacements lie inside
+verified coverage. The remaining `841,509` source-unavailable minutes are represented by `261`
+explicit residual intervals and remain absent; no interpolation or fabricated candle was admitted.
+An exact promotion replay retained one promotion row, the original timestamp and hashes, the same
+285 coverage rows, and byte-identical receipt content.
+
+This publication makes RR-000008 an eligible provenance source for a newly frozen research
+snapshot. It does not make an older snapshot eligible, validate a behaviour, or authorize a real
+discovery or outcome-evaluation run.
+
 ## Phase 4 discovery viability boundary
 
 Phase 4 consumes only immutable Phase 3 feature rows whose dataset, auction configuration, profile,

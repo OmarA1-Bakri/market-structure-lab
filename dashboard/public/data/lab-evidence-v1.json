@@ -701,11 +701,11 @@
       }
     ]
   },
-  "generated_at": "2026-07-18T12:54:39Z",
+  "generated_at": "2026-07-18T18:59:48Z",
   "phase_gate": {
-    "active_phase": "Phase 0: trustworthy foundation",
-    "next_required_evidence": "obtain explicit promotion approval and publish an immutable promotion receipt",
-    "status": "remediation_in_progress"
+    "active_phase": "Phase 0: complete",
+    "next_required_evidence": "obtain explicit approval before Phase 4 provenance and discovery hardening",
+    "status": "complete_awaiting_phase_approval"
   },
   "reconciliation": {
     "bounded_audit": {
@@ -745,13 +745,14 @@
     "full_history": {
       "algorithm_version": "row-reconciliation-v3",
       "audited_keys": 68474492,
+      "canonical_logical_sha256": "8dd1af045a92d53b7a8e898764e9f9a90bc456373c16b7c9ac2670ee2c47608c",
       "classification_counts": {
         "binance_correction": 10057,
         "binance_fill": 31884870,
         "exact_match": 35738056,
         "source_unavailable": 841509
       },
-      "completion_state": "complete_unpromoted",
+      "completion_state": "complete_promoted",
       "cutoff": "2026-07-16T11:23:00Z",
       "differing_field_counts": {
         "close": 8827,
@@ -764,13 +765,17 @@
       },
       "expected_work_units": 1583,
       "mapping_version": "market-data-candles-v1",
-      "promoted_verified_intervals": 0,
-      "promotion_receipt_available": false,
+      "promoted_at": "2026-07-18T16:47:13.507011Z",
+      "promoted_verified_intervals": 285,
+      "promotion_coverage_logical_sha256": "e4b427b3589402809e519afe72f3ff47fee8912906b4fe606eb4201ad5334b3f",
+      "promotion_receipt_available": true,
+      "promotion_receipt_content_sha256": "19315f0c52c6d3e9a91a5127921ce349fe50e60944c0ccc1a209b5637b3b9cf6",
+      "replacement_logical_sha256": "2f45102a45b261b99c38484e0cf10df71121237320deb27c11877de2aa1b9182",
       "replacement_rows": 31894927,
-      "research_eligibility": "blocked_pending_deliberate_promotion_receipt",
+      "research_eligibility": "reconciliation_provenance_established_snapshot_not_frozen",
       "run_id": "RR-000008",
       "run_manifest_sha256": "1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629",
-      "scope_label": "full-history audit complete; unpromoted",
+      "scope_label": "full-history reconciliation promoted",
       "verified_manifest_set_sha256": "6f6fbae74905538e938e715093d69b9f5bf1c8a64a9e73935af6e62bdf0db384",
       "verified_work_units": 1583,
       "work_unit_status_counts": {

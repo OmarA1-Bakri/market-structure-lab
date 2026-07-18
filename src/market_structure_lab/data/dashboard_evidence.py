@@ -13,6 +13,8 @@ from market_structure_lab.data.freshness_sync import read_latest_freshness_artif
 from market_structure_lab.data.reconciliation import (
     ReconciliationRunManifest,
     WorkUnitManifest,
+    promotion_receipt_path,
+    read_reconciliation_promotion_receipt,
     read_reconciliation_run,
     verify_work_unit_publication,
 )
@@ -38,6 +40,10 @@ def generate_lab_evidence(
     bounded = _reconciliation_snapshot(reconciliation_root, bounded_run, require_complete=True)
     history = _reconciliation_snapshot(reconciliation_root, history_run, require_complete=False)
     history_complete = history["verified_work_units"] == history["expected_work_units"]
+    history_promotion = _reconciliation_promotion_snapshot(reconciliation_root, history_run)
+    history_promoted = history_promotion is not None
+    if history_promoted and not history_complete:
+        raise ValueError("promotion receipt exists for incomplete reconciliation evidence")
     replay = _phase4_fixture_evidence(repository_root)
     registry = builtin_feature_registry()
     trials = read_trial_ledger(trial_root)
@@ -100,16 +106,31 @@ def generate_lab_evidence(
             },
             "full_history": {
                 **history,
+                **(history_promotion or {}),
                 "scope_label": (
-                    "full-history audit complete; unpromoted"
+                    "full-history reconciliation promoted"
+                    if history_promoted
+                    else "full-history audit complete; unpromoted"
                     if history_complete
                     else "partial full-history audit progress"
                 ),
-                "completion_state": "complete_unpromoted" if history_complete else "partial",
-                "promotion_receipt_available": False,
-                "promoted_verified_intervals": 0,
+                "completion_state": (
+                    "complete_promoted"
+                    if history_promoted
+                    else "complete_unpromoted"
+                    if history_complete
+                    else "partial"
+                ),
+                "promotion_receipt_available": history_promoted,
+                "promoted_verified_intervals": (
+                    int(history_promotion["promoted_verified_intervals"])
+                    if history_promotion
+                    else 0
+                ),
                 "research_eligibility": (
-                    "blocked_pending_deliberate_promotion_receipt"
+                    "reconciliation_provenance_established_snapshot_not_frozen"
+                    if history_promoted
+                    else "blocked_pending_deliberate_promotion_receipt"
                     if history_complete
                     else "blocked_until_complete_and_deliberately_promoted"
                 ),
@@ -143,10 +164,18 @@ def generate_lab_evidence(
             ),
         },
         "phase_gate": {
-            "active_phase": "Phase 0: trustworthy foundation",
-            "status": "remediation_in_progress",
+            "active_phase": "Phase 0: complete"
+            if history_promoted
+            else "Phase 0: trustworthy foundation",
+            "status": (
+                "complete_awaiting_phase_approval"
+                if history_promoted
+                else "remediation_in_progress"
+            ),
             "next_required_evidence": (
-                "obtain explicit promotion approval and publish an immutable promotion receipt"
+                "obtain explicit approval before Phase 4 provenance and discovery hardening"
+                if history_promoted
+                else "obtain explicit promotion approval and publish an immutable promotion receipt"
                 if history_complete
                 else "complete RR-000008 and obtain explicit promotion approval"
             ),
@@ -227,6 +256,26 @@ def _reconciliation_snapshot(
         "work_unit_status_counts": dict(sorted(statuses.items())),
         "classification_counts": dict(sorted(classifications.items())),
         "differing_field_counts": dict(sorted(differing_fields.items())),
+    }
+
+
+def _reconciliation_promotion_snapshot(
+    output_root: Path,
+    run: ReconciliationRunManifest,
+) -> dict[str, Any] | None:
+    path = promotion_receipt_path(output_root, run.run_id)
+    if not path.exists():
+        return None
+    receipt = read_reconciliation_promotion_receipt(path)
+    if receipt.run_id != run.run_id or receipt.manifest_sha256 != run.manifest_sha256:
+        raise ValueError("promotion receipt identity does not match the frozen run")
+    return {
+        "promoted_at": receipt.promoted_at,
+        "promoted_verified_intervals": receipt.coverage_interval_count,
+        "promotion_receipt_content_sha256": receipt.content_sha256,
+        "promotion_coverage_logical_sha256": receipt.coverage_logical_sha256,
+        "replacement_logical_sha256": receipt.replacement_logical_sha256,
+        "canonical_logical_sha256": receipt.canonical_logical_sha256,
     }
 
 

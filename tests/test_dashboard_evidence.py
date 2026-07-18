@@ -23,13 +23,16 @@ from market_structure_lab.data.freshness_sync import (
 from market_structure_lab.data.gaps import GapRange, ProvenanceState, SourceIdentity
 from market_structure_lab.data.reconciliation import (
     ReconciliationClass,
+    ReconciliationPromotion,
     ReconciliationRecord,
     ReconciliationWorkUnit,
     SourceArtifactIdentity,
     TradingEnvelope,
+    VerifiedCoverageInterval,
     freeze_reconciliation_run,
     publish_work_unit,
     read_reconciliation_run,
+    write_reconciliation_promotion_receipt,
     write_reconciliation_run,
 )
 from market_structure_lab.experiments import (
@@ -149,6 +152,28 @@ def _repository(tmp_path: Path) -> Path:
     destination.parent.mkdir(parents=True)
     shutil.copytree(FIXTURES, destination)
     return tmp_path
+
+
+def _complete_full_history(root: Path):
+    output = root / "data" / "exports" / "reconciliation"
+    run = read_reconciliation_run(output / "RR-000008.run.json")
+    unit = next(item for item in run.work_units if item.symbol == "ETHUSDT")
+    artifact = SourceArtifactIdentity(
+        location="fixture.zip",
+        payload_sha256=_sha("c"),
+        published_sha256=_sha("c"),
+        source_revision="fixture-v1",
+        retrieved_at="2026-07-17T00:00:00Z",
+    )
+    publish_work_unit(
+        _record(unit),
+        output_root=output,
+        run=run,
+        work_unit=unit,
+        source_artifacts=(artifact,),
+        max_rows_per_part=1,
+    )
+    return output, run
 
 
 def _trial_config(run_id: str, mode: ExperimentMode) -> ExperimentConfig:
@@ -305,24 +330,7 @@ def test_generator_rejects_missing_publication_and_fixture_tampering(tmp_path: P
 
 def test_complete_full_history_remains_unpromoted_and_research_blocked(tmp_path: Path) -> None:
     root = _repository(tmp_path)
-    output = root / "data" / "exports" / "reconciliation"
-    run = read_reconciliation_run(output / "RR-000008.run.json")
-    unit = next(item for item in run.work_units if item.symbol == "ETHUSDT")
-    artifact = SourceArtifactIdentity(
-        location="fixture.zip",
-        payload_sha256=_sha("c"),
-        published_sha256=_sha("c"),
-        source_revision="fixture-v1",
-        retrieved_at="2026-07-17T00:00:00Z",
-    )
-    publish_work_unit(
-        _record(unit),
-        output_root=output,
-        run=run,
-        work_unit=unit,
-        source_artifacts=(artifact,),
-        max_rows_per_part=1,
-    )
+    _complete_full_history(root)
 
     evidence = generate_lab_evidence(root, generated_at="2026-07-17T03:00:00Z")
     history = evidence["reconciliation"]["full_history"]
@@ -334,6 +342,49 @@ def test_complete_full_history_remains_unpromoted_and_research_blocked(tmp_path:
     assert evidence["phase_gate"]["next_required_evidence"] == (
         "obtain explicit promotion approval and publish an immutable promotion receipt"
     )
+
+
+def test_promoted_full_history_uses_checksum_verified_receipt_without_claiming_snapshot(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path)
+    output, run = _complete_full_history(root)
+    coverage = tuple(
+        VerifiedCoverageInterval(unit.symbol, unit.timeframe, unit.start_ms, unit.end_ms)
+        for unit in run.work_units
+    )
+    write_reconciliation_promotion_receipt(
+        output,
+        run,
+        ReconciliationPromotion(
+            run_id=run.run_id,
+            manifest_sha256=run.manifest_sha256,
+            replacement_logical_sha256=_sha("7"),
+            canonical_logical_sha256=_sha("8"),
+            promoted_at="2026-07-18T13:45:00Z",
+        ),
+        coverage,
+    )
+
+    evidence = generate_lab_evidence(root, generated_at="2026-07-18T14:00:00Z")
+    history = evidence["reconciliation"]["full_history"]
+
+    assert history["completion_state"] == "complete_promoted"
+    assert history["scope_label"] == "full-history reconciliation promoted"
+    assert history["promotion_receipt_available"] is True
+    assert history["promoted_verified_intervals"] == 2
+    assert history["replacement_logical_sha256"] == _sha("7")
+    assert history["canonical_logical_sha256"] == _sha("8")
+    assert history["research_eligibility"] == (
+        "reconciliation_provenance_established_snapshot_not_frozen"
+    )
+    assert evidence["phase_gate"] == {
+        "active_phase": "Phase 0: complete",
+        "status": "complete_awaiting_phase_approval",
+        "next_required_evidence": (
+            "obtain explicit approval before Phase 4 provenance and discovery hardening"
+        ),
+    }
 
 
 @pytest.mark.parametrize(

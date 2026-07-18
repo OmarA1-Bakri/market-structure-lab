@@ -54,6 +54,7 @@ export function OverviewPage({
   )
     .map(([mode, count]) => `${mode} ${count}`)
     .join(", ");
+  const historyPromoted = history.completion_state === "complete_promoted";
 
   return (
     <motion.div
@@ -74,7 +75,9 @@ export function OverviewPage({
               variant="outline"
               className="rounded-md border-primary/25 bg-primary/8 font-mono text-[0.65rem] text-primary"
             >
-              PHASE 0 REMEDIATION IN PROGRESS
+              {historyPromoted
+                ? "PHASE 0 COMPLETE · NEXT PHASE GATED"
+                : "PHASE 0 REMEDIATION IN PROGRESS"}
             </Badge>
             <span className="font-mono text-[0.65rem] text-muted-foreground">
               evidence cutoff {freshness.evidence_timestamp}
@@ -86,7 +89,9 @@ export function OverviewPage({
           <p className="mt-5 max-w-2xl text-base leading-relaxed text-muted-foreground md:text-lg">
             {history.completion_state === "partial"
               ? "Data recovery and full-history reconciliation remain incomplete."
-              : "Full-history reconciliation is complete but unpromoted."} {accuracy.claim}
+              : historyPromoted
+                ? "Full-history reconciliation is promoted; no research snapshot has been frozen."
+                : "Full-history reconciliation is complete but unpromoted."} {accuracy.claim}
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
             <Button
@@ -145,12 +150,15 @@ export function OverviewPage({
                 <p className="text-sm font-medium">
                   {history.completion_state === "partial"
                     ? "RR-000008 is partial"
-                    : "RR-000008 audit is complete but unpromoted"}
+                    : historyPromoted
+                      ? "RR-000008 promotion receipt verified"
+                      : "RR-000008 audit is complete but unpromoted"}
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   {history.verified_work_units} of {history.expected_work_units}{" "}
-                  frozen work units verify in this publication snapshot. No
-                  promotion receipt is supplied.
+                  frozen work units verify in this publication snapshot. {historyPromoted
+                    ? `${history.promoted_verified_intervals} promoted intervals are receipt-bound; snapshot publication remains gated.`
+                    : "No promotion receipt is supplied."}
                 </p>
               </div>
             </div>

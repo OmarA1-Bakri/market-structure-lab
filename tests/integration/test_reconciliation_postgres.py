@@ -394,6 +394,69 @@ def test_promoted_view_uses_verified_dump_correction_and_fill_only(
     assert len(promotion.canonical_logical_sha256) == 64
 
 
+def test_promoted_view_pushes_bounded_market_filters_into_replacement_indexes(
+    reconciliation_postgres: Engine,
+    tmp_path: Path,
+) -> None:
+    run, manifest, replacements = _ledger(tmp_path)
+    with reconciliation_postgres.begin() as connection:
+        repository = ReconciliationRepository(connection)
+        repository.register_run(run)
+        repository.publish_work_unit(manifest, replacements)
+        replacement_digest = hashlib.sha256()
+        for replacement in replacements:
+            replacement_digest.update(
+                json.dumps(
+                    {
+                        "binance_row_sha256": replacement.binance_row_sha256,
+                        "open_time_ms": replacement.open_time_ms,
+                        "symbol": replacement.symbol,
+                        "timeframe": replacement.timeframe,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            )
+        repository.promote(
+            run,
+            (manifest,),
+            (
+                VerifiedCoverageInterval(
+                    "BTCUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS + 180_000
+                ),
+            ),
+            candidate_replacement_logical_sha256=replacement_digest.hexdigest(),
+        )
+        connection.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = connection.execute(
+            text(
+                "EXPLAIN (FORMAT JSON, COSTS OFF) "
+                'SELECT symbol, "interval", open_time, origin '
+                "FROM market_data.candles_reconciled "
+                "WHERE symbol='BTCUSDT' AND \"interval\"='1m' "
+                "AND open_time >= :start_ms AND open_time < :end_ms "
+                "ORDER BY open_time"
+            ),
+            {"start_ms": BASE_OPEN_TIME_MS, "end_ms": BASE_OPEN_TIME_MS + 180_000},
+        ).scalar_one()[0]["Plan"]
+
+    nodes = [plan]
+    for node in nodes:
+        nodes.extend(node.get("Plans", ()))
+    assert not any(node.get("CTE Name") == "active_replacements" for node in nodes)
+    replacement_index_conditions = [
+        str(node.get("Index Cond", ""))
+        for node in nodes
+        if node.get("Relation Name") == "candle_reconciliation_replacements"
+    ]
+    assert replacement_index_conditions
+    assert all(
+        "symbol" in condition and "open_time" in condition
+        for condition in replacement_index_conditions
+    ), replacement_index_conditions
+    assert all(node["Node Type"] not in {"Gather", "Gather Merge"} for node in nodes)
+
+
 def test_reconciliation_tables_reject_mutation(
     reconciliation_postgres: Engine,
     tmp_path: Path,

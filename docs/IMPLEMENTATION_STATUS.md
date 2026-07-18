@@ -331,7 +331,7 @@ independent provenance-chain verification, cluster and motif hardening, boundary
 transition evidence, leakage controls, and explicit phase approval. Phase 5 remains unstarted and
 separately gated.
 
-## RR-000008 full-history reconciliation: complete and unpromoted
+## RR-000008 full-history reconciliation: complete and promoted
 
 The frozen `row-reconciliation-v3` run is terminal across all `1,583` planned monthly work units.
 Filesystem manifests and the PostgreSQL ledger agree on the complete work-unit ID set, whose
@@ -357,18 +357,29 @@ separate verifier correction now treats an exact match according to comparable c
 both row hashes must exist and no comparable fields may differ, but the hashes may differ when the
 dump legitimately lacks optional fields.
 
-The bounded read-only promotion preflight passed and did not apply changes. Its local evidence
+The bounded read-only promotion preflight passed before the approved apply. Its local evidence
 artifact SHA-256 is `e9e634353e4a2c605561be9d14c28e448d8c5ebcfc52776dbc4bd927c0a5eb0a`.
 It verified the `31,894,927` replacement rows at logical SHA-256
 `2f45102a45b261b99c38484e0cf10df71121237320deb27c11877de2aa1b9182`, prepared `285`
 eligible coverage intervals, and retained `261` explicit residual-unavailable intervals containing
-`841,509` minutes. The active reconciled run remains `RR-000002`; RR-000008 has zero promotion
-rows and no promotion receipt.
+`841,509` minutes.
 
-The dashboard evidence snapshot now labels RR-000008 `complete_unpromoted`, reports all
-`1,583 / 1,583` verified work units, and blocks research eligibility pending a deliberate promotion
-receipt. The repository still has zero real experiment trials, so predictive and cost-adjusted
-accuracy remain `not_estimable`.
+After explicit approval, RR-000008 was atomically promoted at `2026-07-18T16:47:13.507011Z`.
+The active reconciled run is now RR-000008 with exactly one immutable promotion row and `285`
+non-overlapping coverage rows. Its canonical logical SHA-256 is
+`8dd1af045a92d53b7a8e898764e9f9a90bc456373c16b7c9ac2670ee2c47608c`. The checksum-verified
+receipt is `data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json`, content SHA-256
+`19315f0c52c6d3e9a91a5127921ce349fe50e60944c0ccc1a209b5637b3b9cf6`. Exact replay retained the
+same promotion row, timestamp, hashes, coverage, and receipt bytes.
+
+The reconciled view now publishes `35,738,056` verified dump matches, `31,884,870` Binance fills,
+and `10,057` Binance corrections, for `67,632,983` canonical rows. Zero replacements lie outside
+verified coverage. The `841,509` unavailable minutes remain absent and explicit.
+
+The dashboard evidence snapshot labels RR-000008 `complete_promoted`, reports all `1,583 / 1,583`
+verified work units and `285` promoted intervals, and still blocks research execution until a new
+checksum-bound research snapshot is frozen under the next approved phase. The repository has zero
+real experiment trials, so predictive and cost-adjusted accuracy remain `not_estimable`.
 
 Detailed identities, residual coverage, verification commands, and the approval boundary are in
 [`PHASE0_REMEDIATION_EVIDENCE.md`](PHASE0_REMEDIATION_EVIDENCE.md).
