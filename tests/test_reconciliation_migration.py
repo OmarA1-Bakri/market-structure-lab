@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
 import pytest
@@ -76,13 +78,31 @@ def test_reconciliation_migration_leaves_transaction_control_to_the_caller() -> 
     assert "COMMIT;" not in transaction_lines
 
 
+def test_work_unit_lookup_migration_is_idempotent_and_uses_exact_lookup_columns() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "src"
+        / "market_structure_lab"
+        / "data"
+        / "migrations"
+        / "0003_reconciliation_work_unit_lookup.sql"
+    )
+
+    assert migration_path.is_file()
+    normalized = " ".join(migration_path.read_text(encoding="utf-8").split())
+    assert (
+        "CREATE INDEX IF NOT EXISTS candle_reconciliation_replacements_work_unit_lookup_idx "
+        "ON market_data.candle_reconciliation_replacements(run_id, work_unit_id);"
+    ) in normalized
+
+
 def test_reconciliation_schema_preparation_orders_shared_and_numeric_locks_before_ddl() -> None:
     connection = _Connection()
 
     prepare_reconciliation_schema(connection)  # type: ignore[arg-type]
 
-    assert len(connection.statements) == 4
-    shared_lock, migration_lock, recovery_migration, reconciliation_migration = (
+    assert len(connection.statements) == 5
+    shared_lock, migration_lock, recovery_migration, reconciliation_migration, lookup_migration = (
         connection.statements
     )
     assert shared_lock == (
@@ -94,6 +114,10 @@ def test_reconciliation_schema_preparation_orders_shared_and_numeric_locks_befor
     assert (
         "CREATE TABLE IF NOT EXISTS market_data.candle_reconciliation_runs"
         in reconciliation_migration[0]
+    )
+    assert (
+        "CREATE INDEX IF NOT EXISTS "
+        "candle_reconciliation_replacements_work_unit_lookup_idx" in lookup_migration[0]
     )
 
 

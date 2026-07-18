@@ -273,6 +273,56 @@ def test_schema_preparation_fails_closed_while_publication_is_open_then_replays(
         publication_connection.close()
 
 
+def test_work_unit_lookup_supports_replacement_count_without_sequential_scan(
+    reconciliation_postgres: Engine,
+    tmp_path: Path,
+) -> None:
+    run, manifest, replacements = _ledger(tmp_path)
+    with reconciliation_postgres.begin() as connection:
+        prepare_reconciliation_schema(connection)
+        repository = ReconciliationRepository(connection)
+        repository.register_run(run)
+        assert repository.publish_work_unit(manifest, replacements) == 2
+        index_definitions = (
+            connection.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname='market_data' "
+                    "AND tablename='candle_reconciliation_replacements' "
+                    "AND indexname='candle_reconciliation_replacements_work_unit_lookup_idx'"
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        assert index_definitions == [
+            "CREATE INDEX candle_reconciliation_replacements_work_unit_lookup_idx ON "
+            "market_data.candle_reconciliation_replacements USING btree "
+            "(run_id, work_unit_id)"
+        ]
+
+        connection.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = connection.execute(
+            text(
+                "EXPLAIN (FORMAT JSON) "
+                "SELECT count(*) "
+                "FROM market_data.candle_reconciliation_replacements "
+                "WHERE run_id=:run_id AND work_unit_id=:work_unit_id"
+            ),
+            {"run_id": run.run_id, "work_unit_id": manifest.work_unit_id},
+        ).scalar_one()[0]["Plan"]
+
+    nodes = [plan]
+    for node in nodes:
+        nodes.extend(node.get("Plans", ()))
+    assert any(
+        node.get("Index Name") == "candle_reconciliation_replacements_work_unit_lookup_idx"
+        for node in nodes
+    )
+    assert all(node["Node Type"] not in {"Seq Scan", "Gather", "Gather Merge"} for node in nodes)
+
+
 def test_promoted_view_uses_verified_dump_correction_and_fill_only(
     reconciliation_postgres: Engine,
     tmp_path: Path,

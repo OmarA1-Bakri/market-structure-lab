@@ -28,6 +28,14 @@ def candle_reconciliation_migration_sql() -> str:
     )
 
 
+def reconciliation_work_unit_lookup_migration_sql() -> str:
+    return (
+        files("market_structure_lab.data.migrations")
+        .joinpath("0003_reconciliation_work_unit_lookup.sql")
+        .read_text(encoding="utf-8")
+    )
+
+
 def reconciliation_migration_lock_sql() -> str:
     """Serialize idempotent reconciliation DDL across parallel workers."""
     return f"SELECT pg_advisory_xact_lock({RECONCILIATION_MIGRATION_LOCK_ID})"
@@ -44,6 +52,7 @@ def prepare_reconciliation_schema(connection: Connection) -> None:
     _acquire_schema_preparation_locks(connection)
     connection.execute(text(candle_recovery_migration_sql()))
     connection.execute(text(candle_reconciliation_migration_sql()))
+    connection.execute(text(reconciliation_work_unit_lookup_migration_sql()))
 
 
 def _acquire_schema_preparation_locks(connection: Connection) -> None:
@@ -66,4 +75,5 @@ __all__ = [
     "prepare_reconciliation_schema",
     "prepare_recovery_schema",
     "reconciliation_migration_lock_sql",
+    "reconciliation_work_unit_lookup_migration_sql",
 ]
