@@ -5,16 +5,20 @@
 > `superpowers:executing-plans` in an isolated execution session. Every task requires an
 > implementer self-review, specification review, and code-quality review before the next task.
 
-**Goal:** Remove every correctness, provenance, statistical, trial-accounting, dashboard, and
-verification issue recorded in `docs/EXPERIMENT_ACCURACY_OVERVIEW.md`, then establish the evidence
-needed to assess real experiments without fabricating a single accuracy percentage.
+**Goal:** Build and verify an auditable, stage-gated research program that first closes RR-000008
+and Phase 0 without automatic promotion, then—only after each explicit approval—hardens provenance,
+outcome-blind discovery, stability, dependence-aware statistics, semantic leakage controls,
+untouched validation, realistic execution-cost modeling, and trial-program calibration so the lab
+can determine rather than assume whether reproducible market behaviours contain genuine
+cost-adjusted edges.
 
-**Architecture:** Repair the foundation before widening research scope. Complete and promote
-row-level candle reconciliation; bind snapshot, feature-publication, registry, normalizer, code, and
-lock identities into one verified discovery input; replace unsafe transition inference; make trials
-immutable and terminal-status complete; strengthen cluster and motif stability; then run a real
-outcome-blind discovery only after the repository phase gate is explicitly opened. Phase 5 remains a
-separate, later approval boundary.
+**Architecture:** Repair the foundation before widening research scope. Complete and preflight
+row-level candle reconciliation, stopping before promotion; bind snapshot, feature-publication,
+registry, normalizer, code, and lock identities into one verified discovery input; keep unsafe
+transition inference retired; make trials immutable and terminal-status complete; strengthen cluster
+and motif stability; then run real outcome-blind discovery only after the repository phase gate is
+explicitly opened. Candidate outcomes, financial validation, strategy construction, and promotion
+remain separate later approval boundaries.
 
 **Tech stack:** Python 3.13, uv, Polars/Parquet, PostgreSQL 17, SQLAlchemy/Psycopg 3, Pytest, Ruff,
 Mypy, React/Vite/TypeScript for the read-only dashboard.
@@ -26,6 +30,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 - `docs/EXPERIMENT_ACCURACY_OVERVIEW.md`
 - `docs/DATA_VIABILITY.md`
 - `docs/DISCOVERY_MVP.md`
+- `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`
 - `docs/superpowers/specs/2026-07-16-binance-row-reconciliation-design.md`
 
 ---
@@ -50,6 +55,18 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 13. Generate dashboard evidence from checksum-verified latest pointers and use accurate labels.
 14. End each phase with a written evidence report and require explicit approval before the next
     phase.
+15. Treat market-structure definition, behaviour stability, predictive validity, and cost-adjusted
+    edge validity as distinct claims with distinct gates.
+16. Pre-register the complete experiment search space, trial budget, rejection rules, negative
+    controls, and effective-sample/power assumptions before the first real run.
+17. Require naive and simple statistical baselines before any higher-capacity ML model; model
+    complexity must earn its place through untouched incremental evidence.
+18. Measure factor/beta exposure, parameter sensitivity, regime/asset dependence, survivorship and
+    universe-selection risk, and backtest-overfitting risk before any edge claim.
+19. Bind any materially used agent skill/workflow name and source version into the research record;
+    skill guidance is review input, not evidence or authority.
+20. Re-run the skill and workflow sweep before Phase 5 planning and record install/use/rejection
+    decisions without adding dependencies implicitly.
 
 ## Global constraints
 
@@ -65,6 +82,40 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 - Use Lore-protocol commits; one coherent task per commit.
 - Do not regenerate golden hashes merely to make tests green. First prove whether code or fixture is
   wrong, then independently review the selected correction.
+- Do not copy generic financial-skill thresholds into experiment policy. Freeze thresholds only
+  after repo-specific justification, power/effective-sample analysis, and independent review.
+- Do not introduce deep learning, reinforcement learning, AutoML, feature stores, MLflow, W&B,
+  Airflow, Kubeflow, or new modeling dependencies without a measured need and explicit approval.
+- Agent skills may review or propose experiments; deterministic code and frozen promotion rules
+  decide accepted, rejected, inconclusive, or failed status.
+
+## Active progress snapshot — 2026-07-18
+
+| Task | Status | Evidence / blocker |
+|---|---|---|
+| Task 1 — golden replay | Complete | Cross-platform deterministic PCA repair and reviewed fixture migration; 86 discovery/golden tests passed on Linux and Windows. |
+| Task 2 — RR-000008 | In progress | 1,320/1,583 filesystem/database-intersecting terminal units; 263 database units remain; recovery is stopped fail-closed on a missing `(run_id, work_unit_id)` replacement lookup index. |
+| Task 3 — dashboard contract | Code complete, final refresh pending | Source-backed generator and exact wording verified; committed snapshot remains deliberately stale until RR completion. |
+| Task 4 — transition safety | Complete | Raw adjacent binomial/BH research surface removed; boundary-aware dwell/event path is canonical. |
+| Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; verified real-trial count remains `n=0`. |
+| Task 6 — Phase 0 gate | Pending | Requires RR completion, read-only preflight, dashboard refresh, full suite, evidence report, and GitHub checkpoint. |
+| Tasks 7–14 | Approval-gated | Do not execute until the preceding written phase gate is accepted. |
+
+## Skill and workflow routing
+
+The authoritative sweep is `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`.
+
+- **Use now:** `superpowers:systematic-debugging`, `superpowers:test-driven-development`,
+  `data-analytics:analyze-data-quality`, `data-analytics:validate-data`, and
+  `superpowers:verification-before-completion`.
+- **Use for Phase 4 planning/review:** `ralplan`, `quantitative-research`, and `llm-evaluation` only
+  for the non-authoritative AI interpretation layer.
+- **Use for approved empirical calibration:** `autoresearch-goal`, but only after the mission,
+  validator, trial budget, negative controls, and holdout restrictions are frozen.
+- **External candidate for later Phase 5/6 review:**
+  `wshobson/agents@backtesting-frameworks`; do not install or activate it under Phase 0.
+- **Defer/reject:** deep-learning/RL trading, provider-specific market-microstructure, portfolio,
+  execution, and MLOps-platform workflows until their explicit phase and data prerequisites exist.
 
 ## GitHub checkpoint policy
 
@@ -220,7 +271,7 @@ cause and the selected repair; no unexplained fixture hash changes remain.
 
 ---
 
-### Task 2: Complete, verify, and deliberately promote RR-000008
+### Task 2: Complete and verify RR-000008, preflight promotion, then stop
 
 **Files/artifacts:**
 
@@ -229,48 +280,92 @@ cause and the selected repair; no unexplained fixture hash changes remain.
 - Source:
   - `src/market_structure_lab/data/reconciliation/`
   - `src/market_structure_lab/cli/reconcile_candles.py`
+  - `src/market_structure_lab/data/migrations/0003_reconciliation_work_unit_lookup.sql`
 - Tests:
   - `tests/test_reconciliation_manifests.py`
   - `tests/test_reconciliation_publication.py`
   - `tests/test_reconciliation_orchestrator.py`
   - `tests/test_reconciliation_migration.py`
+  - `tests/integration/test_reconciliation_postgres.py`
 
-- [ ] **Step 1: Monitor/resume without creating a new run identity**
+- [ ] **Step 1: Lock the live incident evidence and write the failing lookup regression**
+
+Record the stopped-worker count, RR run/code/lock/Python identities, 1,322 filesystem manifests,
+1,320 database units, both filesystem-only IDs, current promotion set, sanitized PostgreSQL error
+class/message, and existing replacement indexes. Add a migration regression requiring an idempotent
+index whose leading columns are exactly `(run_id, work_unit_id)`. Add an isolated PostgreSQL test or
+query-plan assertion proving a per-work-unit count does not require a parallel sequential scan.
+
+Run the focused test before implementation and confirm it fails because the index is absent:
+
+```powershell
+uv run pytest -q tests/test_reconciliation_migration.py `
+  tests/integration/test_reconciliation_postgres.py -k "work_unit_lookup or replacement_count"
+```
+
+- [ ] **Step 2: Add and safely apply the work-unit replacement index**
+
+Create `0003_reconciliation_work_unit_lookup.sql` with one idempotent index on
+`market_data.candle_reconciliation_replacements(run_id, work_unit_id)`. Apply it only while the
+RR-000008 worker count is zero and the shared recovery advisory-lock domain is clear. Do not change
+the frozen RR run, code commit, `uv.lock`, Python executable, manifests, or replacement rows.
+
+Verify from PostgreSQL metadata and `EXPLAIN (FORMAT JSON)` that the count path uses the new index;
+capture duration and database health without logging credentials or bound SQL data.
+
+- [ ] **Step 3: Resume without creating a new run identity**
 
 Verify the frozen run hash and resume only missing work units. Do not count directory existence as
 success; verify each manifest, part checksum, work-unit identity, classification conservation, and
-terminal status.
+terminal status. Keep batches at no more than 100 units and stop fail-closed on any nonzero worker
+exit, manifest/database mismatch, memory error, checksum drift, or unexpected promotion row.
 
-- [ ] **Step 2: Add/confirm completion-audit tests**
+- [ ] **Step 4: Add/confirm completion-audit tests**
 
 The audit must fail for a missing unit, duplicate unit, extra unit, stale stage, missing `_SUCCESS`,
 part hash mismatch, row-count mismatch, nonterminal status, changed run plan, or overlapping promoted
 interval.
 
-- [ ] **Step 3: Produce a read-only promotion preflight**
+- [ ] **Step 5: Reconcile the complete filesystem/database ledgers**
+
+Require exactly 1,583 unique frozen work-unit IDs in each ledger, identical manifest/status/row and
+replacement-count/hash evidence per ID, zero filesystem-only units, zero database-only units, and
+classification/field-difference conservation. Re-verify every `_SUCCESS`, manifest, part set,
+Parquet checksum, streamed row count, and replacement logical hash before preflight.
+
+- [ ] **Step 6: Produce a read-only promotion preflight**
 
 Preflight output must include all 1,583 expected units, terminal-status counts, classification and
 field-difference totals by symbol/era, candidate replacement logical hash, residual unavailable
 ranges, and exact database/view changes that promotion would make.
 
-- [ ] **Step 4: Stop for explicit promotion confirmation**
+- [ ] **Step 7: Refresh dashboard and run the Phase 0 verification suite**
+
+Regenerate the dashboard snapshot only from the fully verified RR bundle. Run the targeted tests,
+full Pytest suite, Ruff format/check, Mypy, lock check, package build, Compose validation, dashboard
+evidence verification, typecheck, lint, and production build. Update the Phase 0 evidence report and
+push a Lore-compliant checkpoint whose remote SHA is re-read and recorded.
+
+- [ ] **Step 8: Stop for explicit promotion confirmation**
 
 Promotion mutates durable research state. Do not promote automatically. After confirmation, use the
 existing explicit promotion command; never reinitialize PostgreSQL or replace the dump.
 
-- [ ] **Step 5: Verify the promoted corrected view**
+- [ ] **Step 9: After approval only, verify the promoted corrected view**
 
 Prove unique canonical keys, correct precedence, no fallback inside promoted intervals, no
 supplements/corrections outside verified intervals, exact counts/hashes, bounded reads, and stable
 replay of the promotion manifest.
 
-- [ ] **Step 6: Freeze the Phase 0 reconciliation evidence report**
+- [ ] **Step 10: After approval only, freeze the promoted reconciliation evidence report**
 
 Update `docs/DATA_VIABILITY.md` and `docs/IMPLEMENTATION_STATUS.md` only from checksum-verified final
 artifacts. Do not declare experiment eligibility until a deliberate snapshot is separately frozen.
 
-**Acceptance:** every work unit is terminal and verified; any promotion has explicit confirmation;
-the corrected view and report replay exactly; unresolved intervals remain explicit.
+**Acceptance before the user gate:** every work unit is terminal and verified, read-only preflight
+passes, dashboard and full verification are current, the checkpoint is pushed, and RR-000008 remains
+unpromoted. **Acceptance after a separately confirmed promotion:** the corrected view and promotion
+report replay exactly and unresolved intervals remain explicit.
 
 ---
 
@@ -663,11 +758,17 @@ holdout rows inaccessible.
 - [ ] Pre-register the eligible contiguous universe, discovery/development/final-holdout metadata,
       asset holdouts, features, normalizer, cluster/motif search space, stability policies, trial
       count, negative controls, and rejection rules.
+- [ ] Pre-register universe-selection and survivorship-bias evidence, optional-field/zero-volume
+      policies, regime definitions that use only contemporaneous or trailing information, naive
+      baselines, and a fixed complexity/search budget.
 - [ ] Freeze the snapshot and derived publication without inspecting final-holdout outcomes.
 - [ ] Run bounded outcome-blind discovery and retain every completed/rejected/failed/inconclusive
       trial.
 - [ ] Publish the reliability vector: data evidence, replay hashes, effective supports, cluster/motif
       stability, transitions with intervals, asset/regime breakdowns, and contradictions.
+- [ ] Run an independent `data-analytics:validate-data` review and a `quantitative-research`
+      adversarial review. Record the skill names/source versions and accept or reject every finding;
+      do not import generic skill thresholds into the frozen result.
 - [ ] Stop. Do not attach outcomes or claim an edge.
 
 **Acceptance:** at least one real `DR-*` bundle exists with verified end-to-end provenance and an
@@ -679,10 +780,31 @@ untouched.
 ### Task 14: Create the separate Phase 5 validation plan
 
 Do not implement Phase 5 under this plan. After real behaviours are frozen, create a new consensus
-plan that defines candidate-specific outcomes, horizons, purging/embargo, chronological walk-forward
-folds, asset holdouts, effective-sample/power analysis, block bootstrap, negative controls,
-multiple-testing correction, conservative costs, promotion criteria, and one-time final-holdout
-access.
+plan that defines:
+
+- candidate-specific outcomes, horizons, and one causal information cutoff;
+- purging/embargo and chronological nested walk-forward folds;
+- untouched temporal and asset holdouts plus one-time final-holdout access;
+- effective-sample and power analysis before selecting a minimum event count;
+- dependence-aware block bootstrap and interval-width decision rules;
+- naive, unconditional, persistence, and simple linear/tree baselines before higher-capacity ML;
+- discrimination and calibration metrics appropriate to the frozen outcome, not generic accuracy;
+- shuffled labels, time shifts, random features, placebo behaviours, and other negative controls;
+- the complete trial/search count, family definitions, multiplicity correction, and false-discovery
+  accounting;
+- factor/beta, momentum, volatility, liquidity, asset, and regime exposure diagnostics so disguised
+  systematic exposure is not called edge;
+- parameter perturbation, specification curves or multiverse reporting where appropriate,
+  degradation across folds, probability of backtest overfitting, and deflated performance metrics;
+- conservative fees, spread, slippage, funding, latency, fill probability, missed fills, turnover,
+  market impact, and capacity stress;
+- promotion, rejection, inconclusive, and retirement rules fixed before outcomes are read;
+- a decision on the vetted `backtesting-frameworks` skill and any selected supplemental skill after
+  source review, with no implicit package or service adoption.
+
+Use `ralplan` for this design, `quantitative-research` as an adversarial reviewer, and rerun
+`docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`. The resulting plan must prefer the simplest model capable of
+passing the frozen test; ML is optional, not presumed.
 
 **Acceptance:** the Phase 5 plan is reviewed and explicitly approved before outcome attachment. No
 strategy or leverage work is included.
@@ -706,6 +828,12 @@ strategy or leverage work is included.
 | Weak transition CI | Frozen dependence policy and sensitivity | Low support/wide interval cannot promote |
 | Semantic outcome leakage | Builder dependency audit + adversarial tests | Innocuous future feature rejected |
 | False accuracy claim | Reliability vector and `n` trial count | Single unsupported percentage prohibited |
+| Skill-induced methodology drift | Skill/source/version receipt plus reviewed adoption decision | Generic external threshold cannot enter frozen policy |
+| Model complexity overfit | Naive/simple baselines, fixed search budget, nested walk-forward | Higher-capacity model rejected without untouched incremental value |
+| Disguised systematic exposure | Frozen factor/beta/regime diagnostics | Candidate rejected when effect vanishes after exposure adjustment |
+| Universe/survivorship bias | Point-in-time eligible universe and admission audit | Current-survivor-only universe cannot support promotion |
+| Backtest selection bias | Complete trial ledger, multiplicity correction, PBO/deflated metrics where applicable | Attractive selected run cannot hide the search that produced it |
+| Cost/capacity fantasy | Conservative component cost model and adverse stress | Gross or zero-impact result cannot promote |
 
 ## Risks and mitigations
 
@@ -721,13 +849,20 @@ strategy or leverage work is included.
 | Semantic leakage is claimed “solved” by metadata | Pair declared dependencies with adversarial tests and independent review; document residual limits |
 | Full-universe gaps bias experiments | Freeze only approved contiguous scoped intervals; never weaken gates or impute |
 | Phase boundaries are silently skipped | Written evidence report and explicit approval at the end of Phases A and B |
+| A popular skill injects unreviewed assumptions | Treat skills as checklists; record version and adoption decisions; preregister project-specific policy |
+| ML is introduced before a baseline earns it | Require naive and simple baselines, a fixed search budget, and untouched incremental evidence |
+| A discovered edge is beta, momentum, volatility, or liquidity exposure | Freeze exposure diagnostics and require residual robustness before promotion |
+| Research automation optimizes to the holdout | Freeze the validator and trial budget; use `autoresearch-goal` only before outcome access and ledger every attempt |
 
 ## Definition of done
 
 This remediation program is complete only when Tasks 1–12 pass their verification gates and the
 Phase A/B evidence reports are accepted. Tasks 13–14 are explicitly later, approval-gated empirical
-work. The program does not become “accurate” merely by completing code changes; empirical accuracy
-remains unestimated until enough preregistered Phase 5 trials exist to report a trial-yield interval.
+work. The broader goal is not to guarantee an edge; it is to create a process capable of rejecting
+false structure and false alpha while identifying any behaviour that survives reproducibility,
+stability, untouched validation, exposure adjustment, costs, and program-level trial accounting.
+The program does not become “accurate” merely by completing code changes; empirical accuracy remains
+unestimated until enough preregistered Phase 5 trials exist to report a trial-yield interval.
 
 ## Execution handoff
 
