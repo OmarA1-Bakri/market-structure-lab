@@ -11,13 +11,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
+from market_structure_lab.cli.errors import database_error_message
 from market_structure_lab.core.config import load_settings
 from market_structure_lab.data.gaps import read_manifest
 from market_structure_lab.data.migrations import (
-    candle_reconciliation_migration_sql,
-    candle_recovery_migration_sql,
-    reconciliation_migration_lock_sql,
+    SchemaPreparationBusyError,
+    prepare_reconciliation_schema,
 )
 from market_structure_lab.data.reconciliation import (
     ReconciliationRepository,
@@ -105,6 +106,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.operation == "report":
             return _report(args)
         return _eligible(args)
+    except SQLAlchemyError as error:
+        print(database_error_message(error), file=sys.stderr)
+        return 1
+    except SchemaPreparationBusyError:
+        print("candle schema preparation is busy", file=sys.stderr)
+        return 1
     except (OSError, ValueError, RuntimeError, SourceError) as error:
         print(str(error), file=sys.stderr)
         return 1
@@ -211,9 +218,7 @@ def _run(args: argparse.Namespace) -> int:
     try:
         if args.apply:
             with engine.begin() as connection:
-                connection.execute(text(reconciliation_migration_lock_sql()))
-                connection.execute(text(candle_recovery_migration_sql()))
-                connection.execute(text(candle_reconciliation_migration_sql()))
+                prepare_reconciliation_schema(connection)
                 _verify_source_identity(connection, run)
                 ReconciliationRepository(connection).register_run(run)
         source = BinanceSpotSource(args.cache_dir)
@@ -295,7 +300,7 @@ def _promote(args: argparse.Namespace) -> int:
     engine = create_engine(settings.database.url)
     try:
         with engine.begin() as connection:
-            connection.execute(text(candle_reconciliation_migration_sql()))
+            prepare_reconciliation_schema(connection)
             repository = ReconciliationRepository(connection)
             repository.register_run(run)
             promotion = repository.promote(

@@ -2,11 +2,32 @@ from __future__ import annotations
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
+import pytest
 
 from market_structure_lab.data.migrations import (
+    RECOVERY_ADVISORY_LOCK_NAME,
     candle_reconciliation_migration_sql,
+    prepare_reconciliation_schema,
     reconciliation_migration_lock_sql,
 )
+
+
+class _Result:
+    def __init__(self, scalar: bool = True) -> None:
+        self.scalar = scalar
+
+    def scalar_one(self) -> bool:
+        return self.scalar
+
+
+class _Connection:
+    def __init__(self, *, acquired: bool = True) -> None:
+        self.acquired = acquired
+        self.statements: list[tuple[str, object | None]] = []
+
+    def execute(self, statement, parameters=None):
+        self.statements.append((str(statement), parameters))
+        return _Result(self.acquired)
 
 
 def test_reconciliation_migration_is_append_only_and_promotion_gated() -> None:
@@ -44,3 +65,42 @@ def test_reconciliation_migration_lock_is_transaction_scoped_and_stable() -> Non
 
     assert sql == "SELECT pg_advisory_xact_lock(4875179636632247649)"
     assert "pg_try_advisory" not in sql
+
+
+def test_reconciliation_migration_leaves_transaction_control_to_the_caller() -> None:
+    transaction_lines = {
+        line.strip().upper() for line in candle_reconciliation_migration_sql().splitlines()
+    }
+
+    assert "BEGIN;" not in transaction_lines
+    assert "COMMIT;" not in transaction_lines
+
+
+def test_reconciliation_schema_preparation_orders_shared_and_numeric_locks_before_ddl() -> None:
+    connection = _Connection()
+
+    prepare_reconciliation_schema(connection)  # type: ignore[arg-type]
+
+    assert len(connection.statements) == 4
+    shared_lock, migration_lock, recovery_migration, reconciliation_migration = (
+        connection.statements
+    )
+    assert shared_lock == (
+        "SELECT pg_try_advisory_xact_lock(hashtextextended(:lock_name, 0))",
+        {"lock_name": RECOVERY_ADVISORY_LOCK_NAME},
+    )
+    assert migration_lock[0] == "SELECT pg_advisory_xact_lock(4875179636632247649)"
+    assert "CREATE TABLE IF NOT EXISTS market_data.candle_recovery_runs" in recovery_migration[0]
+    assert (
+        "CREATE TABLE IF NOT EXISTS market_data.candle_reconciliation_runs"
+        in reconciliation_migration[0]
+    )
+
+
+def test_reconciliation_schema_preparation_fails_closed_before_other_locks_or_ddl() -> None:
+    connection = _Connection(acquired=False)
+
+    with pytest.raises(RuntimeError, match="schema preparation is busy"):
+        prepare_reconciliation_schema(connection)  # type: ignore[arg-type]
+
+    assert len(connection.statements) == 1

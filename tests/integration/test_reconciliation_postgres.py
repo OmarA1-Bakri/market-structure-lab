@@ -13,8 +13,11 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from market_structure_lab.data.migrations import (
+    RECOVERY_ADVISORY_LOCK_NAME,
+    SchemaPreparationBusyError,
     candle_reconciliation_migration_sql,
     candle_recovery_migration_sql,
+    prepare_reconciliation_schema,
 )
 from market_structure_lab.data.recovery import RecoveryCandle
 from market_structure_lab.data.reconciliation import (
@@ -214,6 +217,60 @@ def _ledger(tmp_path: Path):
         ),
     )
     return run, manifest, replacements
+
+
+def test_schema_preparation_fails_closed_while_publication_is_open_then_replays(
+    reconciliation_postgres: Engine,
+    tmp_path: Path,
+) -> None:
+    run, manifest, replacements = _ledger(tmp_path)
+    with reconciliation_postgres.begin() as setup:
+        setup.execute(text("DROP VIEW market_data.candles_reconciled"))
+
+    publication_connection = reconciliation_postgres.connect()
+    schema_connection = reconciliation_postgres.connect()
+    publication = publication_connection.begin()
+    try:
+        publication_connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
+            {"lock_name": RECOVERY_ADVISORY_LOCK_NAME},
+        )
+        repository = ReconciliationRepository(publication_connection)
+        repository.register_run(run)
+        assert repository.publish_work_unit(manifest, replacements) == 2
+
+        with pytest.raises(SchemaPreparationBusyError, match="schema preparation is busy"):
+            with schema_connection.begin():
+                prepare_reconciliation_schema(schema_connection)
+
+        with schema_connection.begin():
+            assert (
+                schema_connection.execute(
+                    text("SELECT to_regclass('market_data.candles_reconciled') IS NOT NULL")
+                ).scalar_one()
+                is False
+            )
+
+        publication.commit()
+
+        with schema_connection.begin():
+            prepare_reconciliation_schema(schema_connection)
+            assert (
+                schema_connection.execute(
+                    text("SELECT to_regclass('market_data.candles_reconciled') IS NOT NULL")
+                ).scalar_one()
+                is True
+            )
+        with schema_connection.begin():
+            prepare_reconciliation_schema(schema_connection)
+            assert schema_connection.execute(
+                text("SELECT count(*) FROM market_data.candle_reconciliation_replacements")
+            ).scalar_one() == len(replacements)
+    finally:
+        if publication.is_active:
+            publication.rollback()
+        schema_connection.close()
+        publication_connection.close()
 
 
 def test_promoted_view_uses_verified_dump_correction_and_fill_only(

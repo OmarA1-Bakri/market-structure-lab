@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE SCHEMA IF NOT EXISTS market_data;
 
 CREATE TABLE IF NOT EXISTS market_data.candle_reconciliation_runs (
@@ -202,5 +200,3 @@ WHERE candle.open_time >= 1514764800000
 
 COMMENT ON VIEW market_data.candles_reconciled IS
     'Explicitly promoted Binance-verified corrections/fills plus verified dump rows from 2018-01-01.';
-
-COMMIT;

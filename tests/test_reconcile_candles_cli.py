@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
+from market_structure_lab.cli import reconcile_candles
 from market_structure_lab.cli.reconcile_candles import build_parser, main
 from market_structure_lab.data.gaps import (
     ObservedEnvelope,
@@ -241,3 +243,27 @@ def test_terminal_commands_require_the_expected_run_manifest_sha(operation: str)
 
     with pytest.raises(SystemExit):
         parser.parse_args([operation, "--run", "x.json", "--output-root", "out"])
+
+
+def test_database_errors_are_reported_without_sql_parameters_or_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _DriverError(Exception):
+        sqlstate = "40P01"
+
+    error = OperationalError(
+        "SELECT * FROM secret_table WHERE password=:secret",
+        {"secret": "sentinel-password", "close": "999.123"},
+        _DriverError("driver leaked postgresql://user:secret@host/database"),
+    )
+
+    def fail(_args) -> int:
+        raise error
+
+    monkeypatch.setattr(reconcile_candles, "_run", fail)
+
+    exit_code = main(["run", "--run", "x.json", "--output-root", "out"])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err == "database operation failed (SQLSTATE 40P01)\n"

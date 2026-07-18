@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import Connection, Engine, bindparam, text
 
 from market_structure_lab.data.gaps import GapRange, ProvenanceState, RecoveryManifest
+from market_structure_lab.data.migrations import RECOVERY_ADVISORY_LOCK_NAME
 from market_structure_lab.data.sources.base import (
     FetchRequest,
     MarketDataSource,
@@ -25,7 +26,6 @@ from market_structure_lab.data.sources.base import (
 MINUTE_MS = 60_000
 DEFAULT_RECOVERY_WORKERS = 8
 DEFAULT_SERIES_LANES = 8
-RECOVERY_ADVISORY_LOCK_NAME = "market_structure_lab.candle_recovery"
 
 
 class RecoveryValidationError(ValueError):

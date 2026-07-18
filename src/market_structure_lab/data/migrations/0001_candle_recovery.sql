@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE SCHEMA IF NOT EXISTS market_data;
 
 CREATE TABLE IF NOT EXISTS market_data.candle_recovery_runs (
@@ -174,5 +172,3 @@ COMMENT ON TABLE market_data.candle_supplements IS
     'Append-only real source observations; never synthesized or used to modify restored candles.';
 COMMENT ON VIEW market_data.candles_canonical IS
     'Deterministic dump-preferred union from 2018-01-01 of restored and validated supplement candles.';
-
-COMMIT;

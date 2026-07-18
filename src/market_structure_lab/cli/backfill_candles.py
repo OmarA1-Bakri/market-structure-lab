@@ -10,8 +10,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
+from market_structure_lab.cli.errors import database_error_message
 from market_structure_lab.core.config import load_settings
 from market_structure_lab.data.gaps import (
     ProvenanceState,
@@ -22,7 +24,7 @@ from market_structure_lab.data.gaps import (
     with_provenance_states,
     write_manifest,
 )
-from market_structure_lab.data.migrations import candle_recovery_migration_sql
+from market_structure_lab.data.migrations import SchemaPreparationBusyError, prepare_recovery_schema
 from market_structure_lab.data.recovery import (
     build_recovery_report,
     coalesce_requests,
@@ -83,8 +85,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.operation == "fetch":
             return _fetch(args)
         return _report(args)
+    except SQLAlchemyError as error:
+        print(database_error_message(error), file=sys.stderr)
+        return 1
+    except SchemaPreparationBusyError:
+        print("candle schema preparation is busy", file=sys.stderr)
+        return 1
     except (OSError, ValueError, SourceError) as error:
         print(str(error), file=sys.stderr)
+        return 1
+    except RuntimeError:
+        print("candle recovery operation failed", file=sys.stderr)
         return 1
 
 
@@ -213,7 +224,7 @@ def _fetch(args: argparse.Namespace) -> int:
             # Let SQLAlchemy compile percent operators for the active DB-API.
             # Sending this migration as raw psycopg SQL treats PostgreSQL's
             # modulo operator as an incomplete parameter placeholder.
-            connection.execute(text(candle_recovery_migration_sql()))
+            prepare_recovery_schema(connection)
         summary = run_recovery(engine, manifest, BinanceSpotSource(args.cache_dir))
     finally:
         engine.dispose()

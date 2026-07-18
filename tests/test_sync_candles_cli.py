@@ -6,6 +6,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from sqlalchemy.exc import OperationalError
+
 from market_structure_lab.cli import sync_candles
 from market_structure_lab.data.freshness import write_freshness_manifest
 from market_structure_lab.data.freshness_sync import (
@@ -230,6 +233,38 @@ def test_cli_parser_and_package_entry_point_expose_all_scheduler_operations() ->
         assert operation in help_text
 
 
+def test_database_errors_do_not_leak_sql_parameters_or_invalid_sqlstate(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _DriverError(Exception):
+        sqlstate = "XX\nsecret"
+
+    error = OperationalError(
+        "SELECT * FROM secret_table WHERE password=:secret",
+        {"secret": "sentinel-password", "close": "999.123"},
+        _DriverError("driver leaked postgresql://user:secret@host/database"),
+    )
+
+    def fail(_args) -> int:
+        raise error
+
+    monkeypatch.setattr(sync_candles, "_bootstrap", fail)
+
+    exit_code = sync_candles.main(
+        [
+            "bootstrap",
+            "--compatibility",
+            "compatibility.json",
+            "--compatibility-sha256",
+            "a" * 64,
+        ]
+    )
+
+    assert exit_code == 1
+    assert capsys.readouterr().err == "database operation failed\n"
+
+
 def test_bootstrap_is_idempotent_and_does_not_fetch_source(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -242,8 +277,13 @@ def test_bootstrap_is_idempotent_and_does_not_fetch_source(
     calls = {"migrations": 0}
 
     class MigrationConnection:
-        def execute(self, _statement) -> None:
-            calls["migrations"] += 1
+        def execute(self, statement, _parameters=None):
+            sql = str(statement)
+            if "pg_try_advisory_xact_lock" in sql:
+                return SimpleNamespace(scalar_one=lambda: True)
+            if "CREATE TABLE IF NOT EXISTS market_data.candle_recovery_runs" in sql:
+                calls["migrations"] += 1
+            return None
 
     class FakeEngine:
         def connect(self):

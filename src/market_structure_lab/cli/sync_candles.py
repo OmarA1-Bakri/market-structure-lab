@@ -9,9 +9,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from market_structure_lab.cli.errors import database_error_message
 from market_structure_lab.core.config import load_settings
 from market_structure_lab.data.export import sha256_file
 from market_structure_lab.data.freshness import (
@@ -36,7 +37,7 @@ from market_structure_lab.data.freshness_snapshot import (
     publish_freshness_snapshot,
 )
 from market_structure_lab.data.gaps import RecoveryManifest, read_manifest, verify_manifest_identity
-from market_structure_lab.data.migrations import candle_recovery_migration_sql
+from market_structure_lab.data.migrations import SchemaPreparationBusyError, prepare_recovery_schema
 from market_structure_lab.data.sources.base import SourceError
 from market_structure_lab.data.sources.binance import BinanceSpotSource
 
@@ -114,7 +115,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.operation == "health":
             return _health(args)
         return _snapshot(args)
-    except (OSError, RuntimeError, ValueError, SourceError, SQLAlchemyError) as error:
+    except SQLAlchemyError as error:
+        print(database_error_message(error), file=sys.stderr)
+        return 1
+    except SchemaPreparationBusyError:
+        print("candle schema preparation is busy", file=sys.stderr)
+        return 1
+    except (OSError, RuntimeError, ValueError, SourceError) as error:
         print(str(error), file=sys.stderr)
         return 1
 
@@ -143,7 +150,7 @@ def _bootstrap(args: argparse.Namespace) -> int:
                 table=settings.candles.table,
             )
         with engine.begin() as connection:
-            connection.execute(text(candle_recovery_migration_sql()))
+            prepare_recovery_schema(connection)
     finally:
         engine.dispose()
     print(
@@ -233,7 +240,7 @@ def _run(args: argparse.Namespace) -> int:
                 table=settings.candles.table,
             )
         with engine.begin() as connection:
-            connection.execute(text(candle_recovery_migration_sql()))
+            prepare_recovery_schema(connection)
         report = run_freshness_sync(
             engine,
             manifest,
