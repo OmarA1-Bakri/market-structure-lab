@@ -405,7 +405,7 @@ def _validate_record_semantics(record: ReconciliationRecord) -> None:
     binance_hash = record.binance_row_sha256
     differing = record.differing_fields
     if record.classification is ReconciliationClass.EXACT_MATCH:
-        valid = dump_hash is not None and dump_hash == binance_hash and not differing
+        valid = dump_hash is not None and binance_hash is not None and not differing
     elif record.classification is ReconciliationClass.BINANCE_CORRECTION:
         valid = (
             dump_hash is not None

@@ -578,7 +578,7 @@ def test_run_verifier_rechecks_classification_hash_semantics(tmp_path: Path) -> 
     part = publication / manifest.parts[0].path
     frame = pl.read_parquet(part).with_columns(
         pl.when(pl.col("open_time_ms") == 0)
-        .then(pl.lit(_sha("9")))
+        .then(pl.lit(None, dtype=pl.String))
         .otherwise(pl.col("binance_row_sha256"))
         .alias("binance_row_sha256")
     )
@@ -594,6 +594,37 @@ def test_run_verifier_rechecks_classification_hash_semantics(tmp_path: Path) -> 
         verify_reconciliation_run_publication(
             tmp_path, run, expected_manifest_sha256=run.manifest_sha256
         )
+
+
+def test_run_verifier_accepts_exact_match_with_ignored_optional_dump_fields(
+    tmp_path: Path,
+) -> None:
+    run, unit = _run()
+    records = list(_records())
+    records[0] = ReconciliationRecord(
+        "BTCUSDT",
+        "1m",
+        0,
+        ReconciliationClass.EXACT_MATCH,
+        _sha("1"),
+        _sha("9"),
+        (),
+    )
+    manifest = publish_work_unit(
+        records,
+        output_root=tmp_path,
+        run=run,
+        work_unit=unit,
+        source_artifacts=(_artifact(),),
+    )
+
+    verified = verify_reconciliation_run_publication(
+        tmp_path,
+        run,
+        expected_manifest_sha256=run.manifest_sha256,
+    )
+
+    assert verified == (manifest,)
 
 
 def test_run_verifier_rejects_a_self_consistent_changed_run_against_the_pin(
