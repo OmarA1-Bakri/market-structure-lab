@@ -1,6 +1,6 @@
 # Implementation Status
 
-Evidence date: 2026-07-16
+Evidence date: 2026-07-18
 
 ## Scope
 
@@ -330,6 +330,48 @@ experiment-readiness gate. Under the current Phase 0 review, Phase 4 remains gat
 independent provenance-chain verification, cluster and motif hardening, boundary-aware stability and
 transition evidence, leakage controls, and explicit phase approval. Phase 5 remains unstarted and
 separately gated.
+
+## RR-000008 full-history reconciliation: complete and unpromoted
+
+The frozen `row-reconciliation-v3` run is terminal across all `1,583` planned monthly work units.
+Filesystem manifests and the PostgreSQL ledger agree on the complete work-unit ID set, whose
+SHA-256 is `4d98af4a826be79f69d728743b1c2348f70cf0005bef6f60a9ecd8d7ee3b39a9`.
+The final status distribution is `1,359` completed and `224` source-unavailable units. The run
+audited `68,474,492` keys and retained `31,894,927` replacement rows:
+
+- `35,738,056` exact matches;
+- `31,884,870` Binance fills;
+- `10,057` Binance corrections;
+- `841,509` source-unavailable keys.
+
+The recovery completed from its frozen commit, lockfile, Python executable, and clean worktree.
+The runner selected only the missing frozen IDs; it never replanned the run and never requested
+promotion. The completion receipt is
+`data/exports/reconciliation/recovery/RR-000008/supervisor-complete-20260718T120644.653202Z.json`,
+SHA-256 `0f8f53b48c783eefada04566757d9d3ad878991bcc965b151363137830df15`.
+
+The incident that stopped the final 263 units was resolved with an append-only schema migration
+adding the exact `(run_id, work_unit_id)` replacement lookup index. Disposable PostgreSQL
+verification proves the count path uses that index without a sequential or parallel scan. A
+separate verifier correction now treats an exact match according to comparable candle fields:
+both row hashes must exist and no comparable fields may differ, but the hashes may differ when the
+dump legitimately lacks optional fields.
+
+The bounded read-only promotion preflight passed and did not apply changes. Its local evidence
+artifact SHA-256 is `e9e634353e4a2c605561be9d14c28e448d8c5ebcfc52776dbc4bd927c0a5eb0a`.
+It verified the `31,894,927` replacement rows at logical SHA-256
+`2f45102a45b261b99c38484e0cf10df71121237320deb27c11877de2aa1b9182`, prepared `285`
+eligible coverage intervals, and retained `261` explicit residual-unavailable intervals containing
+`841,509` minutes. The active reconciled run remains `RR-000002`; RR-000008 has zero promotion
+rows and no promotion receipt.
+
+The dashboard evidence snapshot now labels RR-000008 `complete_unpromoted`, reports all
+`1,583 / 1,583` verified work units, and blocks research eligibility pending a deliberate promotion
+receipt. The repository still has zero real experiment trials, so predictive and cost-adjusted
+accuracy remain `not_estimable`.
+
+Detailed identities, residual coverage, verification commands, and the approval boundary are in
+[`PHASE0_REMEDIATION_EVIDENCE.md`](PHASE0_REMEDIATION_EVIDENCE.md).
 
 ## Daily candle freshness implementation
 

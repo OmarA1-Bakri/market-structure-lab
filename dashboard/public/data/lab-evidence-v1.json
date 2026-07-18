@@ -701,10 +701,10 @@
       }
     ]
   },
-  "generated_at": "2026-07-17T10:47:01Z",
+  "generated_at": "2026-07-18T12:54:39Z",
   "phase_gate": {
     "active_phase": "Phase 0: trustworthy foundation",
-    "next_required_evidence": "complete RR-000008 and obtain explicit promotion approval",
+    "next_required_evidence": "obtain explicit promotion approval and publish an immutable promotion receipt",
     "status": "remediation_in_progress"
   },
   "reconciliation": {
@@ -744,38 +744,38 @@
     },
     "full_history": {
       "algorithm_version": "row-reconciliation-v3",
-      "audited_keys": 30791654,
+      "audited_keys": 68474492,
       "classification_counts": {
-        "binance_correction": 6451,
-        "binance_fill": 15493319,
-        "exact_match": 15264252,
-        "source_unavailable": 27632
+        "binance_correction": 10057,
+        "binance_fill": 31884870,
+        "exact_match": 35738056,
+        "source_unavailable": 841509
       },
-      "completion_state": "partial",
+      "completion_state": "complete_unpromoted",
       "cutoff": "2026-07-16T11:23:00Z",
       "differing_field_counts": {
-        "close": 5608,
-        "high": 2650,
-        "low": 2693,
-        "open": 60,
-        "quote_volume": 35,
-        "trades": 29,
-        "volume": 6445
+        "close": 8827,
+        "high": 4112,
+        "low": 4185,
+        "open": 120,
+        "quote_volume": 42,
+        "trades": 36,
+        "volume": 10051
       },
       "expected_work_units": 1583,
       "mapping_version": "market-data-candles-v1",
       "promoted_verified_intervals": 0,
       "promotion_receipt_available": false,
-      "replacement_rows": 15499770,
-      "research_eligibility": "blocked_until_complete_and_deliberately_promoted",
+      "replacement_rows": 31894927,
+      "research_eligibility": "blocked_pending_deliberate_promotion_receipt",
       "run_id": "RR-000008",
       "run_manifest_sha256": "1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629",
-      "scope_label": "partial full-history audit progress",
-      "verified_manifest_set_sha256": "8f511f403a6a34bf1b77b34c2a7c609d92a4e75ff844b407704b623cd8ba1bb1",
-      "verified_work_units": 712,
+      "scope_label": "full-history audit complete; unpromoted",
+      "verified_manifest_set_sha256": "6f6fbae74905538e938e715093d69b9f5bf1c8a64a9e73935af6e62bdf0db384",
+      "verified_work_units": 1583,
       "work_unit_status_counts": {
-        "completed": 606,
-        "source_unavailable": 106
+        "completed": 1359,
+        "source_unavailable": 224
       }
     }
   },

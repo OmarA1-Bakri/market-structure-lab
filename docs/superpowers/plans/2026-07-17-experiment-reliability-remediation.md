@@ -94,11 +94,11 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task | Status | Evidence / blocker |
 |---|---|---|
 | Task 1 — golden replay | Complete | Cross-platform deterministic PCA repair and reviewed fixture migration; 86 discovery/golden tests passed on Linux and Windows. |
-| Task 2 — RR-000008 | In progress | 1,320/1,583 filesystem/database-intersecting terminal units; 263 database units remain; recovery is stopped fail-closed on a missing `(run_id, work_unit_id)` replacement lookup index. |
-| Task 3 — dashboard contract | Code complete, final refresh pending | Source-backed generator and exact wording verified; committed snapshot remains deliberately stale until RR completion. |
+| Task 2 — RR-000008 | Pre-promotion complete; approval gated | All 1,583 frozen work units are terminal and verified: 1,359 `completed`, 224 `source_unavailable`, 68,474,492 audited rows, and 31,894,927 replacements. The read-only promotion preflight passed; RR-000008 still has zero promotion rows. |
+| Task 3 — dashboard contract | Complete at the unpromoted boundary | The source-backed snapshot reports `complete_unpromoted`, 1,583/1,583 verified units, and `not_estimable` experiment accuracy without inferring research eligibility. |
 | Task 4 — transition safety | Complete | Raw adjacent binomial/BH research surface removed; boundary-aware dwell/event path is canonical. |
 | Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; verified real-trial count remains `n=0`. |
-| Task 6 — Phase 0 gate | Pending | Requires RR completion, read-only preflight, dashboard refresh, full suite, evidence report, and GitHub checkpoint. |
+| Task 6 — Phase 0 gate | Ready for explicit promotion decision | Pre-promotion verification and the written evidence gate are complete. Final Phase 0 closure still requires explicit approval, an immutable promotion receipt, and post-promotion canonical-view verification. No promotion was applied automatically. |
 | Tasks 7–14 | Approval-gated | Do not execute until the preceding written phase gate is accepted. |
 
 ## Skill and workflow routing

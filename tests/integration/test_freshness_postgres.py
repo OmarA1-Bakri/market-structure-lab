@@ -30,6 +30,8 @@ from market_structure_lab.data.sources.base import (
     SourceProvenance,
 )
 
+BASE_OPEN_TIME_MS = 1_514_764_800_000
+
 
 @pytest.fixture
 def isolated_postgres() -> Iterator[Engine]:
@@ -59,9 +61,10 @@ def isolated_postgres() -> Iterator[Engine]:
             text(
                 "INSERT INTO market_data.candles "
                 '(id, symbol, "interval", open_time, open, high, low, close, volume) VALUES '
-                "(1, 'BTCUSDT', '1m', 0, 10, 11, 9, 10, 1), "
-                "(2, 'ETHUSDT', '1m', 0, 20, 21, 19, 20, 2)"
-            )
+                "(1, 'BTCUSDT', '1m', :base, 10, 11, 9, 10, 1), "
+                "(2, 'ETHUSDT', '1m', :base, 20, 21, 19, 20, 2)"
+            ),
+            {"base": BASE_OPEN_TIME_MS},
         )
     try:
         yield engine
@@ -115,12 +118,12 @@ def _compatibility() -> RecoveryManifest:
     return RecoveryManifest(
         manifest_version=1,
         source_identity=identity,
-        as_of="1970-01-01T00:05:00Z",
+        as_of="2018-01-01T00:05:00Z",
         candidate_venue="binance",
         market_type="spot",
         envelopes=(
-            ObservedEnvelope("BTCUSDT", "1m", 0, 0, 1),
-            ObservedEnvelope("ETHUSDT", "1m", 0, 0, 1),
+            ObservedEnvelope("BTCUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS, 1),
+            ObservedEnvelope("ETHUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS, 1),
         ),
         gaps=(),
         provenance_validation={
@@ -137,7 +140,7 @@ def _plan(engine: Engine, compatibility: RecoveryManifest, minute: int):
             dump_identity=compatibility.source_identity,
             compatibility_manifest=compatibility,
             compatibility_manifest_sha256=compatibility.sha256(),
-            as_of=datetime(1970, 1, 1, 0, minute, tzinfo=UTC),
+            as_of=datetime(2018, 1, 1, 0, minute, tzinfo=UTC),
         )
 
 
@@ -157,7 +160,7 @@ def test_isolated_postgres_freshness_invariants(isolated_postgres: Engine) -> No
     assert first_report.recovered_minutes == 2
     assert first_report.after_missing_minutes == 2
     assert [(request.symbol, request.start_ms, request.end_ms) for request in source.requests] == [
-        ("BTCUSDT", 60_000, 180_000)
+        ("BTCUSDT", BASE_OPEN_TIME_MS + 60_000, BASE_OPEN_TIME_MS + 180_000)
     ]
 
     same_plan = _plan(engine, compatibility, 3)
@@ -168,7 +171,9 @@ def test_isolated_postgres_freshness_invariants(isolated_postgres: Engine) -> No
     later_plan = _plan(engine, compatibility, 5)
     later_report = run_freshness_sync(engine, later_plan, compatibility, source)
     assert later_report.recovered_minutes == 2
-    assert source.requests[-1] == FetchRequest("BTCUSDT", "1m", 180_000, 300_000)
+    assert source.requests[-1] == FetchRequest(
+        "BTCUSDT", "1m", BASE_OPEN_TIME_MS + 180_000, BASE_OPEN_TIME_MS + 300_000
+    )
     assert all(request.symbol == "BTCUSDT" for request in source.requests)
 
     assert first_report.recovery_run_id is not None
@@ -180,7 +185,7 @@ def test_isolated_postgres_freshness_invariants(isolated_postgres: Engine) -> No
                 RecoveryCandle(
                     "BTCUSDT",
                     "1m",
-                    0,
+                    BASE_OPEN_TIME_MS,
                     Decimal("999"),
                     Decimal("999"),
                     Decimal("999"),
@@ -197,16 +202,18 @@ def test_isolated_postgres_freshness_invariants(isolated_postgres: Engine) -> No
         origin, close = connection.execute(
             text(
                 "SELECT origin, close FROM market_data.candles_canonical "
-                "WHERE symbol='BTCUSDT' AND open_time=0"
-            )
+                "WHERE symbol='BTCUSDT' AND open_time=:open_time"
+            ),
+            {"open_time": BASE_OPEN_TIME_MS},
         ).one()
         assert (origin, float(close)) == ("dump", 10.0)
         with pytest.raises(DBAPIError, match="append-only"):
             connection.execute(
                 text(
                     "UPDATE market_data.candle_supplements SET volume=2 "
-                    "WHERE symbol='BTCUSDT' AND open_time=60000"
-                )
+                    "WHERE symbol='BTCUSDT' AND open_time=:open_time"
+                ),
+                {"open_time": BASE_OPEN_TIME_MS + 60_000},
             )
 
     with engine.connect() as lock_connection:

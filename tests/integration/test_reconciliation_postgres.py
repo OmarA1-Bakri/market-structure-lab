@@ -33,6 +33,8 @@ from market_structure_lab.data.reconciliation import (
     publish_work_unit,
 )
 
+BASE_OPEN_TIME_MS = 1_514_764_800_000
+
 
 @pytest.fixture
 def reconciliation_postgres() -> Iterator[Engine]:
@@ -63,10 +65,15 @@ def reconciliation_postgres() -> Iterator[Engine]:
                 "INSERT INTO market_data.candles "
                 '(id, symbol, "interval", open_time, open, high, low, close, volume, '
                 "quote_volume, trades) VALUES "
-                "(1, 'BTCUSDT', '1m', 0, 10, 11, 9, 10, 1, 10, 1), "
-                "(2, 'BTCUSDT', '1m', 60000, 20, 21, 19, 20, 2, 40, 2), "
-                "(3, 'BTCUSDT', '1m', 180000, 40, 41, 39, 40, 4, 160, 4)"
-            )
+                "(1, 'BTCUSDT', '1m', :first, 10, 11, 9, 10, 1, 10, 1), "
+                "(2, 'BTCUSDT', '1m', :second, 20, 21, 19, 20, 2, 40, 2), "
+                "(3, 'BTCUSDT', '1m', :fourth, 40, 41, 39, 40, 4, 160, 4)"
+            ),
+            {
+                "first": BASE_OPEN_TIME_MS,
+                "second": BASE_OPEN_TIME_MS + 60_000,
+                "fourth": BASE_OPEN_TIME_MS + 180_000,
+            },
         )
         connection.execute(text(candle_recovery_migration_sql()))
         connection.execute(text(candle_reconciliation_migration_sql()))
@@ -83,7 +90,9 @@ def _sha(character: str) -> str:
 
 
 def _run():
-    unit = ReconciliationWorkUnit.create("BTCUSDT", "1m", 0, 180_000)
+    unit = ReconciliationWorkUnit.create(
+        "BTCUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS + 180_000
+    )
     return (
         freeze_reconciliation_run(
             run_id="RR-000001",
@@ -97,7 +106,9 @@ def _run():
             algorithm_version="row-reconciliation-v1",
             code_commit="aedd375",
             uv_lock_sha256=_sha("b"),
-            envelopes=(TradingEnvelope("BTCUSDT", "1m", 0, 180_000),),
+            envelopes=(
+                TradingEnvelope("BTCUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS + 180_000),
+            ),
             work_units=(unit,),
         ),
         unit,
@@ -109,7 +120,7 @@ def _ledger(tmp_path: Path):
     correction_checksum = RecoveryCandle(
         "BTCUSDT",
         "1m",
-        60_000,
+        BASE_OPEN_TIME_MS + 60_000,
         Decimal("30"),
         Decimal("31"),
         Decimal("29"),
@@ -121,7 +132,7 @@ def _ledger(tmp_path: Path):
     fill_checksum = RecoveryCandle(
         "BTCUSDT",
         "1m",
-        120_000,
+        BASE_OPEN_TIME_MS + 120_000,
         Decimal("35"),
         Decimal("36"),
         Decimal("34"),
@@ -134,7 +145,7 @@ def _ledger(tmp_path: Path):
         ReconciliationRecord(
             "BTCUSDT",
             "1m",
-            0,
+            BASE_OPEN_TIME_MS,
             ReconciliationClass.EXACT_MATCH,
             _sha("1"),
             _sha("1"),
@@ -143,7 +154,7 @@ def _ledger(tmp_path: Path):
         ReconciliationRecord(
             "BTCUSDT",
             "1m",
-            60_000,
+            BASE_OPEN_TIME_MS + 60_000,
             ReconciliationClass.BINANCE_CORRECTION,
             _sha("2"),
             correction_checksum,
@@ -152,7 +163,7 @@ def _ledger(tmp_path: Path):
         ReconciliationRecord(
             "BTCUSDT",
             "1m",
-            120_000,
+            BASE_OPEN_TIME_MS + 120_000,
             ReconciliationClass.BINANCE_FILL,
             None,
             fill_checksum,
@@ -180,7 +191,7 @@ def _ledger(tmp_path: Path):
             work_unit_id=unit.work_unit_id,
             symbol="BTCUSDT",
             timeframe="1m",
-            open_time_ms=60_000,
+            open_time_ms=BASE_OPEN_TIME_MS + 60_000,
             classification=ReconciliationClass.BINANCE_CORRECTION,
             open=Decimal("30"),
             high=Decimal("31"),
@@ -200,7 +211,7 @@ def _ledger(tmp_path: Path):
             work_unit_id=unit.work_unit_id,
             symbol="BTCUSDT",
             timeframe="1m",
-            open_time_ms=120_000,
+            open_time_ms=BASE_OPEN_TIME_MS + 120_000,
             classification=ReconciliationClass.BINANCE_FILL,
             open=Decimal("35"),
             high=Decimal("36"),
@@ -350,13 +361,21 @@ def test_promoted_view_uses_verified_dump_correction_and_fill_only(
         promotion = repository.promote(
             run,
             (manifest,),
-            (VerifiedCoverageInterval("BTCUSDT", "1m", 0, 180_000),),
+            (
+                VerifiedCoverageInterval(
+                    "BTCUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS + 180_000
+                ),
+            ),
             candidate_replacement_logical_sha256=candidate_replacement_logical_sha256,
         )
         replay = repository.promote(
             run,
             (manifest,),
-            (VerifiedCoverageInterval("BTCUSDT", "1m", 0, 180_000),),
+            (
+                VerifiedCoverageInterval(
+                    "BTCUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS + 180_000
+                ),
+            ),
             candidate_replacement_logical_sha256=candidate_replacement_logical_sha256,
         )
         rows = connection.execute(
@@ -368,9 +387,9 @@ def test_promoted_view_uses_verified_dump_correction_and_fill_only(
 
     assert promotion == replay
     assert [(row.open_time, row.origin, float(row.close)) for row in rows] == [
-        (0, "dump_verified_match", 10.0),
-        (60_000, "binance_correction", 30.0),
-        (120_000, "binance_fill", 35.0),
+        (BASE_OPEN_TIME_MS, "dump_verified_match", 10.0),
+        (BASE_OPEN_TIME_MS + 60_000, "binance_correction", 30.0),
+        (BASE_OPEN_TIME_MS + 120_000, "binance_fill", 35.0),
     ]
     assert len(promotion.canonical_logical_sha256) == 64
 

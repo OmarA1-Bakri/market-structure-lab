@@ -3,7 +3,7 @@
 ## Document control
 
 - **Status:** Canonical review baseline
-- **Assessment date:** 2026-07-17
+- **Assessment date:** 2026-07-18
 - **Scope:** Current data evidence, reconciliation state, experiment artifacts, discovery methodology, and the evidentiary basis for future experiment reliability
 - **Exclusions:** No final-holdout outcomes were inspected; no strategy, backtest, or live-trading claim is made
 - **Governing sources:** `docs/PRD.md`, `AGENTS.md`, checksum-bearing artifacts under `data/exports/`, and the current implementation/tests
@@ -41,11 +41,20 @@ That strength is limited by coverage and provenance:
 
 The latest checksum-bearing freshness report, frozen at `2026-07-17T00:15:00Z`, conserves `7,738,974` missing minutes after adding `11,580` rows. Its terminal distribution is four recovered symbols, 12 provider-absent symbols, and nine source conflicts. This is an auditable limitation, not a failure to be hidden.
 
-### 2. Reconciliation: promising evidence, not a completed full-history result
+### 2. Reconciliation: full-history evidence complete, deliberately unpromoted
 
 The promoted public RR-000002 summary reports `557,075` audited rows, `481,332` replacement rows, and `3,697` Binance corrections. This proves that existing-row value disagreement is material enough to affect research, not merely a missing-row problem.
 
-The broader RR-000008 plan contains `1,583` work units and was still advancing during this review. Its partial totals must not be treated as final or promotable. Under the reconciliation design, every unit must reach a terminal state and the promoted hashes, corrected keys, and eligible contiguous intervals must verify before use.
+RR-000008 is now terminal across all `1,583` frozen work units: `1,359` completed and `224`
+source-unavailable. The verified ledger contains `68,474,492` audited keys and `31,894,927`
+replacement rows. Its bounded read-only promotion preflight verified the candidate replacement
+logical SHA-256, prepared `285` eligible coverage intervals, and retained `261` explicit
+residual-unavailable intervals containing `841,509` minutes.
+
+This closes the full-history audit, not the publication gate. The preflight had `applied=false`,
+RR-000008 has no promotion receipt, and the active reconciled view remains RR-000002. Therefore no
+research snapshot may claim RR-000008 provenance until explicit approval is followed by immutable
+promotion and post-promotion verification.
 
 ### 3. Discovery software: restored deterministic fixture replay, not market evidence
 
@@ -79,7 +88,7 @@ Consequently:
 | Deterministic software replay | Green for the synthetic fixture on Linux and Windows | High | Fresh post-repair suite: 86 passed per platform; explicit `deterministic-pca-v2` identity |
 | Required-field candle validity | Strong for inspected source rows | High | Zero duplicates/null-required/invalid-OHLC/off-grid rows |
 | Full-universe temporal coverage | Weak and uneven | High | 7.739M minutes remain absent; 9 source conflicts; 12 provider-absent statuses |
-| Existing-row venue reconciliation | In progress | High | RR-000008 is nonterminal; RR-000002 found material corrections |
+| Existing-row venue reconciliation | Complete, unpromoted | High | RR-000008 is terminal and preflight-verified; the active view remains RR-000002 pending explicit promotion approval |
 | Outcome-blind access boundary | Structurally strong | High | Holdout rows are rejected and future/outcome feature classes are blocked |
 | End-to-end normalization provenance | Required identities, derivation still unverified | High | Canonical receipts require snapshot, feature-publication, registry, and normalizer identities; source-backed chain verification remains a post-Phase-0 Phase 4 hardening gate |
 | Immutable trial accounting | Implemented but empirically empty | High | Canonical terminal receipts are atomic, idempotent, fail closed, and counted by verified mode/status; repository count is `n=0` |
@@ -92,7 +101,9 @@ Consequently:
 ## Ranked methodological blockers
 
 1. **No empirical experiment exists.** There is nothing from which to estimate predictive accuracy, false-discovery rate, or promotion yield.
-2. **Full-history reconciliation is unfinished.** A research snapshot frozen before RR-000008 completes and is deliberately promoted could preserve known row-value errors.
+2. **Full-history publication is approval-gated.** RR-000008 is complete and preflight-verified,
+   but a research snapshot frozen before its deliberate promotion could preserve known row-value
+   errors.
 3. **Provenance derivation is not end-to-end verified.** Canonical receipts now require snapshot,
    feature-publication, registry, and normalizer identities, but Task 5 verifies the asserted
    identities and published bytes rather than independently reconstructing their complete
@@ -180,15 +191,18 @@ Record every successful, rejected, inconclusive, failed, and abandoned trial. Af
 
 Do not publish a single “accuracy” percentage for the laboratory. Publish the reliability vector and each gate's evidence. The only currently defensible global status is:
 
-> **Synthetic golden replay restored; source data conditionally viable; full-history reconciliation incomplete; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
+> **Synthetic golden replay restored; source data conditionally viable; full-history reconciliation complete but unpromoted; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
 
-Under the repository phase gate, this review does not authorize a real Phase 4 or Phase 5 experiment. Complete the approved foundation/reconciliation work, freeze a deliberate immutable market snapshot and Phase 3 publication, and obtain explicit phase approval before advancing.
+Under the repository phase gate, this review does not authorize promotion or a real Phase 4 or
+Phase 5 experiment. Obtain explicit approval before promoting RR-000008; after promotion, publish
+and verify its immutable receipt and canonical view before considering Phase 0 closed. Later phases
+remain separately approval-gated.
 
 ## Terse review findings
 
 - `docs/RESEARCH_LOG.md:20-22: 🔴 blocker: no completed real research trial exists. Do not report experiment accuracy until trial artifacts exist.`
 - `docs/benchmarks/phase4-golden-drift-diagnosis.md: 🟢 closed: cross-platform PCA identity drift is versioned, fail-closed, and verified by 86 passing tests on both Linux and Windows.`
-- `data/exports/reconciliation/RR-000008.run.json:work_units: 🟡 risk: full-history audit is nonterminal. Block snapshot eligibility until every unit and promotion hash verify.`
+- `data/exports/reconciliation/RR-000008.run.json:work_units: 🟡 gate: all 1,583 units and the read-only promotion hash verify, but snapshot eligibility remains blocked until an explicitly approved immutable promotion receipt exists.`
 - `src/market_structure_lab/discovery/runs.py: 🟡 risk: receipts require normalizer/publication identities, but the full derivation chain is not independently verified.`
 - `src/market_structure_lab/transitions/__init__.py: 🟢 closed: the raw-adjacent binomial/BH surface is deleted; the canonical API requires boundary-aware observations and publishes dwell-run support plus boundary evidence.`
 - `src/market_structure_lab/experiments/artifacts.py: 🟢 closed: canonical terminal receipts are atomic, checksum-verified, immutable, idempotent, and retain failures/abandonment without swallowing the original exception.`
@@ -211,3 +225,5 @@ Under the repository phase gate, this review does not authorize a real Phase 4 o
 | Bound verified Binance archive duplicate tracking | `4fdb2bff39f87d76d49e9cca3d09ef68238c0bca` | `origin/agent/research-lab-foundation` matched the implementation commit on 2026-07-17 | 54 source, sync, reconciliation, publication, manifest, and CLI tests; Ruff format/check; Mypy; 50x archive-size memory-scaling regression; independent code-review approval; the live frozen RR-000008 recovery remains separate and must execute from its recorded `52eb43276c10e9479d03b5469d4912046728b739` commit |
 | Make reconciliation promotion fail closed on frozen evidence | `6137df6bfe7a1a2ac6805a9c451bae09767eca31` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-17 | 886 tests passed and 5 skipped; Ruff format/check across 138 files; Mypy across 76 source files; package build; Compose validation with non-secret injected values; exact publication-set, bounded preflight, replacement-integrity, and apply-path regressions; independent specification and code-quality approvals; PostgreSQL integration remained skipped because the test database was unavailable |
 | Prevent reconciliation schema preparation from deadlocking publication | `a3a993cd765ed47d862b36fa5bc1372e666066ad` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-18 | 902 tests passed and 6 skipped on the Windows-native verification path; Ruff format/check across 141 files; Mypy across 77 source files; lockfile and Compose validation; all migration callers share the fail-fast publication lock domain and redact database failures; independent specification and code-quality approvals; the isolated PostgreSQL lock regression remained skipped because `MSL_TEST_POSTGRES_URL` was unavailable |
+| Keep per-unit reconciliation recovery within bounded memory | `b53239552b6de3f1b44c1a9e9258d38537d0d889` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-18 | Test-first `(run_id, work_unit_id)` lookup migration; disposable PostgreSQL index-only query-plan verification; live metadata and plan verification; RR-000008 promotion count remained zero |
+| Keep ledger verification aligned with comparable candle fields | `781a61df3da4f985706509cc6f2f75793d4e90a0` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-18 | Exact-match regression for absent optional dump fields; 43 candle/publication/preflight tests; Ruff; Mypy; bounded full-ledger semantic scan found zero invalid rows; read-only preflight subsequently passed |

@@ -17,6 +17,8 @@ from market_structure_lab.data.gaps import (
 )
 from market_structure_lab.data.migrations import candle_recovery_migration_sql
 
+BASE_OPEN_TIME_MS = 1_514_764_800_000
+
 
 @pytest.fixture
 def isolated_postgres() -> Iterator[Engine]:
@@ -47,11 +49,16 @@ def isolated_postgres() -> Iterator[Engine]:
             text(
                 "INSERT INTO market_data.candles "
                 '(id, symbol, "interval", open_time, open, high, low, close, volume) VALUES '
-                "(1, 'BTCUSDT', '1m', 0, 10, 11, 9, 10, 1), "
-                "(2, 'BTCUSDT', '1m', 120000, 12, 13, 11, 12, 1), "
-                "(3, 'ETHUSDT', '1m', 0, 20, 21, 19, 20, 2), "
-                "(4, 'ETHUSDT', '1m', 60000, 21, 22, 20, 21, 2)"
-            )
+                "(1, 'BTCUSDT', '1m', :base, 10, 11, 9, 10, 1), "
+                "(2, 'BTCUSDT', '1m', :btc_two, 12, 13, 11, 12, 1), "
+                "(3, 'ETHUSDT', '1m', :base, 20, 21, 19, 20, 2), "
+                "(4, 'ETHUSDT', '1m', :eth_two, 21, 22, 20, 21, 2)"
+            ),
+            {
+                "base": BASE_OPEN_TIME_MS,
+                "btc_two": BASE_OPEN_TIME_MS + 120_000,
+                "eth_two": BASE_OPEN_TIME_MS + 60_000,
+            },
         )
         connection.execute(text(candle_recovery_migration_sql()))
         connection.execute(
@@ -74,19 +81,23 @@ def isolated_postgres() -> Iterator[Engine]:
                 "payload_checksum, row_checksum, validation_status"
                 ") VALUES "
                 "('00000000-0000-0000-0000-000000000001', 'fixture', 'v1', "
-                "'BTCUSDT', '1m', 60000, 11, 12, 10, 11, 1, now(), :payload, :row1, "
+                "'BTCUSDT', '1m', :btc_one, 11, 12, 10, 11, 1, now(), :payload, :row1, "
                 "'validated'), "
                 "('00000000-0000-0000-0000-000000000001', 'fixture', 'v1', "
-                "'BTCUSDT', '1m', 120000, 999, 999, 999, 999, 1, now(), :payload, :row2, "
+                "'BTCUSDT', '1m', :btc_two, 999, 999, 999, 999, 1, now(), :payload, :row2, "
                 "'validated'), "
                 "('00000000-0000-0000-0000-000000000001', 'fixture', 'v1', "
-                "'BTCUSDT', '1m', 240000, 14, 15, 13, 14, 1, now(), :payload, :row3, "
+                "'BTCUSDT', '1m', :btc_four, 14, 15, 13, 14, 1, now(), :payload, :row3, "
                 "'validated'), "
                 "('00000000-0000-0000-0000-000000000001', 'fixture', 'v1', "
-                "'ETHUSDT', '1m', 180000, 23, 24, 22, 23, 1, now(), :payload, :row4, "
+                "'ETHUSDT', '1m', :eth_three, 23, 24, 22, 23, 1, now(), :payload, :row4, "
                 "'validated')"
             ),
             {
+                "btc_one": BASE_OPEN_TIME_MS + 60_000,
+                "btc_two": BASE_OPEN_TIME_MS + 120_000,
+                "btc_four": BASE_OPEN_TIME_MS + 240_000,
+                "eth_three": BASE_OPEN_TIME_MS + 180_000,
                 "payload": "c" * 64,
                 "row1": "1" * 64,
                 "row2": "2" * 64,
@@ -113,12 +124,12 @@ def _compatibility() -> RecoveryManifest:
     return RecoveryManifest(
         manifest_version=1,
         source_identity=identity,
-        as_of="1970-01-01T00:06:00Z",
+        as_of="2018-01-01T00:06:00Z",
         candidate_venue="binance",
         market_type="spot",
         envelopes=(
-            ObservedEnvelope("BTCUSDT", "1m", 0, 120_000, 2),
-            ObservedEnvelope("ETHUSDT", "1m", 0, 60_000, 2),
+            ObservedEnvelope("BTCUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS + 120_000, 2),
+            ObservedEnvelope("ETHUSDT", "1m", BASE_OPEN_TIME_MS, BASE_OPEN_TIME_MS + 60_000, 2),
         ),
         gaps=(),
         provenance_validation={
@@ -139,7 +150,7 @@ def _plan(
         dump_identity=compatibility.source_identity,
         compatibility_manifest=compatibility,
         compatibility_manifest_sha256=compatibility.sha256(),
-        as_of=datetime(1970, 1, 1, 0, 6, tzinfo=UTC),
+        as_of=datetime(2018, 1, 1, 0, 6, tzinfo=UTC),
         table=table,
     )
 
@@ -261,8 +272,9 @@ def test_default_postgres_key_stream_rejects_unreviewed_canonical_symbol(
             text(
                 "INSERT INTO market_data.candles "
                 '(id, symbol, "interval", open_time, open, high, low, close, volume) '
-                "VALUES (5, 'ADAUSDT', '1m', 0, 1, 1, 1, 1, 1)"
-            )
+                "VALUES (5, 'ADAUSDT', '1m', :open_time, 1, 1, 1, 1, 1)"
+            ),
+            {"open_time": BASE_OPEN_TIME_MS},
         )
 
     with isolated_postgres.connect() as connection:
