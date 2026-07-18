@@ -3,12 +3,28 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import replace
+import subprocess
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import patch
 
+import polars as pl
 import pytest
+import market_structure_lab.data.derived as derived_data
+import market_structure_lab.data.export as snapshot_export
 import market_structure_lab.discovery.runs as discovery_runs
 
+from market_structure_lab.core.artifact_io import read_bounded_regular
+from market_structure_lab.data.canonical import CANONICAL_SCHEMA
+from market_structure_lab.data.derived import (
+    DerivedPublicationIdentity,
+    publish_feature_rows,
+)
+from market_structure_lab.data.export import (
+    SnapshotIdentity,
+    export_partitioned_snapshot,
+)
 from market_structure_lab.discovery import (
     AIInterpretation,
     BehaviourEvidencePack,
@@ -20,6 +36,13 @@ from market_structure_lab.discovery import (
     make_discovery_input,
     publish_ai_interpretations,
     run_discovery,
+)
+from market_structure_lab.discovery.splits import freeze_discovery_provenance
+from market_structure_lab.features.normalization import (
+    PartitionRole as NormalizerPartitionRole,
+    RobustNormalizer,
+    TrainingPartition,
+    fit_robust_normalizer,
 )
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
@@ -90,7 +113,62 @@ def _row(
     )
 
 
-def _fixture(tmp_path, *, rejected: bool = False):
+def _controlled_repository(
+    root: Path,
+    lockfile_bytes: bytes,
+    *,
+    track_module: bool = True,
+) -> tuple[Path, str]:
+    repository = root / "repository"
+    if not repository.exists():
+        repository.mkdir(parents=True)
+        module_path = repository / "src/market_structure_lab/discovery/runs.py"
+        module_path.parent.mkdir(parents=True)
+        module_path.write_text("# controlled executing module fixture\n", encoding="utf-8")
+        if not track_module:
+            (repository / ".gitignore").write_text(
+                "src/market_structure_lab/discovery/runs.py\n",
+                encoding="utf-8",
+            )
+        (repository / "uv.lock").write_bytes(lockfile_bytes)
+        (repository / "tracked.txt").write_text("clean\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repository)], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.email", "fixture@example.invalid"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repository), "config", "user.name", "Fixture"],
+            check=True,
+        )
+        tracked = ["uv.lock", "tracked.txt", "src"] if track_module else [
+            ".gitignore",
+            "uv.lock",
+            "tracked.txt",
+        ]
+        subprocess.run(["git", "-C", str(repository), "add", *tracked], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "commit", "-q", "-m", "fixture"],
+            check=True,
+        )
+    commit = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return repository, commit
+
+
+def _fixture(
+    tmp_path,
+    *,
+    rejected: bool = False,
+    declared_code_commit: str | None = None,
+    normalizer_row_delta: float = 0.0,
+    normalizer_symbols: tuple[str, ...] | None = None,
+    track_runtime_module: bool = True,
+):
     registry = _registry()
     discovery_partition = TimePartition(
         PartitionRole.DISCOVERY,
@@ -136,12 +214,102 @@ def _fixture(tmp_path, *, rejected: bool = False):
             (datetime(2025, 1, 3, 0, 1, tzinfo=UTC), 9.9),
         )
     )
+    lockfile_bytes = b"version = 1\n"
+    lock_sha256 = hashlib.sha256(lockfile_bytes).hexdigest()
+    input_root = tmp_path.parent / f"{tmp_path.name}-inputs"
+    repository_root, actual_code_commit = _controlled_repository(
+        input_root,
+        lockfile_bytes,
+        track_module=track_runtime_module,
+    )
+    code_commit = declared_code_commit or actual_code_commit
+    snapshot_root = input_root / "snapshots"
+    snapshot_candles = pl.DataFrame(
+        [
+            (
+                datetime(2025, 1, 1, tzinfo=UTC),
+                "BTCUSDT",
+                "1m",
+                100.0,
+                101.0,
+                99.0,
+                100.5,
+                10.0,
+            )
+        ],
+        schema=CANONICAL_SCHEMA,
+        orient="row",
+    )
+    snapshot_manifest = export_partitioned_snapshot(
+        (snapshot_candles,),
+        output_root=snapshot_root,
+        identity=SnapshotIdentity(
+            dataset_version="DS-000501",
+            dump_sha256=hashlib.sha256(b"dump").hexdigest(),
+            recovery_sha256=hashlib.sha256(b"recovery").hexdigest(),
+            mapping_version="mapping-v1",
+            config_version="cfg-1",
+            code_commit=code_commit,
+        ),
+    )
+    snapshot_directory = snapshot_root / "dataset_version=DS-000501"
+    normalizer_rows = tuple(
+        replace(
+            row,
+            values={name: float(value) + normalizer_row_delta for name, value in row.values.items()},
+        )
+        for row in discovery_rows
+    )
+    normalizer = fit_robust_normalizer(
+        normalizer_rows,
+        registry,
+        TrainingPartition(
+            split_id=split.split_id,
+            start=discovery_partition.start,
+            end=discovery_partition.end,
+            role=NormalizerPartitionRole.TRAINING,
+            symbols=normalizer_symbols or discovery_partition.symbols,
+        ),
+        "DS-000501",
+        selected_features=("auction_location", "volume_change"),
+    )
+    normalizer_artifact = normalizer.canonical_json()
+    feature_publication_root = input_root / "features"
+    feature_publication = publish_feature_rows(
+        sorted(
+            discovery_rows + development_rows,
+            key=lambda row: (row.symbol, row.timeframe, row.timestamp),
+        ),
+        output_root=feature_publication_root,
+        identity=DerivedPublicationIdentity(
+            dataset_version="DS-000501",
+            dataset_snapshot_sha256=snapshot_manifest.snapshot_sha256,
+            feature_set_id=registry.feature_set_id,
+            feature_registry_sha256=registry.sha256,
+            config_version="cfg-1",
+            profile_version="profile-1",
+            window_policy_id="window-1",
+            event_version="events-v1",
+            normalizer_artifact_sha256=normalizer.artifact_sha256,
+            code_commit=code_commit,
+            uv_lock_sha256=lock_sha256,
+        ),
+        registry=registry,
+        max_rows_per_part=4,
+    )
+    feature_publication_directory = (
+        feature_publication_root
+        / "dataset_version=DS-000501"
+        / f"feature_set={registry.feature_set_id}"
+        / "features"
+    )
     discovery = make_discovery_input(
         partition=discovery_partition,
         rows=discovery_rows,
         registry=registry,
         purpose="fit",
         max_rows=20,
+        publication_manifest=feature_publication,
     )
     development = make_discovery_input(
         partition=development_partition,
@@ -149,16 +317,29 @@ def _fixture(tmp_path, *, rejected: bool = False):
         registry=registry,
         purpose="stability",
         max_rows=20,
+        publication_manifest=feature_publication,
     )
     policy = (
         StabilityPolicy(1.0, 1.0, 0.0, 1.0, 1.0)
         if rejected
         else StabilityPolicy(-1.0, -1.0, 1.0, 0.0, -1.0)
     )
+    provenance = freeze_discovery_provenance(
+        snapshot_manifest=snapshot_manifest,
+        feature_publication=feature_publication,
+        registry=registry,
+        normalizer_artifact=normalizer_artifact,
+        split=split,
+        feature_names=("auction_location", "volume_change"),
+        discovery=discovery,
+        development=development,
+        code_commit=code_commit,
+        lockfile_bytes=lockfile_bytes,
+    )
     config = DiscoveryRunConfig(
         run_id="DR-000502" if rejected else "DR-000501",
         dataset_snapshot_id="DS-000501",
-        dataset_snapshot_sha256=hashlib.sha256(b"dataset").hexdigest(),
+        dataset_snapshot_sha256=snapshot_manifest.snapshot_sha256,
         feature_set_id=registry.feature_set_id,
         registry_sha256=registry.sha256,
         config_version="cfg-1",
@@ -171,12 +352,13 @@ def _fixture(tmp_path, *, rejected: bool = False):
         max_iterations=100,
         tolerance=1e-12,
         stability_policy=policy,
-        code_commit="abcdef1",
-        lock_sha256=hashlib.sha256(b"lock").hexdigest(),
+        code_commit=code_commit,
+        lock_sha256=lock_sha256,
         feature_publication_id="FP-000501",
-        feature_publication_sha256=hashlib.sha256(b"feature-publication").hexdigest(),
+        feature_publication_sha256=feature_publication.publication_sha256,
         normalizer_id="NZ-000501",
-        normalizer_sha256=hashlib.sha256(b"normalizer").hexdigest(),
+        normalizer_sha256=normalizer.artifact_sha256,
+        provenance=provenance,
         started_at=datetime(2026, 7, 17, 3, 0, tzinfo=UTC),
         completed_at=datetime(2026, 7, 17, 3, 1, tzinfo=UTC),
     )
@@ -185,6 +367,13 @@ def _fixture(tmp_path, *, rejected: bool = False):
         "discovery": discovery,
         "development": development,
         "registry": registry,
+        "snapshot_directory": snapshot_directory,
+        "snapshot_manifest": snapshot_manifest,
+        "feature_publication_directory": feature_publication_directory,
+        "feature_publication": feature_publication,
+        "normalizer_artifact": normalizer_artifact,
+        "lockfile_bytes": lockfile_bytes,
+        "repository_root": repository_root,
         "event_ids": tuple(f"EV-{index:02d}" for index in range(12)),
         "durations_seconds": (60.0,) * 12,
         "output_root": tmp_path,
@@ -192,7 +381,11 @@ def _fixture(tmp_path, *, rejected: bool = False):
 
 
 def _run(arguments):
-    return run_discovery(**arguments)
+    supplied = dict(arguments)
+    repository_root = supplied.pop("repository_root")
+    module_path = repository_root / "src/market_structure_lab/discovery/runs.py"
+    with patch.object(discovery_runs, "__file__", str(module_path)):
+        return run_discovery(**supplied)
 
 
 def _interpretation(behaviour) -> AIInterpretation:
@@ -219,6 +412,12 @@ def _interpretation(behaviour) -> AIInterpretation:
 
 def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     arguments = _fixture(tmp_path)
+    provenance = arguments["config"].provenance
+
+    assert provenance is not None
+    assert provenance.feature_partitions
+    assert provenance.feature_names == ("auction_location", "volume_change")
+    assert arguments["feature_publication"].max_buffered_rows <= 4
 
     first = _run(arguments)
     first_bytes = {
@@ -259,6 +458,328 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     }
 
 
+def test_provenance_drift_is_rejected_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    base = _fixture(tmp_path)
+    normalizer = RobustNormalizer.from_json(base["normalizer_artifact"])
+    changed_partition = replace(
+        normalizer.partition,
+        start=normalizer.partition.start + timedelta(minutes=1),
+    )
+    wrong_partition = replace(
+        normalizer,
+        partition=changed_partition,
+        training_partition_sha256=changed_partition.sha256,
+    ).canonical_json()
+    wrong_features = fit_robust_normalizer(
+        base["discovery"].rows,
+        base["registry"],
+        normalizer.partition,
+        normalizer.dataset_snapshot_id,
+        selected_features=("auction_location",),
+    ).canonical_json()
+    changed_registry = FeatureRegistry(
+        base["registry"].feature_set_id,
+        tuple(
+            replace(definition, definition=f"{definition.definition} changed")
+            if definition.name == "auction_location"
+            else definition
+            for definition in base["registry"].definitions
+        ),
+    )
+    wrong_commit_config = copy.copy(base["config"])
+    object.__setattr__(wrong_commit_config, "code_commit", "deadbee")
+    cases = {
+        "missing normalizer": {"normalizer_artifact": None},
+        "wrong training partition": {"normalizer_artifact": wrong_partition},
+        "wrong selected feature list": {"normalizer_artifact": wrong_features},
+        "changed normalizer bytes": {
+            "normalizer_artifact": base["normalizer_artifact"] + b"\n"
+        },
+        "mismatched feature publication": {
+            "feature_publication": replace(
+                base["feature_publication"], publication_sha256="0" * 64
+            )
+        },
+        "mismatched snapshot manifest": {
+            "snapshot_manifest": replace(
+                base["snapshot_manifest"], snapshot_sha256="0" * 64
+            )
+        },
+        "changed registry": {"registry": changed_registry},
+        "uncommitted dirty identity": {
+            "snapshot_manifest": replace(
+                base["snapshot_manifest"],
+                identity=replace(
+                    base["snapshot_manifest"].identity,
+                    code_commit="abcdef1-dirty",
+                ),
+            )
+        },
+        "wrong code commit": {"config": wrong_commit_config},
+        "changed lockfile": {"lockfile_bytes": b"version = 2\n"},
+    }
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("matrix construction was reached before provenance rejection")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    for label, changes in cases.items():
+        arguments = dict(base)
+        arguments.update(changes)
+        with pytest.raises((TypeError, ValueError), match="provenance|normalizer|snapshot|publication|registry|commit|lock"):
+            _run(arguments)
+
+
+def test_public_discovery_rejects_legacy_fixture_bypass_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path)
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("public legacy bypass reached matrix construction")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    with pytest.raises(TypeError, match="unexpected"):
+        replace(
+            arguments["config"],
+            legacy_fixture_schema="phase4-discovery-fixture-v2",
+        )
+
+
+def test_production_discovery_module_exposes_no_legacy_replay_entrypoint() -> None:
+    assert not hasattr(discovery_runs, "replay_frozen_discovery_fixture")
+    assert not hasattr(discovery_runs, "_executing_module_path")
+    assert "legacy_fixture_schema" not in {
+        field.name for field in fields(DiscoveryRunConfig)
+    }
+
+
+@pytest.mark.parametrize("artifact", ("snapshot", "feature publication"))
+def test_on_disk_manifest_byte_tamper_is_rejected_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+    artifact: str,
+) -> None:
+    arguments = _fixture(tmp_path)
+    directory = (
+        arguments["snapshot_directory"]
+        if artifact == "snapshot"
+        else arguments["feature_publication_directory"]
+    )
+    manifest_path = directory / "manifest.json"
+    manifest_path.write_bytes(manifest_path.read_bytes() + b" ")
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("manifest byte tamper reached matrix construction")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    with pytest.raises(ValueError, match=f"{artifact} manifest bytes"):
+        _run(arguments)
+
+
+def test_internally_consistent_false_commit_is_rejected_against_runtime_head(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path, declared_code_commit="deadbeef")
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("false commit reached matrix construction")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    with pytest.raises(ValueError, match="runtime Git HEAD"):
+        _run(arguments)
+
+
+def test_public_discovery_cannot_select_an_unrelated_runtime_repository(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+
+    with pytest.raises(TypeError, match="repository_root|unexpected"):
+        run_discovery(**arguments)
+
+
+def test_dirty_runtime_worktree_is_rejected_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path)
+    (arguments["repository_root"] / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("dirty worktree reached matrix construction")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    with pytest.raises(ValueError, match="dirty"):
+        _run(arguments)
+
+
+def test_ignored_runtime_module_absent_from_head_is_rejected_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path, track_runtime_module=False)
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("ignored runtime module reached matrix construction")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    with pytest.raises(ValueError, match="tracked|HEAD|executing module"):
+        _run(arguments)
+
+
+def test_bounded_regular_read_rejects_parent_traversal_before_open(tmp_path) -> None:
+    base = tmp_path / "base"
+    outside = tmp_path / "outside"
+    base.mkdir()
+    (outside / "nested").mkdir(parents=True)
+    (base / "secret").write_bytes(b"inside")
+    (outside / "secret").write_bytes(b"outside")
+    link = base / "link"
+    try:
+        link.symlink_to(outside / "nested", target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlinks are unavailable: {error}")
+
+    with pytest.raises(RuntimeError, match="parent|traversal|ambiguous"):
+        read_bounded_regular(link / ".." / "secret", 64)
+
+
+@pytest.mark.parametrize("artifact", ("snapshot", "feature publication"))
+@pytest.mark.parametrize(
+    "entry",
+    ("root", "ancestor", "parent_traversal", "marker", "partition", "tree"),
+)
+def test_input_artifact_symlinks_are_rejected_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+    artifact: str,
+    entry: str,
+) -> None:
+    arguments = _fixture(tmp_path / f"{artifact}-{entry}")
+    directory_key = (
+        "snapshot_directory" if artifact == "snapshot" else "feature_publication_directory"
+    )
+    directory = arguments[directory_key]
+    outside = tmp_path / f"outside-{artifact}-{entry}"
+    outside.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if entry == "root":
+            link = tmp_path / f"linked-{artifact}-root"
+            link.symlink_to(directory, target_is_directory=True)
+            arguments[directory_key] = link
+        elif entry == "ancestor":
+            link = tmp_path / f"linked-{artifact}-parent"
+            link.symlink_to(directory.parent, target_is_directory=True)
+            arguments[directory_key] = link / directory.name
+        elif entry == "parent_traversal":
+            target = directory.parent / f"{artifact}-traversal-target"
+            target.mkdir()
+            link = directory.parent / f"{artifact}-traversal-link"
+            link.symlink_to(target, target_is_directory=True)
+            arguments[directory_key] = link / ".." / directory.name
+        elif entry == "marker":
+            marker = directory / "_SUCCESS"
+            target = outside / "_SUCCESS"
+            target.write_bytes(marker.read_bytes())
+            marker.unlink()
+            marker.symlink_to(target)
+        else:
+            manifest = (
+                arguments["snapshot_manifest"]
+                if artifact == "snapshot"
+                else arguments["feature_publication"]
+            )
+            partition = directory / manifest.partitions[0].path
+            if entry == "partition":
+                target = outside / "partition.parquet"
+                target.write_bytes(partition.read_bytes())
+                partition.unlink()
+                partition.symlink_to(target)
+            else:
+                tree = directory / Path(manifest.partitions[0].path).parts[0]
+                target = outside / tree.name
+                tree.replace(target)
+                tree.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlinks are unavailable: {error}")
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("symlinked input artifact reached matrix construction")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    if entry in ("ancestor", "parent_traversal"):
+
+        def ancestor_artifact_was_read(*args, **kwargs):
+            raise AssertionError("artifact under symlinked ancestor was read before rejection")
+
+        monkeypatch.setattr(discovery_runs, "regular_file_matches", ancestor_artifact_was_read)
+    elif entry == "tree":
+        module = snapshot_export if artifact == "snapshot" else derived_data
+
+        def outside_partition_was_read(*args, **kwargs):
+            raise AssertionError("symlinked partition tree was read before rejection")
+
+        monkeypatch.setattr(module, "sha256_regular", outside_partition_was_read)
+    with pytest.raises(
+        (RuntimeError, ValueError),
+        match="symlink|regular|directory|traversal",
+    ):
+        _run(arguments)
+
+
+def test_feature_row_content_forgery_is_rejected_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path)
+    discovery = arguments["discovery"]
+    forged = replace(
+        discovery.rows[0],
+        values={**discovery.rows[0].values, "auction_location": 999.0},
+    )
+    arguments["discovery"] = make_discovery_input(
+        partition=discovery.partition,
+        rows=(forged,) + discovery.rows[1:],
+        registry=arguments["registry"],
+        purpose="fit",
+        max_rows=20,
+        publication_manifest=arguments["feature_publication"],
+    )
+
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("matrix construction was reached before row verification")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    with pytest.raises(ValueError, match="published feature row content"):
+        _run(arguments)
+
+
+@pytest.mark.parametrize(
+    "normalizer_changes",
+    (
+        {"normalizer_row_delta": 1.0},
+        {"normalizer_symbols": ("BTCUSDT", "ETHUSDT", "SOLUSDT")},
+    ),
+)
+def test_normalizer_training_identity_drift_is_rejected_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+    normalizer_changes: dict[str, object],
+) -> None:
+    def matrix_was_touched(*args, **kwargs):
+        raise AssertionError("normalizer training identity drift reached matrix construction")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
+    with pytest.raises(ValueError, match="normalizer training"):
+        arguments = _fixture(tmp_path, **normalizer_changes)
+        _run(arguments)
+
+
 def test_unstable_discovery_run_is_retained_as_rejected_without_behaviours(tmp_path) -> None:
     manifest = _run(_fixture(tmp_path, rejected=True))
 
@@ -284,12 +805,11 @@ def test_discovery_run_detects_stale_stage_tamper_and_identity_conflict(tmp_path
     fresh_root = tmp_path / "identity"
     changed = dict(_fixture(fresh_root))
     _run(changed)
-    changed["config"] = replace(
-        changed["config"],
-        dataset_snapshot_sha256=hashlib.sha256(b"different").hexdigest(),
-    )
-    with pytest.raises(RuntimeError, match="identity conflict"):
-        _run(changed)
+    with pytest.raises(ValueError, match="provenance"):
+        replace(
+            changed["config"],
+            dataset_snapshot_sha256=hashlib.sha256(b"different").hexdigest(),
+        )
 
 
 def test_discovery_replay_rejects_unmanifested_extra_file(tmp_path) -> None:

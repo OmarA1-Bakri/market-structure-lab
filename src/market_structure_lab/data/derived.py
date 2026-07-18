@@ -9,7 +9,7 @@ import math
 import os
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +17,13 @@ from typing import Any, Literal, cast
 
 import polars as pl
 
+from market_structure_lab.core.artifact_io import (
+    bounded_regular_files,
+    read_bounded_regular,
+    regular_file_matches,
+    require_regular_directory,
+    sha256_regular,
+)
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
     FeatureRegistry,
@@ -33,6 +40,8 @@ _FEATURE_SET_ID = re.compile(r"^FS-[0-9]{6}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
 PublicationKind = Literal["features", "events"]
+_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+_MAX_PUBLICATION_ENTRIES = 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +278,8 @@ def publish_feature_rows(
     """Publish registered feature rows with a fixed bounded Parquet row buffer."""
 
     _validate_registry_identity(identity, registry)
+    if identity.normalizer_artifact_sha256 is None:
+        raise ValueError("feature publication requires a normalizer artifact SHA-256")
     schema = _feature_schema(registry)
 
     def converted() -> Iterable[tuple[dict[str, object], datetime, tuple[object, ...]]]:
@@ -392,7 +403,7 @@ def publish_market_events(
 
 def read_derived_manifest(path: str | Path) -> DerivedPublicationManifest:
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(read_bounded_regular(Path(path), _MAX_MANIFEST_BYTES))
         raw_evidence = dict(payload["evidence"])
         raw_evidence.pop("overlap_event_ratio", None)
         raw_evidence["events_by_type"] = tuple(sorted(raw_evidence["events_by_type"].items()))
@@ -425,20 +436,30 @@ def verify_derived_publication(
     require_success: bool = True,
 ) -> None:
     root = Path(directory)
+    require_regular_directory(root)
+    read_bounded_regular(root / MANIFEST_NAME, _MAX_MANIFEST_BYTES)
     active = manifest or read_derived_manifest(root / MANIFEST_NAME)
     logical_hash = hashlib.sha256(_canonical_json(active.logical_dict())).hexdigest()
     if active.publication_sha256 != logical_hash:
         raise ValueError("derived publication manifest logical hash mismatch")
     success = root / SUCCESS_NAME
-    if require_success and (
-        not success.is_file() or success.read_text(encoding="utf-8").strip() != logical_hash
+    if require_success and not regular_file_matches(
+        success, f"{logical_hash}\n".encode("utf-8")
     ):
         raise ValueError("derived publication completion marker is absent or invalid")
+    expected = {item.path for item in active.partitions}
+    actual = {
+        path
+        for path in bounded_regular_files(root, maximum=_MAX_PUBLICATION_ENTRIES)
+        if path.endswith(".parquet")
+    }
+    if actual != expected:
+        raise ValueError("publication contains unmanifested or missing partitions")
     counted = 0
     schema = dict(active.parquet_schema)
     for partition in active.partitions:
         path = root / _validated_partition_path(partition.path)
-        if not path.is_file() or _sha256_file(path) != partition.sha256:
+        if sha256_regular(path) != partition.sha256:
             raise ValueError(f"partition checksum mismatch: {partition.path}")
         actual_schema = {name: str(dtype) for name, dtype in pl.read_parquet_schema(path).items()}
         if actual_schema != schema:
@@ -461,10 +482,83 @@ def verify_derived_publication(
         counted += partition.row_count
     if counted != active.row_count:
         raise ValueError("partition row counts do not match publication row count")
-    expected = {item.path for item in active.partitions}
-    actual = {path.relative_to(root).as_posix() for path in root.rglob("*.parquet")}
-    if actual != expected:
-        raise ValueError("publication contains unmanifested or missing partitions")
+
+
+def feature_partition_records(
+    manifest: DerivedPublicationManifest,
+    rows: Sequence[FeatureRow],
+) -> tuple[DerivedPartitionRecord, ...]:
+    """Return the exact checksum records containing the supplied stable row IDs."""
+
+    if manifest.publication_kind != "features":
+        raise ValueError("feature rows require a feature publication manifest")
+    selected: dict[str, DerivedPartitionRecord] = {}
+    for row in rows:
+        matches = tuple(
+            record
+            for record in manifest.partitions
+            if record.path.startswith(
+                f"symbol={row.symbol}/timeframe={row.timeframe}/"
+            )
+            and _parse_utc(record.min_timestamp) <= row.timestamp <= _parse_utc(record.max_timestamp)
+        )
+        if len(matches) != 1:
+            raise ValueError("feature row is not covered by exactly one publication partition")
+        selected[matches[0].path] = matches[0]
+    return tuple(selected[path] for path in sorted(selected))
+
+
+def verify_published_feature_rows(
+    directory: str | Path,
+    manifest: DerivedPublicationManifest,
+    rows: Sequence[FeatureRow],
+    registry: FeatureRegistry,
+) -> tuple[DerivedPartitionRecord, ...]:
+    """Verify bounded supplied rows are byte-backed by checksum-verified Parquet partitions."""
+
+    verify_derived_publication(directory, manifest)
+    records = feature_partition_records(manifest, rows)
+    if not rows:
+        return records
+    root = Path(directory)
+    paths = [root / record.path for record in records]
+    filters: pl.Expr | None = None
+    grouped: dict[tuple[str, str], list[datetime]] = {}
+    for row in rows:
+        grouped.setdefault((row.symbol, row.timeframe), []).append(row.timestamp)
+    for (symbol, timeframe), timestamps in grouped.items():
+        expression = (
+            (pl.col("symbol") == symbol)
+            & (pl.col("timeframe") == timeframe)
+            & pl.col("timestamp").is_in(timestamps)
+        )
+        filters = expression if filters is None else filters | expression
+    if filters is None:
+        raise RuntimeError("feature row verification filter was not constructed")
+    frame = pl.scan_parquet(paths).filter(filters).collect(engine="streaming")
+    actual: list[FeatureRow] = []
+    for payload in frame.iter_rows(named=True):
+        actual.append(
+            FeatureRow(
+                timestamp=cast(datetime, payload["timestamp"]),
+                information_cutoff=cast(datetime, payload["information_cutoff"]),
+                symbol=cast(str, payload["symbol"]),
+                timeframe=cast(str, payload["timeframe"]),
+                segment_id=cast(int, payload["segment_id"]),
+                dataset_version=cast(str, payload["dataset_version"]),
+                config_version=cast(str, payload["config_version"]),
+                profile_version=cast(str, payload["profile_version"]),
+                window_policy_id=cast(str, payload["window_policy_id"]),
+                feature_set_id=cast(str, payload["feature_set_id"]),
+                registry_id=cast(str, payload["registry_id"]),
+                values={name: payload[name] for name in registry.names},
+            )
+        )
+    expected_json = tuple(sorted(row.canonical_json() for row in rows))
+    actual_json = tuple(sorted(row.canonical_json() for row in actual))
+    if actual_json != expected_json:
+        raise ValueError("published feature row content does not match discovery input")
+    return records
 
 
 def _publish(
@@ -523,8 +617,8 @@ def _publish(
 
     records: list[DerivedPartitionRecord] = []
     buffer: list[dict[str, object]] = []
-    current_partition: tuple[str, int, int] | None = None
-    part_numbers: Counter[tuple[str, int, int]] = Counter()
+    current_partition: tuple[str, str, int, int] | None = None
+    part_numbers: Counter[tuple[str, str, int, int]] = Counter()
     previous_key: tuple[object, ...] | None = None
     total = null_values = warmup_rows = max_buffered = 0
     minimum: datetime | None = None
@@ -537,9 +631,10 @@ def _publish(
             return
         part_numbers[current_partition] += 1
         part_number = part_numbers[current_partition]
-        symbol, year, month = current_partition
+        symbol, timeframe, year, month = current_partition
         relative = (
             Path(f"symbol={_safe_component(symbol, 'symbol')}")
+            / f"timeframe={_safe_component(timeframe, 'timeframe')}"
             / f"year={year:04d}"
             / f"month={month:02d}"
             / f"part-{part_number:06d}.parquet"
@@ -584,6 +679,7 @@ def _publish(
         content_digest.update(b"\n")
         partition = (
             cast(str, payload["symbol"]),
+            cast(str, payload["timeframe"]),
             partition_timestamp.year,
             partition_timestamp.month,
         )

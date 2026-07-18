@@ -22,10 +22,12 @@ from market_structure_lab.discovery.runs import (
 )
 from market_structure_lab.discovery.splits import (
     DiscoveryInput,
+    DiscoveryProvenance,
     FrozenDiscoverySplit,
     PartitionRole,
     TimePartition,
     freeze_split,
+    freeze_discovery_provenance,
     make_discovery_input,
 )
 from market_structure_lab.discovery.stability import (
@@ -46,6 +48,7 @@ from market_structure_lab.discovery.transitions import (
 
 __all__ = [
     "DiscoveryInput",
+    "DiscoveryProvenance",
     "AIInterpretation",
     "BehaviourEvidencePack",
     "ClusterObservation",
@@ -77,6 +80,7 @@ __all__ = [
     "fit_pca",
     "fit_projected_kmeans",
     "freeze_behaviours",
+    "freeze_discovery_provenance",
     "freeze_split",
     "make_discovery_input",
     "pca_projection_sha256",

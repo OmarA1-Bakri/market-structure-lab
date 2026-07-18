@@ -12,6 +12,7 @@ import pytest
 
 from market_structure_lab.data.derived import (
     DerivedPublicationIdentity,
+    feature_partition_records,
     publish_feature_rows,
     publish_market_events,
     read_derived_manifest,
@@ -81,7 +82,11 @@ def registry() -> FeatureRegistry:
     )
 
 
-def identity(active_registry: FeatureRegistry | None = None) -> DerivedPublicationIdentity:
+def identity(
+    active_registry: FeatureRegistry | None = None,
+    *,
+    normalizer_artifact_sha256: str | None = "c" * 64,
+) -> DerivedPublicationIdentity:
     active = active_registry or registry()
     return DerivedPublicationIdentity(
         dataset_version="DS-000009",
@@ -92,7 +97,7 @@ def identity(active_registry: FeatureRegistry | None = None) -> DerivedPublicati
         profile_version="profile-v1",
         window_policy_id="rolling-20",
         event_version="event-v1",
-        normalizer_artifact_sha256=None,
+        normalizer_artifact_sha256=normalizer_artifact_sha256,
         code_commit="0123456789abcdef",
         uv_lock_sha256="b" * 64,
     )
@@ -149,12 +154,32 @@ def test_feature_publication_has_fixed_chunks_and_deterministic_paths(tmp_path: 
     assert [item.row_count for item in first.partitions] == [2, 2, 1]
     assert first.max_buffered_rows == 2
     assert first.evidence.null_value_count == 0
-    assert first.partitions[0].path == ("symbol=BTCUSDT/year=2025/month=01/part-000001.parquet")
+    assert first.partitions[0].path == (
+        "symbol=BTCUSDT/timeframe=1m/year=2025/month=01/part-000001.parquet"
+    )
     published = (
         tmp_path / "first" / "dataset_version=DS-000009" / "feature_set=FS-000009" / "features"
     )
     assert (published / "_SUCCESS").is_file()
     verify_derived_publication(published)
+
+
+def test_feature_publication_requires_normalizer_identity_before_rows_are_read(
+    tmp_path: Path,
+) -> None:
+    active = registry()
+
+    class ExplodingRows:
+        def __iter__(self) -> Iterator[FeatureRow]:
+            raise AssertionError("feature rows were read before provenance validation")
+
+    with pytest.raises(ValueError, match="normalizer"):
+        publish_feature_rows(
+            ExplodingRows(),
+            output_root=tmp_path,
+            identity=identity(active, normalizer_artifact_sha256=None),
+            registry=active,
+        )
 
 
 def test_feature_columns_are_declared_columns_not_a_mapping_blob(tmp_path: Path) -> None:
@@ -191,10 +216,32 @@ def test_partition_numbering_remains_unique_when_a_month_reappears(tmp_path: Pat
 
     paths = tuple(item.path for item in manifest.partitions)
     assert paths == (
-        "symbol=BTCUSDT/year=2025/month=01/part-000001.parquet",
-        "symbol=BTCUSDT/year=2025/month=01/part-000002.parquet",
-        "symbol=BTCUSDT/year=2025/month=02/part-000001.parquet",
+        "symbol=BTCUSDT/timeframe=1h/year=2025/month=01/part-000001.parquet",
+        "symbol=BTCUSDT/timeframe=1h/year=2025/month=02/part-000001.parquet",
+        "symbol=BTCUSDT/timeframe=1m/year=2025/month=01/part-000001.parquet",
     )
+
+
+def test_feature_partition_binding_is_timeframe_aware_for_overlapping_timestamps(
+    tmp_path: Path,
+) -> None:
+    active = registry()
+    one_hour = feature_row(0, active_registry=active, timeframe="1h")
+    one_minute = feature_row(0, active_registry=active, timeframe="1m")
+    manifest = publish_feature_rows(
+        (one_hour, one_minute),
+        output_root=tmp_path,
+        identity=identity(active),
+        registry=active,
+        max_rows_per_part=1,
+    )
+
+    one_hour_record = feature_partition_records(manifest, (one_hour,))
+    one_minute_record = feature_partition_records(manifest, (one_minute,))
+
+    assert one_hour_record != one_minute_record
+    assert "/timeframe=1h/" in one_hour_record[0].path
+    assert "/timeframe=1m/" in one_minute_record[0].path
 
 
 def test_empty_publication_is_explicit_and_idempotent(tmp_path: Path) -> None:

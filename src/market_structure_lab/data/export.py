@@ -12,6 +12,13 @@ from typing import Any, cast
 
 import polars as pl
 
+from market_structure_lab.core.artifact_io import (
+    bounded_regular_files,
+    read_bounded_regular,
+    regular_file_matches,
+    require_regular_directory,
+    sha256_regular,
+)
 from market_structure_lab.data.canonical import (
     CANONICAL_COLUMNS,
     CANONICAL_SCHEMA,
@@ -24,6 +31,8 @@ _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 MANIFEST_NAME = "manifest.json"
 SUCCESS_NAME = "_SUCCESS"
 _IDENTITY_NAME = ".snapshot-identity.json"
+_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+_MAX_SNAPSHOT_ENTRIES = 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,7 +315,7 @@ def export_partitioned_snapshot(
 
 def read_snapshot_manifest(path: str | Path) -> SnapshotManifest:
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(read_bounded_regular(Path(path), _MAX_MANIFEST_BYTES))
         identity = SnapshotIdentity(**payload["identity"])
         partitions = tuple(PartitionRecord(**item) for item in payload["partitions"])
         return SnapshotManifest(
@@ -324,6 +333,8 @@ def read_snapshot_manifest(path: str | Path) -> SnapshotManifest:
 
 def verify_snapshot(directory: str | Path, manifest: SnapshotManifest | None = None) -> None:
     root = Path(directory)
+    require_regular_directory(root)
+    read_bounded_regular(root / MANIFEST_NAME, _MAX_MANIFEST_BYTES)
     active = manifest or read_snapshot_manifest(root / MANIFEST_NAME)
     if active.schema_version != 1:
         raise ValueError("unsupported snapshot manifest schema")
@@ -339,23 +350,24 @@ def verify_snapshot(directory: str | Path, manifest: SnapshotManifest | None = N
     if active.snapshot_sha256 != expected_snapshot_hash:
         raise ValueError("snapshot manifest logical hash mismatch")
     success_path = root / SUCCESS_NAME
-    if (
-        not success_path.is_file()
-        or success_path.read_text(encoding="utf-8").strip() != expected_snapshot_hash
-    ):
+    if not regular_file_matches(success_path, f"{expected_snapshot_hash}\n".encode("utf-8")):
         raise ValueError("snapshot completion marker is absent or invalid")
+    expected_paths = {item.path for item in active.partitions}
+    actual_paths = {
+        path
+        for path in bounded_regular_files(root, maximum=_MAX_SNAPSHOT_ENTRIES)
+        if path.endswith(".parquet")
+    }
+    if actual_paths != expected_paths:
+        raise ValueError("snapshot contains unmanifested or missing partitions")
     counted_rows = 0
     for partition in active.partitions:
         path = root / _validated_relative_path(partition.path)
-        if not path.is_file() or sha256_file(path) != partition.sha256:
+        if sha256_regular(path) != partition.sha256:
             raise ValueError(f"partition checksum mismatch: {partition.path}")
         counted_rows += partition.row_count
     if counted_rows != active.row_count:
         raise ValueError("partition row counts do not match snapshot row count")
-    expected_paths = {item.path for item in active.partitions}
-    actual_paths = {path.relative_to(root).as_posix() for path in root.rglob("*.parquet")}
-    if actual_paths != expected_paths:
-        raise ValueError("snapshot contains unmanifested or missing partitions")
 
 
 def sha256_file(path: str | Path) -> str:

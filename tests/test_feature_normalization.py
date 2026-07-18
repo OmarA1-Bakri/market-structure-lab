@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime, timedelta, timezone
 from types import MappingProxyType
 
@@ -67,6 +68,7 @@ def _partition(role: PartitionRole = PartitionRole.TRAINING) -> TrainingPartitio
         start=START,
         end=START + timedelta(days=1),
         role=role,
+        symbols=("BTCUSDT",),
     )
 
 
@@ -118,6 +120,48 @@ def test_linear_quantiles_and_transformation_match_fixture(registry: FeatureRegi
     assert normalizer.scales == {"signal": 2.5}
     assert normalizer.fit_row_count == 4
     assert normalizer.transform_values(_row(registry, 10, signal=5.0)) == {"signal": 1.0}
+
+
+def test_normalizer_binds_exact_training_rows_and_asset_universe(
+    registry: FeatureRegistry,
+) -> None:
+    assert "symbols" in {field.name for field in fields(TrainingPartition)}
+    partition = TrainingPartition(
+        split_id="walk-forward-v1.train",
+        start=START,
+        end=START + timedelta(days=1),
+        role=PartitionRole.TRAINING,
+        symbols=("BTCUSDT",),
+    )
+    rows = tuple(
+        _row(registry, index, signal=value)
+        for index, value in enumerate((1.0, 2.0, 3.0, 8.0))
+    )
+    normalizer = fit_robust_normalizer(
+        rows,
+        registry,
+        partition,
+        "dataset-v1",
+        selected_features=("signal",),
+    )
+
+    assert normalizer.algorithm_version == "robust-iqr-external-v2"
+    assert normalizer.training_partition_sha256 == partition.sha256
+    assert len(normalizer.training_rows_sha256) == hashlib.sha256().digest_size * 2
+    normalizer.verify_training_rows(rows, registry)
+    changed = replace(rows[0], values={**rows[0].values, "signal": 99.0})
+    with pytest.raises(ValueError, match="training row"):
+        normalizer.verify_training_rows((changed,) + rows[1:], registry)
+
+    unrelated = replace(rows[0], symbol="ETHUSDT")
+    with pytest.raises(ValueError, match="symbol"):
+        fit_robust_normalizer(
+            (unrelated,),
+            registry,
+            partition,
+            "dataset-v1",
+            selected_features=("signal",),
+        )
 
 
 def test_external_runs_are_bounded_and_match_exact_in_memory_quantiles(
@@ -193,6 +237,24 @@ def test_constant_scale_is_one_and_null_remains_null(registry: FeatureRegistry) 
     assert normalizer.transform_values(_row(registry, 2, signal=3.0, constant=None)) == {
         "constant": None
     }
+
+
+def test_transform_row_preserves_narrow_stable_identity(registry: FeatureRegistry) -> None:
+    normalizer = fit_robust_normalizer(
+        [_row(registry, 0, signal=1.0), _row(registry, 1, signal=3.0)],
+        registry,
+        _partition(),
+        "dataset-v1",
+        selected_features=("signal",),
+    )
+    source = _row(registry, 2, signal=5.0)
+
+    transformed = normalizer.transform_row(source)
+
+    assert transformed.metadata_dict() == source.metadata_dict()
+    assert transformed.values["signal"] == pytest.approx(3.0)
+    assert "publication_sha256" not in transformed.to_dict()
+    assert "provenance" not in transformed.to_dict()
 
 
 @pytest.mark.parametrize("role", [PartitionRole.VALIDATION, PartitionRole.HOLDOUT])
@@ -303,11 +365,36 @@ def test_json_is_byte_stable_round_trips_and_detects_tampering(
     assert restored.canonical_json() == encoded
     assert restored.artifact_sha256 == normalizer.artifact_sha256
     assert json.loads(encoded)["artifact_sha256"] == normalizer.artifact_sha256
+    assert normalizer.registry_sha256 == registry.sha256
 
     tampered = json.loads(encoded)
     tampered["medians"]["signal"] = 999.0
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         RobustNormalizer.from_json(json.dumps(tampered))
+
+
+def test_registry_definition_drift_changes_normalizer_identity(
+    registry: FeatureRegistry,
+) -> None:
+    normalizer = fit_robust_normalizer(
+        [_row(registry, 0, signal=1.0), _row(registry, 1, signal=3.0)],
+        registry,
+        _partition(),
+        "dataset-v1",
+        selected_features=("signal",),
+    )
+    changed_registry = FeatureRegistry(
+        registry.feature_set_id,
+        tuple(
+            replace(definition, definition="Changed registry definition")
+            if definition.name == "signal"
+            else definition
+            for definition in registry.definitions
+        ),
+    )
+
+    assert changed_registry.registry_id != registry.registry_id
+    assert changed_registry.sha256 != normalizer.registry_sha256
 
 
 def test_partition_requires_safe_id_utc_and_valid_bounds() -> None:

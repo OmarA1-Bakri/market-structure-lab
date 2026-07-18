@@ -7,6 +7,7 @@ import json
 import math
 import re
 import shutil
+import subprocess
 from collections import defaultdict
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
@@ -19,8 +20,14 @@ from market_structure_lab.core.artifact_io import (
     path_exists_no_follow,
     read_bounded_regular,
     regular_file_matches,
+    require_regular_directory,
     sha256_regular,
 )
+from market_structure_lab.data.derived import (
+    DerivedPublicationManifest,
+    verify_published_feature_rows,
+)
+from market_structure_lab.data.export import SnapshotManifest, verify_snapshot
 from market_structure_lab.discovery.behaviours import FrozenBehaviour, freeze_behaviours
 from market_structure_lab.discovery.evidence import (
     AIInterpretation,
@@ -32,8 +39,11 @@ from market_structure_lab.discovery.motifs import MotifMatch, discover_motifs
 from market_structure_lab.discovery.pca import fit_pca
 from market_structure_lab.discovery.splits import (
     DiscoveryInput,
+    DiscoveryProvenance,
     FrozenDiscoverySplit,
     PartitionRole,
+    freeze_discovery_provenance,
+    make_discovery_input,
 )
 from market_structure_lab.discovery.stability import (
     StabilityPolicy,
@@ -45,6 +55,7 @@ from market_structure_lab.discovery.transitions import (
     estimate_cluster_transitions,
 )
 from market_structure_lab.features.models import FeatureRow
+from market_structure_lab.features.normalization import RobustNormalizer
 from market_structure_lab.features.registry import FeatureRegistry
 from market_structure_lab.experiments import (
     ArtifactIdentity,
@@ -105,9 +116,9 @@ class DiscoveryRunConfig:
     feature_publication_sha256: str | None = None
     normalizer_id: str | None = None
     normalizer_sha256: str | None = None
+    provenance: DiscoveryProvenance | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    legacy_fixture_schema: Literal["phase4-discovery-fixture-v2"] | None = None
 
     def __post_init__(self) -> None:
         _require_pattern(self.run_id, _RUN_ID, "run_id")
@@ -150,23 +161,35 @@ class DiscoveryRunConfig:
             raise TypeError("stability_policy must be a StabilityPolicy")
         _require_pattern(self.code_commit, _CODE_COMMIT, "code_commit")
         _require_sha256(self.lock_sha256, "lock_sha256")
-        if self.legacy_fixture_schema is None:
-            _require_text(self.feature_publication_id, "feature_publication_id")
-            _require_sha256(
-                _require_text(self.feature_publication_sha256, "feature_publication_sha256"),
-                "feature_publication_sha256",
-            )
-            _require_text(self.normalizer_id, "normalizer_id")
-            _require_sha256(
-                _require_text(self.normalizer_sha256, "normalizer_sha256"),
-                "normalizer_sha256",
-            )
-            started_at = _require_utc_datetime(self.started_at, "started_at")
-            completed_at = _require_utc_datetime(self.completed_at, "completed_at")
-            if started_at > completed_at:
-                raise ValueError("started_at cannot be after completed_at")
-        elif self.legacy_fixture_schema != "phase4-discovery-fixture-v2":
-            raise ValueError("unsupported legacy fixture schema")
+        if not isinstance(self.provenance, DiscoveryProvenance):
+            raise TypeError("verified discovery provenance is required")
+        _require_text(self.feature_publication_id, "feature_publication_id")
+        _require_sha256(
+            _require_text(self.feature_publication_sha256, "feature_publication_sha256"),
+            "feature_publication_sha256",
+        )
+        _require_text(self.normalizer_id, "normalizer_id")
+        _require_sha256(
+            _require_text(self.normalizer_sha256, "normalizer_sha256"),
+            "normalizer_sha256",
+        )
+        started_at = _require_utc_datetime(self.started_at, "started_at")
+        completed_at = _require_utc_datetime(self.completed_at, "completed_at")
+        if started_at > completed_at:
+            raise ValueError("started_at cannot be after completed_at")
+        expected_provenance = {
+            "snapshot_manifest_sha256": self.dataset_snapshot_sha256,
+            "derived_publication_sha256": self.feature_publication_sha256,
+            "registry_sha256": self.registry_sha256,
+            "normalizer_sha256": self.normalizer_sha256,
+            "feature_names": self.feature_names,
+            "split_sha256": self.split.sha256,
+            "code_commit": self.code_commit,
+            "lock_sha256": self.lock_sha256,
+        }
+        for field, expected in expected_provenance.items():
+            if getattr(self.provenance, field) != expected:
+                raise ValueError(f"discovery provenance {field} does not match config")
         if not isinstance(self.parent_run_ids, tuple) or len(set(self.parent_run_ids)) != len(
             self.parent_run_ids
         ):
@@ -230,21 +253,34 @@ def run_discovery(
     event_ids: Sequence[str],
     durations_seconds: Sequence[float],
     output_root: Path,
+    snapshot_directory: Path | None = None,
+    snapshot_manifest: SnapshotManifest | None = None,
+    feature_publication_directory: Path | None = None,
+    feature_publication: DerivedPublicationManifest | None = None,
+    normalizer_artifact: bytes | None = None,
+    lockfile_bytes: bytes | None = None,
 ) -> DiscoveryRunManifest:
     """Execute one bounded outcome-blind attempt with an immutable terminal receipt."""
 
     if not isinstance(config, DiscoveryRunConfig):
         raise TypeError("config must be a DiscoveryRunConfig")
-    if config.legacy_fixture_schema is not None:
-        return _run_discovery_implementation(
-            config=config,
-            discovery=discovery,
-            development=development,
-            registry=registry,
-            event_ids=event_ids,
-            durations_seconds=durations_seconds,
-            output_root=output_root,
-        )
+    _validate_run_inputs(config, discovery, development, registry, output_root)
+    _verify_runtime_code_identity(
+        code_commit=config.code_commit,
+        lockfile_bytes=lockfile_bytes,
+    )
+    normalizer = _verify_artifact_provenance(
+        config=config,
+        discovery=discovery,
+        development=development,
+        registry=registry,
+        snapshot_directory=snapshot_directory,
+        snapshot_manifest=snapshot_manifest,
+        feature_publication_directory=feature_publication_directory,
+        feature_publication=feature_publication,
+        normalizer_artifact=normalizer_artifact,
+        lockfile_bytes=lockfile_bytes,
+    )
     trial_config = _trial_config(config, discovery, development, registry)
     try:
         return _run_discovery_implementation(
@@ -255,6 +291,8 @@ def run_discovery(
             event_ids=event_ids,
             durations_seconds=durations_seconds,
             output_root=output_root,
+            normalizer=normalizer,
+            feature_publication=feature_publication,
         )
     except Exception as error:
         try:
@@ -285,23 +323,45 @@ def _run_discovery_implementation(
     event_ids: Sequence[str],
     durations_seconds: Sequence[float],
     output_root: Path,
+    normalizer: RobustNormalizer | None,
+    feature_publication: DerivedPublicationManifest | None,
 ) -> DiscoveryRunManifest:
     """Compute and publish one discovery bundle after the attempt boundary is established."""
 
     _validate_run_inputs(config, discovery, development, registry, output_root)
-    final_dir = output_root / config.run_id
     stage_dir = output_root / f".{config.run_id}.staging"
     if stage_dir.exists():
         raise RuntimeError(f"stale discovery staging directory exists: {stage_dir}")
 
+    matrix_discovery = discovery
+    matrix_development = development
+    if normalizer is not None:
+        if feature_publication is None:
+            raise RuntimeError("verified feature publication is required for normalization")
+        matrix_discovery = make_discovery_input(
+            partition=discovery.partition,
+            rows=(normalizer.transform_row(row) for row in discovery.rows),
+            registry=registry,
+            purpose="fit",
+            max_rows=config.max_rows,
+            publication_manifest=feature_publication,
+        )
+        matrix_development = make_discovery_input(
+            partition=development.partition,
+            rows=(normalizer.transform_row(row) for row in development.rows),
+            registry=registry,
+            purpose="stability",
+            max_rows=config.max_rows,
+            publication_manifest=feature_publication,
+        )
     discovery_matrix = build_feature_matrix(
-        discovery, registry, config.feature_names, config.max_rows
+        matrix_discovery, registry, config.feature_names, config.max_rows
     )
     development_matrix = build_feature_matrix(
-        development, registry, config.feature_names, config.max_rows
+        matrix_development, registry, config.feature_names, config.max_rows
     )
-    selected_discovery = _selected_rows(discovery, discovery_matrix)
-    selected_development = _selected_rows(development, development_matrix)
+    selected_discovery = _selected_rows(matrix_discovery, discovery_matrix)
+    selected_development = _selected_rows(matrix_development, development_matrix)
     events = _validated_strings(event_ids, len(discovery_matrix.values), "event_ids")
     durations = _validated_durations(durations_seconds, len(discovery_matrix.values))
     projection = fit_pca(discovery_matrix, config.pca_components)
@@ -402,16 +462,6 @@ def _run_discovery_implementation(
     )
     manifest_bytes = _json_file(manifest.to_dict())
     payloads["manifest.json"] = manifest_bytes
-    if config.legacy_fixture_schema is not None:
-        if path_exists_no_follow(final_dir):
-            existing = _verify_bundle(final_dir)
-            if existing.get("identity_sha256") != identity_sha256:
-                raise RuntimeError("discovery run identity conflict")
-            if not regular_file_matches(final_dir / "manifest.json", manifest_bytes):
-                raise RuntimeError("discovery run content conflict")
-            return manifest
-        _publish_bundle(stage_dir, final_dir, payloads)
-        return manifest
     save_experiment_result(
         config=_trial_config(config, discovery, development, registry),
         status=(TerminalStatus.COMPLETED if status == "completed" else TerminalStatus.REJECTED),
@@ -569,6 +619,156 @@ def _validate_run_inputs(
         raise TypeError("output_root must be a Path")
 
 
+def _verify_artifact_provenance(
+    *,
+    config: DiscoveryRunConfig,
+    discovery: DiscoveryInput,
+    development: DiscoveryInput,
+    registry: FeatureRegistry,
+    snapshot_directory: Path | None,
+    snapshot_manifest: SnapshotManifest | None,
+    feature_publication_directory: Path | None,
+    feature_publication: DerivedPublicationManifest | None,
+    normalizer_artifact: bytes | None,
+    lockfile_bytes: bytes | None,
+) -> RobustNormalizer:
+    """Verify every concrete artifact before any discovery matrix is constructed."""
+
+    if not isinstance(snapshot_directory, Path):
+        raise TypeError("snapshot directory is required for provenance verification")
+    if not isinstance(snapshot_manifest, SnapshotManifest):
+        raise TypeError("snapshot manifest is required for provenance verification")
+    if not isinstance(feature_publication_directory, Path):
+        raise TypeError("feature publication directory is required for provenance verification")
+    if not isinstance(feature_publication, DerivedPublicationManifest):
+        raise TypeError("feature publication manifest is required for provenance verification")
+    if not isinstance(normalizer_artifact, bytes):
+        raise TypeError("normalizer artifact bytes are required for provenance verification")
+    if not isinstance(lockfile_bytes, bytes):
+        raise TypeError("lockfile bytes are required for provenance verification")
+    require_regular_directory(snapshot_directory)
+    require_regular_directory(feature_publication_directory)
+    _require_manifest_bytes(
+        snapshot_directory / "manifest.json",
+        snapshot_manifest.to_json().encode("utf-8"),
+        "snapshot",
+    )
+    _require_manifest_bytes(
+        feature_publication_directory / "manifest.json",
+        feature_publication.to_json().encode("utf-8"),
+        "feature publication",
+    )
+    verify_snapshot(snapshot_directory, snapshot_manifest)
+    discovery_records = verify_published_feature_rows(
+        feature_publication_directory,
+        feature_publication,
+        discovery.rows,
+        registry,
+    )
+    development_records = verify_published_feature_rows(
+        feature_publication_directory,
+        feature_publication,
+        development.rows,
+        registry,
+    )
+    if discovery_records != discovery.partition_records or (
+        development_records != development.partition_records
+    ):
+        raise ValueError("verified feature publication partition hashes changed")
+    verified = freeze_discovery_provenance(
+        snapshot_manifest=snapshot_manifest,
+        feature_publication=feature_publication,
+        registry=registry,
+        normalizer_artifact=normalizer_artifact,
+        split=config.split,
+        feature_names=config.feature_names,
+        discovery=discovery,
+        development=development,
+        code_commit=config.code_commit,
+        lockfile_bytes=lockfile_bytes,
+    )
+    if verified != config.provenance:
+        raise ValueError("supplied artifacts do not match verified discovery provenance")
+    return RobustNormalizer.from_json(normalizer_artifact)
+
+
+def _verify_runtime_code_identity(
+    *,
+    code_commit: str,
+    lockfile_bytes: bytes | None,
+) -> None:
+    """Bind identities to the clean Git checkout containing this executing module."""
+
+    if not isinstance(lockfile_bytes, bytes):
+        raise TypeError("lockfile bytes are required for runtime code provenance")
+    module_path = Path(__file__).resolve()
+    repository_root = Path(
+        _git_output(module_path.parent, "rev-parse", "--show-toplevel")
+    ).resolve()
+    try:
+        module_relative = module_path.relative_to(repository_root).as_posix()
+    except ValueError as error:
+        raise ValueError("runtime Git top-level does not contain the executing module") from error
+    try:
+        read_bounded_regular(module_path, 16 * 1024 * 1024)
+        tracked = _git_output(
+            repository_root,
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            module_relative,
+        )
+        _git_output(repository_root, "cat-file", "-e", f"HEAD:{module_relative}")
+        _git_output(repository_root, "diff", "--quiet", "HEAD", "--", module_relative)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError(
+            "executing module must be a clean tracked file present in runtime Git HEAD"
+        ) from error
+    if tracked != module_relative:
+        raise ValueError("executing module Git tracking identity is ambiguous")
+    head = _git_output(repository_root, "rev-parse", "HEAD")
+    if head != code_commit:
+        raise ValueError("declared code commit does not match runtime Git HEAD")
+    status = _git_output(
+        repository_root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+    )
+    if status:
+        raise ValueError("runtime Git worktree is dirty")
+    lock_path = repository_root / "uv.lock"
+    try:
+        actual_lockfile = read_bounded_regular(lock_path, 64 * 1024 * 1024)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError("runtime uv.lock is absent or invalid") from error
+    if actual_lockfile != lockfile_bytes:
+        raise ValueError("supplied lockfile bytes do not match runtime uv.lock")
+def _git_output(repository_root: Path, *arguments: str) -> str:
+    try:
+        completed = subprocess.run(
+            ("git", "-C", str(repository_root), *arguments),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError("runtime Git identity is unavailable") from error
+    if completed.returncode != 0:
+        raise ValueError("runtime Git identity is unavailable")
+    return completed.stdout.strip()
+
+
+def _require_manifest_bytes(path: Path, expected: bytes, label: str) -> None:
+    try:
+        matches = regular_file_matches(path, expected)
+    except (OSError, RuntimeError):
+        matches = False
+    if not matches:
+        raise ValueError(f"{label} manifest bytes do not match the supplied manifest")
+
+
 def _feature_row_identity(input_value: DiscoveryInput) -> dict[str, str]:
     first = input_value.rows[0]
     identity = {field: getattr(first, field) for field in _ROW_IDENTITY_FIELDS}
@@ -716,17 +916,17 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
             "transition_confidence_level": _TRANSITION_CONFIDENCE_LEVEL,
         },
     }
-    if config.legacy_fixture_schema is None:
-        payload.update(
-            {
-                "feature_publication_id": config.feature_publication_id,
-                "feature_publication_sha256": config.feature_publication_sha256,
-                "normalizer_id": config.normalizer_id,
-                "normalizer_sha256": config.normalizer_sha256,
-                "started_at": _jsonable(config.started_at),
-                "completed_at": _jsonable(config.completed_at),
-            }
-        )
+    payload.update(
+        {
+            "feature_publication_id": config.feature_publication_id,
+            "feature_publication_sha256": config.feature_publication_sha256,
+            "normalizer_id": config.normalizer_id,
+            "normalizer_sha256": config.normalizer_sha256,
+            "provenance": _jsonable(config.provenance),
+            "started_at": _jsonable(config.started_at),
+            "completed_at": _jsonable(config.completed_at),
+        }
+    )
     return payload
 
 
@@ -736,8 +936,6 @@ def _trial_config(
     development: DiscoveryInput,
     registry: FeatureRegistry,
 ) -> ExperimentConfig:
-    if config.legacy_fixture_schema is not None:
-        raise ValueError("legacy fixture replay does not create a canonical trial receipt")
     feature_publication_id = _require_text(config.feature_publication_id, "feature_publication_id")
     feature_publication_sha256 = _require_text(
         config.feature_publication_sha256, "feature_publication_sha256"

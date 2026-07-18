@@ -23,10 +23,11 @@ from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import FeatureRegistry, FeatureValueKind
 
 
-_ALGORITHM_VERSION = "robust-iqr-external-v1"
+_ALGORITHM_VERSION = "robust-iqr-external-v2"
 _DEFAULT_MAX_ROWS_PER_RUN = 50_000
 _MERGE_FAN_IN = 64
 _FLOAT64 = struct.Struct("<d")
+_ROW_LENGTH = struct.Struct(">Q")
 _IO_FLOATS = 8_192
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$")
 
@@ -47,6 +48,7 @@ class TrainingPartition:
     start: datetime
     end: datetime
     role: PartitionRole
+    symbols: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if not _SAFE_ID.fullmatch(self.split_id):
@@ -55,20 +57,29 @@ class TrainingPartition:
         end = _as_utc(self.end, "partition end")
         if start >= end:
             raise ValueError("partition start must precede end")
+        symbols = _canonical_symbols(self.symbols)
         object.__setattr__(self, "start", start)
         object.__setattr__(self, "end", end)
+        object.__setattr__(self, "symbols", symbols)
 
     def contains(self, information_cutoff: datetime) -> bool:
         cutoff = _as_utc(information_cutoff, "information_cutoff")
         return self.start <= cutoff < self.end
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "split_id": self.split_id,
             "start": _format_utc(self.start),
             "end": _format_utc(self.end),
             "role": self.role.value,
+            "symbols": list(self.symbols),
         }
+
+    @property
+    def sha256(self) -> str:
+        """Return the canonical identity of the complete training partition policy."""
+
+        return hashlib.sha256(_canonical_json(self.to_dict())).hexdigest()
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
@@ -77,6 +88,7 @@ class TrainingPartition:
             start=_parse_datetime(value["start"], "partition start"),
             end=_parse_datetime(value["end"], "partition end"),
             role=PartitionRole(str(value["role"])),
+            symbols=tuple(str(symbol) for symbol in value["symbols"]),
         )
 
 
@@ -87,8 +99,11 @@ class RobustNormalizer:
     dataset_snapshot_id: str
     feature_set_id: str
     registry_id: str
+    registry_sha256: str
     partition: TrainingPartition
+    training_partition_sha256: str
     fit_row_count: int
+    training_rows_sha256: str
     max_rows_per_run: int
     max_buffered_rows: int
     selected_features: tuple[str, ...]
@@ -105,12 +120,18 @@ class RobustNormalizer:
         ):
             if not _SAFE_ID.fullmatch(value):
                 raise ValueError(f"{label} must be a safe, non-empty identifier")
+        if re.fullmatch(r"[0-9a-f]{64}", self.registry_sha256) is None:
+            raise ValueError("registry_sha256 must be a lowercase SHA-256 hex digest")
         if self.algorithm_version != _ALGORITHM_VERSION:
             raise ValueError(f"unsupported normalization algorithm: {self.algorithm_version}")
         if self.partition.role is not PartitionRole.TRAINING:
             raise ValueError("normalizer partition must have the training role")
+        if self.training_partition_sha256 != self.partition.sha256:
+            raise ValueError("training_partition_sha256 does not match the partition")
         if self.fit_row_count < 1:
             raise ValueError("fit_row_count must be positive")
+        if re.fullmatch(r"[0-9a-f]{64}", self.training_rows_sha256) is None:
+            raise ValueError("training_rows_sha256 must be a lowercase SHA-256 hex digest")
         if (
             isinstance(self.max_rows_per_run, bool)
             or not isinstance(self.max_rows_per_run, int)
@@ -158,6 +179,8 @@ class RobustNormalizer:
             feature_set_id=self.feature_set_id,
             registry_id=self.registry_id,
         )
+        if row.symbol not in self.partition.symbols:
+            raise ValueError("feature row symbol is outside the normalizer asset universe")
         transformed: dict[str, float | None] = {}
         for name in self.selected_features:
             value = row.values.get(name)
@@ -167,6 +190,55 @@ class RobustNormalizer:
             number = _numeric_value(value, name)
             transformed[name] = (number - self.medians[name]) / self.scales[name]
         return MappingProxyType(transformed)
+
+    def verify_training_rows(
+        self,
+        rows: Iterable[FeatureRow],
+        registry: FeatureRegistry,
+    ) -> None:
+        """Verify the exact ordered rows and eligible assets that fitted this artifact."""
+
+        if (
+            registry.feature_set_id != self.feature_set_id
+            or registry.registry_id != self.registry_id
+            or registry.sha256 != self.registry_sha256
+        ):
+            raise ValueError("normalizer training row registry identity mismatch")
+        digest = _training_rows_digest(self.partition, self.dataset_snapshot_id, registry)
+        count = 0
+        previous_key: tuple[str, str, datetime] | None = None
+        for row in rows:
+            previous_key = _validate_training_row(
+                row,
+                registry=registry,
+                partition=self.partition,
+                dataset_snapshot_id=self.dataset_snapshot_id,
+                previous_key=previous_key,
+            )
+            _update_training_rows_digest(digest, row)
+            count += 1
+        if count != self.fit_row_count or digest.hexdigest() != self.training_rows_sha256:
+            raise ValueError("normalizer training row identity mismatch")
+
+    def transform_row(self, row: FeatureRow) -> FeatureRow:
+        """Return the same stable row identity with selected numeric values normalized."""
+
+        values = dict(row.values)
+        values.update(self.transform_values(row))
+        return FeatureRow(
+            timestamp=row.timestamp,
+            information_cutoff=row.information_cutoff,
+            symbol=row.symbol,
+            timeframe=row.timeframe,
+            segment_id=row.segment_id,
+            dataset_version=row.dataset_version,
+            config_version=row.config_version,
+            profile_version=row.profile_version,
+            window_policy_id=row.window_policy_id,
+            feature_set_id=row.feature_set_id,
+            registry_id=row.registry_id,
+            values=values,
+        )
 
     @property
     def artifact_sha256(self) -> str:
@@ -178,8 +250,11 @@ class RobustNormalizer:
             "dataset_snapshot_id": self.dataset_snapshot_id,
             "feature_set_id": self.feature_set_id,
             "registry_id": self.registry_id,
+            "registry_sha256": self.registry_sha256,
             "partition": self.partition.to_dict(),
+            "training_partition_sha256": self.training_partition_sha256,
             "fit_row_count": self.fit_row_count,
+            "training_rows_sha256": self.training_rows_sha256,
             "max_rows_per_run": self.max_rows_per_run,
             "max_buffered_rows": self.max_buffered_rows,
             "selected_features": list(self.selected_features),
@@ -211,8 +286,11 @@ class RobustNormalizer:
                 dataset_snapshot_id=str(payload["dataset_snapshot_id"]),
                 feature_set_id=str(payload["feature_set_id"]),
                 registry_id=str(payload["registry_id"]),
+                registry_sha256=str(payload["registry_sha256"]),
                 partition=TrainingPartition.from_dict(payload["partition"]),
+                training_partition_sha256=str(payload["training_partition_sha256"]),
                 fit_row_count=int(payload["fit_row_count"]),
+                training_rows_sha256=str(payload["training_rows_sha256"]),
                 max_rows_per_run=int(payload["max_rows_per_run"]),
                 max_buffered_rows=int(payload["max_buffered_rows"]),
                 selected_features=tuple(str(name) for name in payload["selected_features"]),
@@ -279,17 +357,18 @@ def fit_robust_normalizer(
         buffered_rows = 0
         max_buffered_rows = 0
         run_number = 0
+        training_digest = _training_rows_digest(partition, dataset_snapshot_id, registry)
+        previous_key: tuple[str, str, datetime] | None = None
 
         for row in rows:
-            _validate_row_identity(
+            previous_key = _validate_training_row(
                 row,
+                registry=registry,
+                partition=partition,
                 dataset_snapshot_id=dataset_snapshot_id,
-                feature_set_id=registry.feature_set_id,
-                registry_id=registry.registry_id,
+                previous_key=previous_key,
             )
-            if not partition.contains(row.information_cutoff):
-                raise ValueError("all fitting rows must fall inside the training partition")
-            registry.validate_row(row)
+            _update_training_rows_digest(training_digest, row)
             fit_row_count += 1
             buffered_rows += 1
             max_buffered_rows = max(max_buffered_rows, buffered_rows)
@@ -326,8 +405,11 @@ def fit_robust_normalizer(
         dataset_snapshot_id=dataset_snapshot_id,
         feature_set_id=registry.feature_set_id,
         registry_id=registry.registry_id,
+        registry_sha256=registry.sha256,
         partition=partition,
+        training_partition_sha256=partition.sha256,
         fit_row_count=fit_row_count,
+        training_rows_sha256=training_digest.hexdigest(),
         max_rows_per_run=max_rows_per_run,
         max_buffered_rows=max_buffered_rows,
         selected_features=names,
@@ -335,6 +417,70 @@ def fit_robust_normalizer(
         iqrs=iqrs,
         scales=scales,
     )
+
+
+def _validate_training_row(
+    row: FeatureRow,
+    *,
+    registry: FeatureRegistry,
+    partition: TrainingPartition,
+    dataset_snapshot_id: str,
+    previous_key: tuple[str, str, datetime] | None,
+) -> tuple[str, str, datetime]:
+    _validate_row_identity(
+        row,
+        dataset_snapshot_id=dataset_snapshot_id,
+        feature_set_id=registry.feature_set_id,
+        registry_id=registry.registry_id,
+    )
+    if row.symbol not in partition.symbols:
+        raise ValueError("training row symbol is outside the eligible asset universe")
+    if not partition.contains(row.information_cutoff):
+        raise ValueError("all fitting rows must fall inside the training partition")
+    registry.validate_row(row)
+    key = (row.symbol, row.timeframe, row.timestamp)
+    if previous_key is not None and key <= previous_key:
+        problem = "duplicate" if key == previous_key else "out-of-order"
+        raise ValueError(f"{problem} training row identity")
+    return key
+
+
+def _training_rows_digest(
+    partition: TrainingPartition,
+    dataset_snapshot_id: str,
+    registry: FeatureRegistry,
+) -> Any:
+    digest = hashlib.sha256()
+    digest.update(
+        _canonical_json(
+            {
+                "schema_version": "normalizer-training-rows-v1",
+                "dataset_snapshot_id": dataset_snapshot_id,
+                "feature_set_id": registry.feature_set_id,
+                "registry_id": registry.registry_id,
+                "registry_sha256": registry.sha256,
+                "partition": partition.to_dict(),
+            }
+        )
+    )
+    return digest
+
+
+def _update_training_rows_digest(digest: Any, row: FeatureRow) -> None:
+    encoded = row.canonical_json().encode("utf-8")
+    digest.update(_ROW_LENGTH.pack(len(encoded)))
+    digest.update(encoded)
+
+
+def _canonical_symbols(values: tuple[str, ...]) -> tuple[str, ...]:
+    if not isinstance(values, tuple):
+        raise TypeError("training partition symbols must be a tuple")
+    symbols = tuple(sorted(values))
+    if not symbols or len(set(symbols)) != len(symbols):
+        raise ValueError("training partition symbols must be unique and non-empty")
+    if any(not isinstance(symbol, str) or _SAFE_ID.fullmatch(symbol) is None for symbol in symbols):
+        raise ValueError("training partition symbols must be safe non-empty identifiers")
+    return symbols
 
 
 def _flush_runs(

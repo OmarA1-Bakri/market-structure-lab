@@ -8,6 +8,7 @@ import pytest
 
 from market_structure_lab.discovery.splits import (
     DiscoveryInput,
+    FrozenDiscoverySplit,
     PartitionRole,
     TimePartition,
     freeze_split,
@@ -179,6 +180,27 @@ def test_freeze_split_is_canonical_and_hashes_all_policy_fields() -> None:
         asset_holdouts=("XRPUSDT",),
     )
     assert changed.sha256 != first.sha256
+
+
+def test_frozen_split_rejects_a_forged_digest_from_canonical_content() -> None:
+    discovery, development, holdout = _partitions()
+    valid = freeze_split(
+        split_id="split-v1",
+        discovery=discovery,
+        development=development,
+        holdout=holdout,
+        asset_holdouts=("SOLUSDT",),
+    )
+
+    with pytest.raises(ValueError, match="split.*SHA-256|digest"):
+        FrozenDiscoverySplit(
+            split_id=valid.split_id,
+            discovery=valid.discovery,
+            development=valid.development,
+            holdout=valid.holdout,
+            asset_holdouts=valid.asset_holdouts,
+            sha256="0" * 64,
+        )
 
 
 def test_freeze_split_requires_roles_shared_universe_and_chronological_order() -> None:
