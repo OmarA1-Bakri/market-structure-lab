@@ -23,6 +23,7 @@ unavailable minutes, or crossed into a later research phase.
 | Frozen `uv.lock` SHA-256 | `a16b349b97b4c265129df59092f69981d9150a131772b8ed9f9ebda28dcaf44b` |
 | Frozen Windows Python SHA-256 | `e6c07188984d41b80f822dcdaeaceeb217cdf977f18f79c421a3a53edba895c3` |
 | Immutable dump SHA-256, freshly rechecked | `1b6bcb39af41048b53729e9b094f0229163eb6ff6af9563adb666c96f5fd4da4` |
+| Promoted Phase 0 implementation checkpoint | `388bf19089b6f1011879f65eec546e383b5884b5` |
 
 The frozen worktree was clean before recovery. The supervisor preserved these identities, selected
 only missing work-unit IDs, and recorded `promotion_attempted=false`.
@@ -160,6 +161,7 @@ The dashboard does not convert software completeness into market evidence or an 
 | Docker Compose configuration with non-secret validation values | Passed |
 | `git diff --check` | Passed |
 | Immutable dump hash | Matched the pinned SHA-256 |
+| GitHub checkpoint | Local and `origin/agent/research-lab-foundation` matched `388bf19089b6f1011879f65eec546e383b5884b5` |
 
 The Linux-host full suite reached 891 passes and 7 skips; its 13 remaining cases were the
 Windows-task-runner tests rejected when Linux pytest created scripts under a WSL UNC temporary

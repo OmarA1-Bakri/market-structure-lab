@@ -98,7 +98,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 3 — dashboard contract | Complete at the promoted Phase 0 boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, 285 receipt-bound intervals, snapshot-not-frozen eligibility, and `not_estimable` experiment accuracy. |
 | Task 4 — transition safety | Complete | Raw adjacent binomial/BH research surface removed; boundary-aware dwell/event path is canonical. |
 | Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; verified real-trial count remains `n=0`. |
-| Task 6 — Phase 0 gate | Verification complete; checkpoint pending | Promotion, canonical-view audit, dashboard, written evidence, full Python/PostgreSQL/dashboard/build/config verification are complete. The Lore commit and remote SHA check remain before the Phase B stop gate. |
+| Task 6 — Phase 0 gate | Complete; stopped before Phase B | Promotion, canonical-view audit, dashboard, written evidence, full verification, Lore commit, and remote SHA check are complete at `388bf19089b6f1011879f65eec546e383b5884b5`. |
 | Tasks 7–14 | Approval-gated | Do not execute until the preceding written phase gate is accepted. |
 
 ## Skill and workflow routing
@@ -154,7 +154,7 @@ The authoritative sweep is `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`.
 - [x] Ruff, Mypy, targeted tests, the full Pytest suite, package build, and Compose validation pass.
 - [x] A Phase 0 evidence report lists every command, hash, residual risk, and the remaining phase
       gates. Stop here for explicit approval.
-- [ ] Every completed Phase 0 task has a verified remote commit SHA recorded in the evidence report.
+- [x] Every completed Phase 0 task has a verified remote commit SHA recorded in the evidence report.
 
 ### Phase 4 hardening exit criteria
 
@@ -533,7 +533,7 @@ Check secrets, dump hash, large/generated files, ignored volumes, bounded-memory
 outcome leakage, symbol/session/gap boundaries, exact docs/artifact agreement, and no final-holdout
 access.
 
-- [ ] **Step 4: Write the evidence report and stop**
+- [x] **Step 4: Write the evidence report and stop**
 
 Record changed files, commands/results, reconciliation hashes/counts, residual unavailable ranges,
 test gaps, and every unresolved risk. Do not begin Phase B without explicit user approval.
