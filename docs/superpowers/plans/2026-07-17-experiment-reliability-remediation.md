@@ -628,25 +628,25 @@ the golden replay remains byte-identical after an explicit algorithm-version upd
 - Reuse a shared boundary primitive from the canonical transition path
 - Tests: `tests/test_discovery_motifs.py`, `tests/test_discovery_runs.py`, `tests/test_phase4_golden.py`
 
-- [ ] **Step 1: Add hard-boundary regression tests**
+- [x] **Step 1: Add hard-boundary regression tests**
 
 Cover null-row removal, one-minute gaps, session changes, symbol/timeframe/segment changes, duplicate
 timestamps, out-of-order rows, and non-contiguous `information_cutoff`. No motif window may span any
 break.
 
-- [ ] **Step 2: Build motif inputs from explicit contiguous sequences**
+- [x] **Step 2: Build motif inputs from explicit contiguous sequences**
 
 Do not append only `values[0]` to a coarse `(symbol, timeframe, segment_id)` bucket. Preserve row
 identity/timestamps, split at every approved boundary, and record the feature or multivariate
 definition used.
 
-- [ ] **Step 3: Implement motif stability evidence**
+- [x] **Step 3: Implement motif stability evidence**
 
 Measure recurrence/rank/shape agreement across deterministic seeds or tie policies, subsamples,
 adjacent development periods, assets/regimes, window lengths, exclusion zones, and nearby distance
 parameters. Record rejected motifs rather than silently dropping them.
 
-- [ ] **Step 4: Define promotion interaction**
+- [x] **Step 4: Define promotion interaction**
 
 Cluster behaviours may remain frozen independently, but unstable motifs cannot be published as
 supporting recurring-sequence evidence. Make this distinction explicit in metrics and summaries.
