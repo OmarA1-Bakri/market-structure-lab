@@ -178,7 +178,7 @@ def generate_lab_evidence(
             ),
         },
         "phase_gate": {
-            "active_phase": "Phase 0: complete"
+            "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete"
             if history_promoted
             else "Phase 0: trustworthy foundation",
             "status": (
@@ -187,7 +187,7 @@ def generate_lab_evidence(
                 else "remediation_in_progress"
             ),
             "next_required_evidence": (
-                "obtain explicit approval before Phase 4 provenance and discovery hardening"
+                "obtain explicit approval before Phase C real outcome-blind discovery"
                 if history_promoted
                 else "obtain explicit promotion approval and publish an immutable promotion receipt"
                 if history_complete

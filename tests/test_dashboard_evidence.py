@@ -336,6 +336,13 @@ def test_public_dashboard_evidence_uses_current_phase4_v3_manifest() -> None:
     assert "b20163a74cc0b4c19e2afbd214bf29e31ec14eb0d494e545db4bdc7a5c41ce98" not in (
         artifact.read_text(encoding="utf-8")
     )
+    assert evidence["phase_gate"] == {
+        "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete",
+        "next_required_evidence": (
+            "obtain explicit approval before Phase C real outcome-blind discovery"
+        ),
+        "status": "complete_awaiting_phase_approval",
+    }
 
 
 def test_dashboard_counts_verified_real_trials_exactly_by_mode_and_status(tmp_path: Path) -> None:
@@ -471,10 +478,10 @@ def test_promoted_full_history_uses_checksum_verified_receipt_without_claiming_s
         "reconciliation_provenance_established_snapshot_not_frozen"
     )
     assert evidence["phase_gate"] == {
-        "active_phase": "Phase 0: complete",
+        "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete",
         "status": "complete_awaiting_phase_approval",
         "next_required_evidence": (
-            "obtain explicit approval before Phase 4 provenance and discovery hardening"
+            "obtain explicit approval before Phase C real outcome-blind discovery"
         ),
     }
 
@@ -569,6 +576,33 @@ def test_node_contract_rejects_malformed_trial_ledger_evidence(
 
     assert result.returncode != 0
     assert "trial ledger contract" in result.stderr
+
+
+def test_node_contract_rejects_stale_phase4_approval_gate(tmp_path: Path) -> None:
+    evidence = generate_lab_evidence(
+        _repository(tmp_path / "repository"),
+        generated_at="2026-07-17T03:00:00Z",
+    )
+    evidence["phase_gate"] = {
+        "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete",
+        "next_required_evidence": (
+            "obtain explicit approval before Phase 4 provenance and discovery hardening"
+        ),
+        "status": "complete_awaiting_phase_approval",
+    }
+    artifact = tmp_path / "lab-evidence-v1.json"
+    artifact.write_text(json.dumps(evidence), encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", "dashboard/scripts/verify-lab-evidence.mjs", str(artifact)],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "phase gate" in result.stderr
 
 
 def test_browser_trial_count_validator_rejects_extra_keys() -> None:

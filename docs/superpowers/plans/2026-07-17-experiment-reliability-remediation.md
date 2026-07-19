@@ -89,17 +89,23 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 - Agent skills may review or propose experiments; deterministic code and frozen promotion rules
   decide accepted, rejected, inconclusive, or failed status.
 
-## Active progress snapshot — 2026-07-18
+## Active progress snapshot — 2026-07-19
 
 | Task | Status | Evidence / blocker |
 |---|---|---|
 | Task 1 — golden replay | Complete | Cross-platform deterministic PCA repair and reviewed fixture migration; 86 discovery/golden tests passed on Linux and Windows. |
 | Task 2 — RR-000008 | Complete and explicitly promoted | All 1,583 frozen work units are terminal and verified. The approved append-only promotion has one row, 285 non-overlapping coverage intervals, an immutable receipt, exact origin counts, zero out-of-coverage replacements, and byte-identical replay. |
-| Task 3 — dashboard contract | Complete at the promoted Phase 0 boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, 285 receipt-bound intervals, snapshot-not-frozen eligibility, and `not_estimable` experiment accuracy. |
+| Task 3 — dashboard contract | Complete at the promoted Phase 0 and deterministic Phase 4 boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, 285 receipt-bound intervals, snapshot-not-frozen eligibility, `not_estimable` experiment accuracy, and the explicit approval gate before Phase C. |
 | Task 4 — transition safety | Complete | Raw adjacent binomial/BH research surface removed; boundary-aware dwell/event path is canonical. |
 | Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; verified real-trial count remains `n=0`. |
-| Task 6 — Phase 0 gate | Complete; stopped before Phase B | Promotion, canonical-view audit, dashboard, written evidence, full verification, Lore commit, and remote SHA check are complete at `388bf19089b6f1011879f65eec546e383b5884b5`. |
-| Tasks 7–14 | Approval-gated | Do not execute until the preceding written phase gate is accepted. |
+| Task 6 — Phase 0 gate | Complete | Promotion, canonical-view audit, dashboard, written evidence, full verification, Lore commit, and remote SHA check are complete at `388bf19089b6f1011879f65eec546e383b5884b5`. |
+| Task 7 — concrete provenance | Complete | Snapshot, derived publication, registry/dependencies, normalizer, split, feature order, commit, lock, and admitted rows fail closed before matrix construction. |
+| Task 8 — structural cluster stability | Complete | Seed, unstratified subsample, adjacent-period structure, asset, regime, and nearby-parameter evidence are separately recorded and frozen. |
+| Task 9 — motif boundaries and stability | Complete | Multivariate motifs cannot bridge hard sequence boundaries and retain separate multi-axis stability/support evidence. |
+| Task 10 — transition uncertainty | Complete | Horizon, bootstrap, block selection, confidence, diagnostics, sensitivity, work caps, and descriptive-only terminology are frozen. |
+| Task 11 — semantic leakage evidence | Complete | Dependency/builder contracts, independent review receipts, negative tests, and pre-consumption guards are bound; residual manual review remains explicit. |
+| Task 12 — Phase 4 hardening gate | Complete locally; stopped before Phase C | Deterministic hardening evidence is committed at `b69e38973d5a30cacf636a399d0b30d76d794004`; the commit remains local until a leader-authorized push, so the remote-SHA criterion stays open. |
+| Tasks 13–14 | Approval-gated | Do not run real outcome-blind discovery, outcome attachment, validation, or edge evaluation without the preceding written gate and explicit approval. |
 
 ## Skill and workflow routing
 

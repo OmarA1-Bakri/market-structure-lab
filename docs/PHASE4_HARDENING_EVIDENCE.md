@@ -12,9 +12,12 @@ commit. This report closes the software-hardening checklist only. It does **not*
 discovery run, inspect final-holdout rows or outcomes, attach outcomes, calibrate thresholds on
 market data, validate a behaviour, construct a strategy, or claim an edge.
 
-Execution stops here for explicit approval before Phase C. No database, dump, protected dataset,
-reconciliation publication, research snapshot, real `DR-*` run, trial ledger, or final holdout was
-read or mutated for this gate.
+Execution stops here for explicit approval before Phase C. No database, dump, protected raw
+dataset, research snapshot, real `DR-*` run, or final holdout was read or mutated for this gate. The
+dashboard generator read the committed reconciliation and freshness publications without mutation.
+No real or durable repository trial ledger containing empirical receipts existed to consume or
+mutate; the generator verified the empty ledger path read-only, and temporary test ledgers were
+exercised to prove terminal accounting.
 
 ## Hardening commits reviewed
 
@@ -25,10 +28,22 @@ read or mutated for this gate.
 | Task 9 — motif boundaries and stability | `5c2ee0d` | `eb301c7` | verified |
 | Task 10 — transition uncertainty policy | `a7f8d5d` | `17ae818` | verified |
 | Task 11 — semantic leakage evidence | `bd9f82b` | included in the same reviewed checkpoint | verified |
+| Task 12 — verification and evidence | `b69e38973d5a30cacf636a399d0b30d76d794004` | this local evidence checkpoint | local; not pushed |
 
-The Task 12 documentation and verification commit is intentionally local because this task
-explicitly prohibits pushing. Its local SHA is reported after commit; remote checkpointing therefore
-remains an administrative follow-up and does not authorize Phase C.
+The Task 12 documentation and verification commit
+`b69e38973d5a30cacf636a399d0b30d76d794004` is intentionally local because Task 12 prohibited
+pushing. The remote-SHA criterion therefore remains unchecked until a leader-authorized push;
+neither this local checkpoint nor a later administrative push authorizes Phase C.
+
+## Independent Task 12 review closure
+
+The follow-up review found stale phase-gate presentation rather than an algorithm defect. The
+generator, Python tests, Node verifier, browser runtime validator, and committed public evidence now
+agree that Phase 0 and deterministic Phase 4 hardening are complete and that explicit approval is
+required before Phase C real outcome-blind discovery. The canonical progress snapshot lists Tasks
+7–12 complete and Tasks 13–14 approval-gated. The public evidence was regenerated twice at the same
+explicit UTC timestamp; both complete files had SHA-256
+`6c88747b4580d106c93ecdff96f7e29264cd619b8605b45eff946dbc340b25e4`.
 
 ## Defects found by the gate
 
@@ -69,8 +84,11 @@ ignored rather than committed as repository artefacts.
 | `uv build` | passed; source distribution and wheel built | `186e5dd79aaceea230c85eae1967e481bcc78d2d63521aed863a943683fa6317` |
 | `POSTGRES_PASSWORD=... PGADMIN_DEFAULT_PASSWORD=... docker compose config --quiet` | passed with non-secret process-only check values | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 | Dashboard evidence verification, lint, typecheck, and build | `passed; evidence contract verified (25 symbols, 26 features), lint/typecheck clean, production build completed` | `842b0c0f3612a26dcdc506faa27576d00a8ac900c71d3d2aff388a10d1bbc5f8` |
+| Corrected dashboard evidence generation twice at `2026-07-19T14:36:43Z` | passed; both complete files were byte-identical | `9602efdd6e681514d300eb36d5b89e501c64fae4de4ef817039ea83b2d144d34` |
+| Corrected dashboard contract verification, lint, typecheck, and build | passed; public contract verified and production build completed | `af4c357edeed4b45d0ce160bf4659318bd39382f865a99afc67def04379f3b8a` |
 | `git diff --check` before documentation | passed | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 | Final Ruff, 81 doc-sensitive/provenance tests, Mypy, lock, and diff validation | passed; 144 files formatted, 81 tests, 78 typed source files | `a3c9ce0021bc8af0f1e43dfa7e1ff6ef94c5505bed8e171bc0b91233b17fac6d` |
+| Follow-up Ruff, 82 doc-sensitive/provenance tests, Mypy, lock, and diff validation | passed; 144 files formatted, 82 tests, 78 typed source files | `c9764e0b8f33c65fd97b9ced8cd56cbeae57dfb5bd503933b8906d53adda5bf6` |
 
 The WSL failures were not treated as passes. Every failure was in
 `tests/test_daily_candle_refresh_runner.py` and reported that a temporary PowerShell script was not
@@ -112,7 +130,7 @@ Current committed software-fixture identities are:
 - interpretation publication manifest:
   `b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119`;
 - generated dashboard evidence:
-  `c8f0c4abc9dc4e08cb2f4fcd4842b1b2319c0f8d605333f9f345a4b6ded5ca9e`.
+  `6c88747b4580d106c93ecdff96f7e29264cd619b8605b45eff946dbc340b25e4`.
 
 ## Manual integrity review
 

@@ -1003,10 +1003,10 @@
       }
     ]
   },
-  "generated_at": "2026-07-18T18:59:48Z",
+  "generated_at": "2026-07-19T14:36:43Z",
   "phase_gate": {
-    "active_phase": "Phase 0: complete",
-    "next_required_evidence": "obtain explicit approval before Phase 4 provenance and discovery hardening",
+    "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete",
+    "next_required_evidence": "obtain explicit approval before Phase C real outcome-blind discovery",
     "status": "complete_awaiting_phase_approval"
   },
   "reconciliation": {

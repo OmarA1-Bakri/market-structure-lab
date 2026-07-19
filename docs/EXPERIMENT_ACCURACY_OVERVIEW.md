@@ -63,7 +63,13 @@ market evidence. A new research snapshot still requires its own frozen provenanc
 
 ### 3. Discovery software: restored deterministic fixture replay, not market evidence
 
-The committed Phase 4 fixture contains 16 discovery rows and eight development rows (`docs/DISCOVERY_MVP.md:100-105`). It exercises the real split, matrix, PCA, K-means, stability, motif, transition, behaviour, evidence, and publication APIs. The original review reproduced three cross-platform golden failures caused by last-bit SciPy/LAPACK variation entering identity-bearing PCA projections. The repair introduced an explicit `deterministic-pca-v2` canonical numeric boundary, fail-closed handling for non-identifiable singular subspaces, and a reviewed fixture migration (`docs/benchmarks/phase4-golden-drift-diagnosis.md`).
+The committed Phase 4 fixture contains 16 discovery rows and eight development rows
+(`docs/DISCOVERY_MVP.md`, “Golden replay”). It exercises the real split, matrix, PCA, K-means,
+stability, motif, transition, behaviour, evidence, and publication APIs. The original review
+reproduced three cross-platform golden failures caused by last-bit SciPy/LAPACK variation entering
+identity-bearing PCA projections. The repair introduced an explicit `deterministic-pca-v2`
+canonical numeric boundary, fail-closed handling for non-identifiable singular subspaces, and a
+reviewed fixture migration (`docs/benchmarks/phase4-golden-drift-diagnosis.md`).
 
 The original 86-test cross-platform repair remains part of the audit trail. The subsequent Phase 4
 hardening gate ran 414 focused Phase B tests, 50 trial-accounting tests, 10 holdout/leakage
@@ -245,4 +251,4 @@ Phase 5 validation. Phase C and all later empirical work remain separately appro
 | Make motifs boundary-safe and separately stable | `5c2ee0d` | implementation and review checkpoint `eb301c7` are remote ancestors at cutoff | Multivariate boundary and multi-axis motif evidence verified; rejected motifs remain recorded |
 | Freeze dependence-aware descriptive transition policy | `a7f8d5d` | implementation and review checkpoint `17ae818` are remote ancestors at cutoff | Horizon, bootstrap, block selection, diagnostics, sensitivity, work caps, and descriptive terminology verified |
 | Bind semantic leakage evidence before producer replay | `bd9f82b` | `origin/agent/research-lab-foundation` matched the baseline at cutoff | Dependency and builder evidence, independent review receipt, negative tests, and pre-consumption guards verified; manual semantic review remains required |
-| Close the Phase 4 deterministic hardening gate | local Task 12 evidence commit | intentionally not pushed by task constraint | 414 Phase B tests; 1,100-test Windows suite; every-byte clean-root replay; boundedness, holdout, provenance, accounting, boundary, and terminology audit; stop before Phase C |
+| Close the Phase 4 deterministic hardening gate | `b69e38973d5a30cacf636a399d0b30d76d794004` | intentionally local and not pushed by task constraint | 414 Phase B tests; 1,100-test Windows suite; every-byte clean-root replay; boundedness, holdout, provenance, accounting, boundary, and terminology audit; stop before Phase C |

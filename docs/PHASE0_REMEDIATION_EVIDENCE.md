@@ -129,8 +129,8 @@ These ranges remain explicit unavailable evidence. They were not interpolated, f
 
 ## Dashboard evidence
 
-`dashboard/public/data/lab-evidence-v1.json`, generated at `2026-07-18T18:59:48Z`, has SHA-256
-`61d4bc89f9a87a2ed5a57250f18388f00014e525e72f5095ac94cee8e32c04ba`. It is regenerated from
+`dashboard/public/data/lab-evidence-v1.json`, regenerated at `2026-07-19T14:36:43Z`, has SHA-256
+`6c88747b4580d106c93ecdff96f7e29264cd619b8605b45eff946dbc340b25e4`. It is generated from
 the checksum-verified promotion receipt and reports:
 
 - `complete_promoted` and `full-history reconciliation promoted`;
@@ -139,7 +139,9 @@ the checksum-verified promotion receipt and reports:
 - 285 promoted verified intervals and the immutable promotion receipt identities;
 - reconciliation provenance established, while snapshot eligibility remains blocked until a new
   immutable research snapshot is explicitly frozen;
-- zero real trials and accuracy `not_estimable`.
+- zero real trials and accuracy `not_estimable`; and
+- Phase 0 plus deterministic Phase 4 hardening complete, awaiting explicit approval before Phase C
+  real outcome-blind discovery.
 
 The dashboard does not convert software completeness into market evidence or an edge claim.
 

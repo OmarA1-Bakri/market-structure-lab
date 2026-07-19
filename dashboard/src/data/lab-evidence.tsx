@@ -543,7 +543,10 @@ export function isLabEvidence(value: unknown): value is LabEvidence {
     ((phase.status === "remediation_in_progress" &&
       phase.active_phase === "Phase 0: trustworthy foundation") ||
       (phase.status === "complete_awaiting_phase_approval" &&
-        phase.active_phase === "Phase 0: complete")) &&
+        phase.active_phase ===
+          "Phase 0 + Phase 4 deterministic hardening: complete" &&
+        phase.next_required_evidence ===
+          "obtain explicit approval before Phase C real outcome-blind discovery")) &&
     typeof phase.next_required_evidence === "string" &&
     phase.next_required_evidence.length > 0
   );
