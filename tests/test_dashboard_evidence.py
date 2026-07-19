@@ -233,7 +233,10 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     assert replay["runs"]["stable"]["transition_algorithm_version"] == (
         "boundary-aware-dwell-transitions-v2"
     )
-    assert replay["runs"]["stable"]["behaviour_ids"] == ["B-CB3E7F47FE808F3C", "B-D6E06239FB9EC1EF"]
+    assert replay["runs"]["stable"]["behaviour_ids"] == [
+        "B-95434DA32383B8D9",
+        "B-D36FD2F5998A3854",
+    ]
     assert {item["neutral_name"] for item in replay["behaviours"]} == {
         "High Volume Auction State",
         "Low Volume Auction State",

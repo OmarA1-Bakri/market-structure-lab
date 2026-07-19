@@ -7,7 +7,7 @@
   },
   "interpretations": [
     {
-      "behaviour_id": "B-D6E06239FB9EC1EF",
+      "behaviour_id": "B-D36FD2F5998A3854",
       "neutral_name": "Low Volume Auction State",
       "description": "Observed windows combine a low auction-location value with declining relative volume across both fixture assets.",
       "candidate_mechanism_inference": "Inference: the joint configuration may reflect a recurring low-location auction condition with contracting activity, without identifying its cause.",
@@ -31,7 +31,7 @@
       ]
     },
     {
-      "behaviour_id": "B-CB3E7F47FE808F3C",
+      "behaviour_id": "B-95434DA32383B8D9",
       "neutral_name": "High Volume Auction State",
       "description": "Observed windows combine a high auction-location value with rising relative volume across both fixture assets.",
       "candidate_mechanism_inference": "Inference: the joint configuration may reflect a recurring high-location auction condition with expanding activity, without identifying its cause.",

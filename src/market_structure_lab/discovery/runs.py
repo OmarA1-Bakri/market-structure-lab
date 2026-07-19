@@ -46,6 +46,8 @@ from market_structure_lab.discovery.splits import (
     make_discovery_input,
 )
 from market_structure_lab.discovery.stability import (
+    STABILITY_ALGORITHM_VERSION,
+    AdjacentPeriodStabilityPolicy,
     StabilityPolicy,
     evaluate_cluster_stability,
 )
@@ -109,6 +111,7 @@ class DiscoveryRunConfig:
     max_iterations: int
     tolerance: float
     stability_policy: StabilityPolicy
+    adjacent_period_stability_policy: AdjacentPeriodStabilityPolicy
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -159,6 +162,10 @@ class DiscoveryRunConfig:
             raise ValueError("tolerance must be finite and non-negative")
         if not isinstance(self.stability_policy, StabilityPolicy):
             raise TypeError("stability_policy must be a StabilityPolicy")
+        if not isinstance(self.adjacent_period_stability_policy, AdjacentPeriodStabilityPolicy):
+            raise TypeError(
+                "adjacent_period_stability_policy must be an AdjacentPeriodStabilityPolicy"
+            )
         _require_pattern(self.code_commit, _CODE_COMMIT, "code_commit")
         _require_sha256(self.lock_sha256, "lock_sha256")
         if not isinstance(self.provenance, DiscoveryProvenance):
@@ -380,11 +387,13 @@ def _run_discovery_implementation(
         projection=projection,
         base_result=clustering,
         symbols=tuple(row.symbol for row in selected_development),
+        asset_universe=config.split.development.symbols,
         periods=periods,
         period_order=period_order,
         seeds=config.seeds,
         subsample_fraction=_SUBSAMPLE_FRACTION,
         policy=config.stability_policy,
+        adjacent_period_policy=config.adjacent_period_stability_policy,
     )
     behaviours = freeze_behaviours(
         run_id=config.run_id,
@@ -744,6 +753,7 @@ def _verify_runtime_code_identity(
         raise ValueError("runtime uv.lock is absent or invalid") from error
     if actual_lockfile != lockfile_bytes:
         raise ValueError("supplied lockfile bytes do not match runtime uv.lock")
+
 def _git_output(repository_root: Path, *arguments: str) -> str:
     try:
         completed = subprocess.run(
@@ -902,11 +912,13 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
         "max_iterations": config.max_iterations,
         "tolerance": config.tolerance,
         "stability_policy": _jsonable(config.stability_policy),
+        "adjacent_period_stability_policy": _jsonable(config.adjacent_period_stability_policy),
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
         "orchestration_parameters": {
             "subsample_fraction": _SUBSAMPLE_FRACTION,
+            "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
             "motif_max_window_length": _MOTIF_MAX_WINDOW_LENGTH,
             "motif_exclusion_zone": _MOTIF_EXCLUSION_ZONE,
             "motif_top_k": _MOTIF_TOP_K,
@@ -943,7 +955,7 @@ def _trial_config(
     normalizer_id = _require_text(config.normalizer_id, "normalizer_id")
     normalizer_sha256 = _require_text(config.normalizer_sha256, "normalizer_sha256")
     rows = discovery.rows + development.rows
-    symbols = tuple(sorted({row.symbol for row in rows}))
+    symbols = config.split.development.symbols
     timeframes = tuple(sorted({row.timeframe for row in rows}))
     partitions = (config.split.discovery, config.split.development, config.split.holdout)
     ranges = tuple(

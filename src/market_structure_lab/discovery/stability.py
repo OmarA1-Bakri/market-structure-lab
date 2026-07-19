@@ -7,7 +7,7 @@ import random
 from collections import Counter
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Sequence
+from typing import Literal, Sequence
 
 from market_structure_lab.discovery.kmeans import KMeansResult, fit_kmeans
 from market_structure_lab.discovery.matrix import FeatureMatrix
@@ -16,6 +16,7 @@ from market_structure_lab.discovery.splits import PartitionRole
 
 _MAX_ITERATIONS = 100
 _TOLERANCE = 1e-12
+STABILITY_ALGORITHM_VERSION = "cluster-stability-v2"
 
 
 def adjusted_rand_index(left: Sequence[int], right: Sequence[int]) -> float:
@@ -72,6 +73,149 @@ class StabilityPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class AdjacentPeriodStabilityPolicy:
+    """Identified frozen gates for adjacent-period structural drift."""
+
+    policy_id: str
+    policy_purpose: Literal["software_fixture", "research"]
+    maximum_centroid_displacement: float
+    maximum_within_cluster_scale_change: float
+    maximum_assignment_margin_drift: float
+    minimum_cluster_event_support: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.policy_id, str) or not self.policy_id.strip():
+            raise ValueError("policy_id must be a non-empty string")
+        if self.policy_purpose not in ("software_fixture", "research"):
+            raise ValueError("policy_purpose must be software_fixture or research")
+        for value, label in (
+            (self.maximum_centroid_displacement, "maximum_centroid_displacement"),
+            (
+                self.maximum_within_cluster_scale_change,
+                "maximum_within_cluster_scale_change",
+            ),
+            (self.maximum_assignment_margin_drift, "maximum_assignment_margin_drift"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (float, int)):
+                raise TypeError(f"{label} must be a finite number")
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError(f"{label} must be finite")
+            if numeric < 0.0:
+                raise ValueError(f"{label} must be non-negative")
+        if (
+            isinstance(self.minimum_cluster_event_support, bool)
+            or not isinstance(self.minimum_cluster_event_support, int)
+            or self.minimum_cluster_event_support < 1
+        ):
+            raise ValueError("minimum_cluster_event_support must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ClusterPeriodSupport:
+    """Per-period, per-cluster event support with explicit zero-count assets."""
+
+    period: str
+    cluster_label: int
+    event_count: int
+    asset_event_counts: tuple[tuple[str, int], ...]
+    asset_coverage: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.period, str) or not self.period.strip():
+            raise ValueError("period must be a non-empty string")
+        if (
+            isinstance(self.cluster_label, bool)
+            or not isinstance(self.cluster_label, int)
+            or self.cluster_label < 0
+        ):
+            raise ValueError("cluster_label must be a non-negative integer")
+        if (
+            isinstance(self.event_count, bool)
+            or not isinstance(self.event_count, int)
+            or self.event_count < 0
+        ):
+            raise ValueError("event_count must be a non-negative integer")
+        if not self.asset_event_counts:
+            raise ValueError("asset_event_counts must be non-empty")
+        names = tuple(name for name, _ in self.asset_event_counts)
+        if names != tuple(sorted(names)) or len(set(names)) != len(names):
+            raise ValueError("asset_event_counts must use unique canonical asset order")
+        if any(not isinstance(name, str) or not name.strip() for name in names):
+            raise ValueError("asset_event_counts must use non-empty asset names")
+        counts = tuple(count for _, count in self.asset_event_counts)
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0 for count in counts
+        ):
+            raise ValueError("asset event counts must be non-negative integers")
+        if sum(counts) != self.event_count:
+            raise ValueError("asset event counts must sum to event_count")
+        _require_bounded(self.asset_coverage, "asset_coverage", 0.0, 1.0)
+        expected_coverage = sum(count > 0 for count in counts) / len(counts)
+        if not math.isclose(self.asset_coverage, expected_coverage, abs_tol=1e-12):
+            raise ValueError("asset_coverage must match the explicit asset event counts")
+
+
+@dataclass(frozen=True, slots=True)
+class AdjacentClusterEvidence:
+    """Structural drift for one frozen cluster across an adjacent period pair."""
+
+    cluster_label: int
+    centroid_displacement: float | None
+    within_cluster_scale_change: float | None
+    assignment_margin_drift: float | None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.cluster_label, bool)
+            or not isinstance(self.cluster_label, int)
+            or self.cluster_label < 0
+        ):
+            raise ValueError("cluster_label must be a non-negative integer")
+        for value, label in (
+            (self.centroid_displacement, "centroid_displacement"),
+            (self.within_cluster_scale_change, "within_cluster_scale_change"),
+            (self.assignment_margin_drift, "assignment_margin_drift"),
+        ):
+            if value is not None and _require_finite(value, label) < 0.0:
+                raise ValueError(f"{label} must be non-negative")
+        present = tuple(
+            value is not None
+            for value in (
+                self.centroid_displacement,
+                self.within_cluster_scale_change,
+                self.assignment_margin_drift,
+            )
+        )
+        if any(present) and not all(present):
+            raise ValueError("adjacent cluster drift metrics must be complete or all absent")
+
+
+@dataclass(frozen=True, slots=True)
+class AdjacentPeriodEvidence:
+    """Frequency and structural drift for one chronological adjacent-period pair."""
+
+    earlier_period: str
+    later_period: str
+    frequency_js_distance: float
+    clusters: tuple[AdjacentClusterEvidence, ...]
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.earlier_period, "earlier_period"),
+            (self.later_period, "later_period"),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{label} must be a non-empty string")
+        if self.earlier_period == self.later_period:
+            raise ValueError("adjacent periods must be distinct")
+        _require_bounded(self.frequency_js_distance, "frequency_js_distance", 0.0, 1.0)
+        labels = tuple(item.cluster_label for item in self.clusters)
+        if not self.clusters or labels != tuple(range(len(self.clusters))):
+            raise ValueError("adjacent cluster evidence must use complete canonical labels")
+
+
+@dataclass(frozen=True, slots=True)
 class StabilityReport:
     """Complete evidence used to accept or reject a cluster definition."""
 
@@ -104,6 +248,54 @@ class StabilityReport:
         object.__setattr__(self, "accepted", _meets_policy(self, self.policy))
 
 
+@dataclass(frozen=True, slots=True)
+class StructuralStabilityReport(StabilityReport):
+    """Versioned adjacent-period structural evidence for new stability evaluations."""
+
+    adjacent_period_policy: AdjacentPeriodStabilityPolicy
+    cluster_period_support: tuple[ClusterPeriodSupport, ...]
+    adjacent_period_evidence: tuple[AdjacentPeriodEvidence, ...]
+    algorithm_version: str = field(default=STABILITY_ALGORITHM_VERSION, init=False)
+
+    def __post_init__(self) -> None:
+        super(StructuralStabilityReport, self).__post_init__()
+        if not isinstance(self.adjacent_period_policy, AdjacentPeriodStabilityPolicy):
+            raise TypeError("adjacent_period_policy must be an AdjacentPeriodStabilityPolicy")
+        if not self.cluster_period_support:
+            raise ValueError("cluster_period_support must be non-empty")
+        if not self.adjacent_period_evidence:
+            raise ValueError("adjacent_period_evidence must be non-empty")
+        if self.algorithm_version != STABILITY_ALGORITHM_VERSION:
+            raise ValueError("algorithm_version must match the implemented stability algorithm")
+        object.__setattr__(
+            self,
+            "accepted",
+            self.accepted and _meets_adjacent_period_policy(self, self.adjacent_period_policy),
+        )
+
+    @property
+    def minimum_cluster_event_support(self) -> int:
+        return min(item.event_count for item in self.cluster_period_support)
+
+    @property
+    def maximum_centroid_displacement(self) -> float | None:
+        return _maximum_complete_adjacent_metric(
+            self.adjacent_period_evidence, "centroid_displacement"
+        )
+
+    @property
+    def maximum_within_cluster_scale_change(self) -> float | None:
+        return _maximum_complete_adjacent_metric(
+            self.adjacent_period_evidence, "within_cluster_scale_change"
+        )
+
+    @property
+    def maximum_assignment_margin_drift(self) -> float | None:
+        return _maximum_complete_adjacent_metric(
+            self.adjacent_period_evidence, "assignment_margin_drift"
+        )
+
+
 def evaluate_cluster_stability(
     *,
     discovery: FeatureMatrix,
@@ -111,12 +303,14 @@ def evaluate_cluster_stability(
     projection: PCAProjection,
     base_result: KMeansResult,
     symbols: Sequence[str],
+    asset_universe: Sequence[str],
     periods: Sequence[str],
     period_order: Sequence[str],
     seeds: Sequence[int],
     subsample_fraction: float,
     policy: StabilityPolicy,
-) -> StabilityReport:
+    adjacent_period_policy: AdjacentPeriodStabilityPolicy,
+) -> StructuralStabilityReport:
     """Evaluate a frozen fit on bounded discovery and development matrices."""
 
     if not isinstance(discovery, FeatureMatrix) or not isinstance(development, FeatureMatrix):
@@ -133,6 +327,8 @@ def evaluate_cluster_stability(
         raise ValueError("discovery and development row identities must not overlap")
     if not isinstance(policy, StabilityPolicy):
         raise TypeError("policy must be a StabilityPolicy")
+    if not isinstance(adjacent_period_policy, AdjacentPeriodStabilityPolicy):
+        raise TypeError("adjacent_period_policy must be an AdjacentPeriodStabilityPolicy")
 
     projection_digest = pca_projection_sha256(discovery, projection)
     scores = _validated_projection(projection, discovery_rows, feature_width)
@@ -140,6 +336,10 @@ def evaluate_cluster_stability(
     development_scores = _project(development_rows, projection.means, projection.components)
     development_labels = _assign(development_scores, base_result.centroids)
     symbol_values = _validated_names(symbols, len(development_rows), "symbols")
+    asset_values = _validated_asset_universe(asset_universe)
+    unknown_symbols = tuple(sorted(set(symbol_values) - set(asset_values)))
+    if unknown_symbols:
+        raise ValueError("observed symbols must belong to the configured asset_universe")
     period_values = _validated_names(periods, len(development_rows), "periods")
     ordered_periods = _validated_period_order(period_order, period_values)
     seed_values = _validated_seeds(seeds)
@@ -162,30 +362,41 @@ def evaluate_cluster_stability(
         _subsample_ari(scores, base_result.assignments, cluster_count, seed, fraction)
         for seed in seed_values
     )
-    adjacent_js_distance = _maximum_adjacent_js_distance(
+    cluster_period_support = _cluster_period_support(
         development_labels,
+        symbol_values,
+        asset_values,
         period_values,
         ordered_periods,
         cluster_count,
     )
-    asset_coverage = _minimum_cluster_asset_coverage(
+    adjacent_period_evidence = _adjacent_period_evidence(
+        development_scores,
         development_labels,
-        symbol_values,
-        cluster_count,
+        period_values,
+        ordered_periods,
+        base_result.centroids,
     )
+    adjacent_js_distance = max(
+        evidence.frequency_js_distance for evidence in adjacent_period_evidence
+    )
+    asset_coverage = min(support.asset_coverage for support in cluster_period_support)
     parameter_perturbation_ari = _parameter_perturbation_ari(
         scores,
         base_result.assignments,
         cluster_count,
         seed_values[0],
     )
-    return StabilityReport(
+    return StructuralStabilityReport(
         policy=policy,
         seed_ari=seed_ari,
         subsample_ari=subsample_ari,
         adjacent_js_distance=adjacent_js_distance,
         asset_coverage=asset_coverage,
         parameter_perturbation_ari=parameter_perturbation_ari,
+        adjacent_period_policy=adjacent_period_policy,
+        cluster_period_support=cluster_period_support,
+        adjacent_period_evidence=adjacent_period_evidence,
     )
 
 
@@ -378,6 +589,17 @@ def _validated_names(values: Sequence[str], expected: int, label: str) -> tuple[
     return names
 
 
+def _validated_asset_universe(values: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise TypeError("asset_universe must be an explicit sequence")
+    names = tuple(values)
+    if not names or any(not isinstance(value, str) or not value.strip() for value in names):
+        raise ValueError("asset_universe must contain non-empty strings")
+    if names != tuple(sorted(names)) or len(set(names)) != len(names):
+        raise ValueError("asset_universe must use unique canonical order")
+    return names
+
+
 def _validated_period_order(
     period_order: Sequence[str], periods: tuple[str, ...]
 ) -> tuple[str, ...]:
@@ -421,14 +643,10 @@ def _subsample_ari(
     sample_size = max(cluster_count, math.floor(len(scores) * fraction))
     sample_size = min(sample_size, len(scores))
     randomizer = random.Random(seed ^ 0x5A17)
-    by_cluster = tuple(
-        tuple(index for index, label in enumerate(base_assignments) if label == cluster_label)
-        for cluster_label in range(cluster_count)
-    )
-    selected = {randomizer.choice(indices) for indices in by_cluster}
-    remaining = tuple(index for index in range(len(scores)) if index not in selected)
-    selected.update(randomizer.sample(remaining, sample_size - len(selected)))
-    indices = tuple(sorted(selected))
+    indices = tuple(sorted(randomizer.sample(range(len(scores)), sample_size)))
+    sampled_base_assignments = tuple(base_assignments[index] for index in indices)
+    if len(set(sampled_base_assignments)) < cluster_count:
+        return -1.0
     sampled_scores = tuple(scores[index] for index in indices)
     sampled = fit_kmeans(
         sampled_scores,
@@ -438,31 +656,149 @@ def _subsample_ari(
         tolerance=_TOLERANCE,
     )
     return adjusted_rand_index(
-        tuple(base_assignments[index] for index in indices),
+        sampled_base_assignments,
         sampled.assignments,
     )
 
 
-def _maximum_adjacent_js_distance(
+def _cluster_period_support(
     labels: tuple[int, ...],
+    symbols: tuple[str, ...],
+    assets: tuple[str, ...],
     periods: tuple[str, ...],
     ordered_periods: tuple[str, ...],
     cluster_count: int,
-) -> float:
-    distributions = tuple(
-        _label_distribution(
-            tuple(
-                label
-                for label, row_period in zip(labels, periods, strict=True)
-                if row_period == period
-            ),
-            cluster_count,
+) -> tuple[ClusterPeriodSupport, ...]:
+    return tuple(
+        _period_cluster_support(
+            period,
+            cluster_label,
+            labels,
+            symbols,
+            periods,
+            assets,
         )
         for period in ordered_periods
+        for cluster_label in range(cluster_count)
     )
-    return max(
-        _jensen_shannon_distance(left, right)
-        for left, right in zip(distributions, distributions[1:])
+
+
+def _period_cluster_support(
+    period: str,
+    cluster_label: int,
+    labels: tuple[int, ...],
+    symbols: tuple[str, ...],
+    periods: tuple[str, ...],
+    assets: tuple[str, ...],
+) -> ClusterPeriodSupport:
+    counts = Counter(
+        symbol
+        for label, symbol, row_period in zip(labels, symbols, periods, strict=True)
+        if label == cluster_label and row_period == period
+    )
+    asset_event_counts = tuple((asset, counts[asset]) for asset in assets)
+    event_count = sum(count for _, count in asset_event_counts)
+    return ClusterPeriodSupport(
+        period=period,
+        cluster_label=cluster_label,
+        event_count=event_count,
+        asset_event_counts=asset_event_counts,
+        asset_coverage=sum(count > 0 for _, count in asset_event_counts) / len(assets),
+    )
+
+
+def _adjacent_period_evidence(
+    scores: tuple[tuple[float, ...], ...],
+    labels: tuple[int, ...],
+    periods: tuple[str, ...],
+    ordered_periods: tuple[str, ...],
+    frozen_centroids: Sequence[Sequence[float]],
+) -> tuple[AdjacentPeriodEvidence, ...]:
+    cluster_count = len(frozen_centroids)
+    period_rows = {
+        period: tuple(
+            (score, label)
+            for score, label, row_period in zip(scores, labels, periods, strict=True)
+            if row_period == period
+        )
+        for period in ordered_periods
+    }
+    period_summaries = {
+        period: tuple(
+            _cluster_period_summary(rows, cluster_label, frozen_centroids)
+            for cluster_label in range(cluster_count)
+        )
+        for period, rows in period_rows.items()
+    }
+    return tuple(
+        AdjacentPeriodEvidence(
+            earlier_period=earlier,
+            later_period=later,
+            frequency_js_distance=_jensen_shannon_distance(
+                _label_distribution(
+                    tuple(label for _, label in period_rows[earlier]), cluster_count
+                ),
+                _label_distribution(tuple(label for _, label in period_rows[later]), cluster_count),
+            ),
+            clusters=tuple(
+                _adjacent_cluster_evidence(
+                    cluster_label,
+                    period_summaries[earlier][cluster_label],
+                    period_summaries[later][cluster_label],
+                )
+                for cluster_label in range(cluster_count)
+            ),
+        )
+        for earlier, later in zip(ordered_periods, ordered_periods[1:])
+    )
+
+
+def _cluster_period_summary(
+    rows: tuple[tuple[tuple[float, ...], int], ...],
+    cluster_label: int,
+    frozen_centroids: Sequence[Sequence[float]],
+) -> tuple[tuple[float, ...], float, float] | None:
+    members = tuple(score for score, label in rows if label == cluster_label)
+    if not members:
+        return None
+    width = len(members[0])
+    centroid = tuple(
+        math.fsum(row[column] for row in members) / len(members) for column in range(width)
+    )
+    scale = math.sqrt(math.fsum(_squared_distance(row, centroid) for row in members) / len(members))
+    mean_margin = math.fsum(_assignment_margin(row, frozen_centroids) for row in members) / len(
+        members
+    )
+    return centroid, scale, mean_margin
+
+
+def _adjacent_cluster_evidence(
+    cluster_label: int,
+    earlier: tuple[tuple[float, ...], float, float] | None,
+    later: tuple[tuple[float, ...], float, float] | None,
+) -> AdjacentClusterEvidence:
+    if earlier is None or later is None:
+        return AdjacentClusterEvidence(cluster_label, None, None, None)
+    earlier_centroid, earlier_scale, earlier_margin = earlier
+    later_centroid, later_scale, later_margin = later
+    return AdjacentClusterEvidence(
+        cluster_label=cluster_label,
+        centroid_displacement=math.sqrt(_squared_distance(earlier_centroid, later_centroid)),
+        within_cluster_scale_change=abs(earlier_scale - later_scale),
+        assignment_margin_drift=abs(earlier_margin - later_margin),
+    )
+
+
+def _assignment_margin(row: Sequence[float], frozen_centroids: Sequence[Sequence[float]]) -> float:
+    distances = sorted(math.sqrt(_squared_distance(row, centroid)) for centroid in frozen_centroids)
+    if len(distances) == 1:
+        return 0.0
+    return distances[1] - distances[0]
+
+
+def _squared_distance(left: Sequence[float], right: Sequence[float]) -> float:
+    return math.fsum(
+        (left_value - right_value) ** 2 for left_value, right_value in zip(left, right, strict=True)
     )
 
 
@@ -484,23 +820,6 @@ def _jensen_shannon_distance(left: tuple[float, ...], right: tuple[float, ...]) 
         )
 
     return math.sqrt(max(0.0, (divergence(left) + divergence(right)) / 2.0))
-
-
-def _minimum_cluster_asset_coverage(
-    labels: tuple[int, ...], symbols: tuple[str, ...], cluster_count: int
-) -> float:
-    universe = set(symbols)
-    return min(
-        len(
-            {
-                symbol
-                for label, symbol in zip(labels, symbols, strict=True)
-                if label == cluster_label
-            }
-        )
-        / len(universe)
-        for cluster_label in range(cluster_count)
-    )
 
 
 def _parameter_perturbation_ari(
@@ -563,4 +882,33 @@ def _meets_policy(report: StabilityReport, policy: StabilityPolicy) -> bool:
         and report.adjacent_js_distance <= policy.maximum_adjacent_js_distance
         and report.asset_coverage >= policy.minimum_asset_coverage
         and min(report.parameter_perturbation_ari) >= policy.minimum_parameter_perturbation_ari
+    )
+
+
+def _maximum_complete_adjacent_metric(
+    evidence: tuple[AdjacentPeriodEvidence, ...],
+    field_name: str,
+) -> float | None:
+    values = tuple(
+        getattr(cluster, field_name) for period in evidence for cluster in period.clusters
+    )
+    if any(value is None for value in values):
+        return None
+    return max(value for value in values if value is not None)
+
+
+def _meets_adjacent_period_policy(
+    report: StructuralStabilityReport, policy: AdjacentPeriodStabilityPolicy
+) -> bool:
+    centroid_displacement = report.maximum_centroid_displacement
+    scale_change = report.maximum_within_cluster_scale_change
+    margin_drift = report.maximum_assignment_margin_drift
+    return (
+        centroid_displacement is not None
+        and scale_change is not None
+        and margin_drift is not None
+        and centroid_displacement <= policy.maximum_centroid_displacement
+        and scale_change <= policy.maximum_within_cluster_scale_change
+        and margin_drift <= policy.maximum_assignment_margin_drift
+        and report.minimum_cluster_event_support >= policy.minimum_cluster_event_support
     )

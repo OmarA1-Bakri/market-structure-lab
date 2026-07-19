@@ -13,7 +13,7 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-CB3E7F47FE808F3C",
+        "behaviour_id": "B-95434DA32383B8D9",
         "cluster_definition_sha256": "c12cf26b9e271e2eccd365ece386c54413f1519f3d007e75827d1faa5e653f07",
         "description": "Neutral recurring outcome-blind feature configurations.",
         "discovery_run_id": "DR-000601",
@@ -52,7 +52,103 @@
         "stability": {
           "accepted": true,
           "adjacent_js_distance": 0.0,
+          "adjacent_period_evidence": [
+            {
+              "clusters": [
+                {
+                  "assignment_margin_drift": 0.351745646739289,
+                  "centroid_displacement": 0.20099751242241837,
+                  "cluster_label": 0,
+                  "within_cluster_scale_change": 8.881784197001252e-16
+                },
+                {
+                  "assignment_margin_drift": 0.351745646739289,
+                  "centroid_displacement": 0.20099751242241837,
+                  "cluster_label": 1,
+                  "within_cluster_scale_change": 8.881784197001252e-16
+                }
+              ],
+              "earlier_period": "development-early",
+              "frequency_js_distance": 0.0,
+              "later_period": "development-late"
+            }
+          ],
+          "adjacent_period_policy": {
+            "maximum_assignment_margin_drift": 2.0,
+            "maximum_centroid_displacement": 1.0,
+            "maximum_within_cluster_scale_change": 1.0,
+            "minimum_cluster_event_support": 1,
+            "policy_id": "software-golden-adjacent-period-v2",
+            "policy_purpose": "software_fixture"
+          },
+          "algorithm_version": "cluster-stability-v2",
           "asset_coverage": 1.0,
+          "cluster_period_support": [
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 0,
+              "event_count": 2,
+              "period": "development-early"
+            },
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 1,
+              "event_count": 2,
+              "period": "development-early"
+            },
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 0,
+              "event_count": 2,
+              "period": "development-late"
+            },
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 1,
+              "event_count": 2,
+              "period": "development-late"
+            }
+          ],
           "parameter_perturbation_ari": [
             0.7272727272727273
           ],
@@ -76,7 +172,7 @@
       },
       "contrasting_behaviour_ids": [],
       "nearest_behaviour_ids": [
-        "B-D6E06239FB9EC1EF"
+        "B-D36FD2F5998A3854"
       ],
       "run_id": "DR-000601",
       "schema_version": "behaviour-evidence-pack-v2",
@@ -126,7 +222,7 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-D6E06239FB9EC1EF",
+        "behaviour_id": "B-D36FD2F5998A3854",
         "cluster_definition_sha256": "2b40d9dd9026e8d7b6cbc87eee6e2cbfcb1a7f08c0edc3e8742d1a84d2edafac",
         "description": "Neutral recurring outcome-blind feature configurations.",
         "discovery_run_id": "DR-000601",
@@ -165,7 +261,103 @@
         "stability": {
           "accepted": true,
           "adjacent_js_distance": 0.0,
+          "adjacent_period_evidence": [
+            {
+              "clusters": [
+                {
+                  "assignment_margin_drift": 0.351745646739289,
+                  "centroid_displacement": 0.20099751242241837,
+                  "cluster_label": 0,
+                  "within_cluster_scale_change": 8.881784197001252e-16
+                },
+                {
+                  "assignment_margin_drift": 0.351745646739289,
+                  "centroid_displacement": 0.20099751242241837,
+                  "cluster_label": 1,
+                  "within_cluster_scale_change": 8.881784197001252e-16
+                }
+              ],
+              "earlier_period": "development-early",
+              "frequency_js_distance": 0.0,
+              "later_period": "development-late"
+            }
+          ],
+          "adjacent_period_policy": {
+            "maximum_assignment_margin_drift": 2.0,
+            "maximum_centroid_displacement": 1.0,
+            "maximum_within_cluster_scale_change": 1.0,
+            "minimum_cluster_event_support": 1,
+            "policy_id": "software-golden-adjacent-period-v2",
+            "policy_purpose": "software_fixture"
+          },
+          "algorithm_version": "cluster-stability-v2",
           "asset_coverage": 1.0,
+          "cluster_period_support": [
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 0,
+              "event_count": 2,
+              "period": "development-early"
+            },
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 1,
+              "event_count": 2,
+              "period": "development-early"
+            },
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 0,
+              "event_count": 2,
+              "period": "development-late"
+            },
+            {
+              "asset_coverage": 1.0,
+              "asset_event_counts": [
+                [
+                  "BTCUSDT",
+                  1
+                ],
+                [
+                  "ETHUSDT",
+                  1
+                ]
+              ],
+              "cluster_label": 1,
+              "event_count": 2,
+              "period": "development-late"
+            }
+          ],
           "parameter_perturbation_ari": [
             0.7272727272727273
           ],
@@ -189,7 +381,7 @@
       },
       "contrasting_behaviour_ids": [],
       "nearest_behaviour_ids": [
-        "B-CB3E7F47FE808F3C"
+        "B-95434DA32383B8D9"
       ],
       "run_id": "DR-000601",
       "schema_version": "behaviour-evidence-pack-v2",
@@ -234,7 +426,7 @@
       }
     }
   ],
-  "evidence_sha256": "5cb4ba02981b6636ee19cbfd91032fe1de5a29fc0cb42107841a71c2e8870753",
+  "evidence_sha256": "5f6fb8a55d4fd165e395ab4bd10319ae12607a4d8ff36f5050226bfe4fcfba0f",
   "required_response_fields": [
     "behaviour_id",
     "neutral_name",
@@ -247,6 +439,6 @@
     "spuriousness_reasons"
   ],
   "run_id": "DR-000601",
-  "run_manifest_sha256": "c06ddc20b8e606cb62aefa50a68a2624594abef06f8f760c6adc9dabc2dbdbc2",
+  "run_manifest_sha256": "6d9792c1c58fc038af4481c5aa43307105e9c5a974a2246b1cc2e782db4036ec",
   "schema_version": "phase4-interpretation-input-v2"
 }

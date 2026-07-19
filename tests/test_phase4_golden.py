@@ -12,6 +12,7 @@ from typing import Any
 
 from market_structure_lab.discovery import (
     AIInterpretation,
+    AdjacentPeriodStabilityPolicy,
     BehaviourEvidencePack,
     ClusterObservation,
     DiscoveryRunManifest,
@@ -29,6 +30,7 @@ from market_structure_lab.discovery import (
     make_discovery_input,
     publish_ai_interpretations,
 )
+from market_structure_lab.discovery.stability import STABILITY_ALGORITHM_VERSION
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
     FeatureDefinition,
@@ -63,6 +65,7 @@ class FrozenFixtureRunConfig:
     max_iterations: int
     tolerance: float
     stability_policy: StabilityPolicy
+    adjacent_period_stability_policy: AdjacentPeriodStabilityPolicy
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -163,6 +166,9 @@ def _run_arguments(
     )
     run = fixture["runs"][run_name]
     policy = StabilityPolicy(**run["stability_policy"])
+    adjacent_period_policy = AdjacentPeriodStabilityPolicy(
+        **run["adjacent_period_stability_policy"]
+    )
     config = FrozenFixtureRunConfig(
         run_id=run["run_id"],
         dataset_snapshot_id=fixture["dataset_snapshot"]["dataset_version"],
@@ -179,6 +185,7 @@ def _run_arguments(
         max_iterations=fixture["caps"]["max_iterations"],
         tolerance=fixture["caps"]["tolerance"],
         stability_policy=policy,
+        adjacent_period_stability_policy=adjacent_period_policy,
         code_commit=fixture["code_commit"],
         lock_sha256=fixture["lock_sha256"],
     )
@@ -228,11 +235,13 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         projection=projection,
         base_result=clustering,
         symbols=tuple(row.symbol for row in selected_development),
+        asset_universe=config.split.development.symbols,
         periods=periods,
         period_order=period_order,
         seeds=config.seeds,
         subsample_fraction=0.75,
         policy=config.stability_policy,
+        adjacent_period_policy=config.adjacent_period_stability_policy,
     )
     behaviours = freeze_behaviours(
         run_id=config.run_id,
@@ -419,11 +428,13 @@ def _config_payload(config: FrozenFixtureRunConfig) -> dict[str, object]:
         "max_iterations": config.max_iterations,
         "tolerance": config.tolerance,
         "stability_policy": _jsonable(config.stability_policy),
+        "adjacent_period_stability_policy": _jsonable(config.adjacent_period_stability_policy),
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
         "orchestration_parameters": {
             "subsample_fraction": 0.75,
+            "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
             "motif_max_window_length": 4,
             "motif_exclusion_zone": 2,
             "motif_top_k": 3,
@@ -603,6 +614,7 @@ def _interpretations(
 
 def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path) -> None:
     fixture = _load_json(FIXTURE_PATH)
+    assert STABILITY_ALGORITHM_VERSION == "cluster-stability-v2"
     assert fixture["schema_version"] == "phase4-discovery-fixture-v2"
     assert "holdout_rows" not in fixture
     assert all(
@@ -628,6 +640,22 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     assert _load_json(stable_first_dir / "projection.json")["algorithm_version"] == (
         "deterministic-pca-v2"
     )
+    published_config = _load_json(stable_first_dir / "config.json")
+    published_stability = _load_json(stable_first_dir / "stability.json")
+    assert (
+        published_config["adjacent_period_stability_policy"]
+        == (fixture["runs"]["stable"]["adjacent_period_stability_policy"])
+    )
+    assert published_config["orchestration_parameters"]["stability_algorithm_version"] == (
+        STABILITY_ALGORITHM_VERSION
+    )
+    assert published_stability["algorithm_version"] == STABILITY_ALGORITHM_VERSION
+    assert (
+        published_stability["adjacent_period_policy"]
+        == (fixture["runs"]["stable"]["adjacent_period_stability_policy"])
+    )
+    assert published_stability["cluster_period_support"]
+    assert published_stability["adjacent_period_evidence"]
     assert _expected_run(stable_first, stable_first_dir) == fixture["runs"]["stable"]["expected"]
 
     rejected_first_root = tmp_path / "rejected-first"

@@ -27,6 +27,7 @@ from market_structure_lab.data.export import (
 )
 from market_structure_lab.discovery import (
     AIInterpretation,
+    AdjacentPeriodStabilityPolicy,
     BehaviourEvidencePack,
     DiscoveryRunConfig,
     PartitionRole,
@@ -168,25 +169,27 @@ def _fixture(
     normalizer_row_delta: float = 0.0,
     normalizer_symbols: tuple[str, ...] | None = None,
     track_runtime_module: bool = True,
+    split_symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT"),
+    minimum_asset_coverage: float = 0.0,
 ):
     registry = _registry()
     discovery_partition = TimePartition(
         PartitionRole.DISCOVERY,
         datetime(2025, 1, 1, tzinfo=UTC),
         datetime(2025, 1, 2, tzinfo=UTC),
-        ("BTCUSDT", "ETHUSDT"),
+        split_symbols,
     )
     development_partition = TimePartition(
         PartitionRole.DEVELOPMENT,
         datetime(2025, 1, 2, tzinfo=UTC),
         datetime(2025, 1, 4, tzinfo=UTC),
-        ("BTCUSDT", "ETHUSDT"),
+        split_symbols,
     )
     holdout_partition = TimePartition(
         PartitionRole.HOLDOUT,
         datetime(2025, 1, 4, tzinfo=UTC),
         datetime(2025, 1, 5, tzinfo=UTC),
-        ("BTCUSDT", "ETHUSDT"),
+        split_symbols,
     )
     split = freeze_split(
         split_id="phase4-fixture-v1",
@@ -322,7 +325,7 @@ def _fixture(
     policy = (
         StabilityPolicy(1.0, 1.0, 0.0, 1.0, 1.0)
         if rejected
-        else StabilityPolicy(-1.0, -1.0, 1.0, 0.0, -1.0)
+        else StabilityPolicy(-1.0, -1.0, 1.0, minimum_asset_coverage, -1.0)
     )
     provenance = freeze_discovery_provenance(
         snapshot_manifest=snapshot_manifest,
@@ -352,6 +355,14 @@ def _fixture(
         max_iterations=100,
         tolerance=1e-12,
         stability_policy=policy,
+        adjacent_period_stability_policy=AdjacentPeriodStabilityPolicy(
+            policy_id="software-test-run-adjacent-period-v1",
+            policy_purpose="software_fixture",
+            maximum_centroid_displacement=1.0,
+            maximum_within_cluster_scale_change=1.0,
+            maximum_assignment_margin_drift=2.0,
+            minimum_cluster_event_support=1,
+        ),
         code_commit=code_commit,
         lock_sha256=lock_sha256,
         feature_publication_id="FP-000501",
@@ -439,8 +450,19 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     published_transitions = json.loads(
         (tmp_path / first.run_id / "transitions.json").read_text(encoding="utf-8")
     )
+    published_config = json.loads(
+        (tmp_path / first.run_id / "config.json").read_text(encoding="utf-8")
+    )
     assert published_manifest["schema_version"] == "discovery-run-manifest-v2"
     assert published_manifest["transition_matrix"] == published_transitions
+    assert published_config["adjacent_period_stability_policy"] == {
+        "maximum_assignment_margin_drift": 2.0,
+        "maximum_centroid_displacement": 1.0,
+        "maximum_within_cluster_scale_change": 1.0,
+        "minimum_cluster_event_support": 1,
+        "policy_id": "software-test-run-adjacent-period-v1",
+        "policy_purpose": "software_fixture",
+    }
     assert replay.transition_matrix == first.transition_matrix
     receipt = verify_trial_receipt(tmp_path / first.run_id)
     assert receipt.mode is ExperimentMode.DISCOVERY
@@ -456,6 +478,45 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
         for path in (tmp_path / first.run_id).rglob("*")
         if path.is_file()
     }
+
+
+def test_adjacent_period_policy_is_bound_into_run_identity(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+    _run(arguments)
+    config = arguments["config"]
+    changed = dict(arguments)
+    changed["config"] = replace(
+        config,
+        adjacent_period_stability_policy=replace(
+            config.adjacent_period_stability_policy,
+            maximum_centroid_displacement=1.1,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="identity conflict"):
+        _run(changed)
+
+
+def test_run_uses_complete_frozen_development_asset_universe_before_publication(
+    tmp_path,
+) -> None:
+    arguments = _fixture(
+        tmp_path,
+        split_symbols=("BTCUSDT", "ETHUSDT", "SOLUSDT"),
+        minimum_asset_coverage=1.0,
+    )
+
+    manifest = _run(arguments)
+    stability = json.loads(
+        (tmp_path / manifest.run_id / "stability.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest.status == "rejected_unstable"
+    assert stability["asset_coverage"] == pytest.approx(2 / 3)
+    assert all(
+        support["asset_event_counts"][-1] == ["SOLUSDT", 0]
+        for support in stability["cluster_period_support"]
+    )
 
 
 def test_provenance_drift_is_rejected_before_matrix_construction(
