@@ -5,12 +5,12 @@
 **Status: ACCEPTED for deterministic Phase 4 software hardening; REJECTED as empirical market,
 predictive, validation, strategy, or edge evidence.**
 
-Task 12 was evaluated from baseline commit
-`bd9f82b72f0e04a6300ac721607c0188c7f8430f`. At the verification cutoff on
-2026-07-19, the local branch and `origin/agent/research-lab-foundation` both resolved to that exact
-commit. This report closes the software-hardening checklist only. It does **not** authorize a real
-discovery run, inspect final-holdout rows or outcomes, attach outcomes, calibrate thresholds on
-market data, validate a behaviour, construct a strategy, or claim an edge.
+Task 12 evaluated the implementation from independent-review reference commit
+`bd9f82b72f0e04a6300ac721607c0188c7f8430f` and completed its evidence/review chain through final
+remote stop-gate record `047635865c49a0b3f882fadf16003a05c03b47ac`. This report closes the
+original software-hardening checklist only. It does **not** authorize a real discovery run, inspect
+final-holdout rows or outcomes, attach outcomes, calibrate thresholds on market data, validate a
+behaviour, construct a strategy, or claim an edge.
 
 Execution stops here for explicit approval before Phase C. No database, dump, protected raw
 dataset, research snapshot, real `DR-*` run, or final holdout was read or mutated for this gate. The
@@ -30,11 +30,18 @@ exercised to prove terminal accounting.
 | Task 11 — semantic leakage evidence | `bd9f82b` | included in the same reviewed checkpoint | verified |
 | Task 12 — verification and evidence | `b69e38973d5a30cacf636a399d0b30d76d794004` | verification evidence commit | pushed; remote ancestry verified |
 | Task 12 — independent review closure | `035aa35c50724d2a8638846a2045b69e554f5a8e` | dashboard, plan, and evidence consistency correction | pushed; local and origin matched at this checkpoint |
+| Task 12 — final remote stop-gate record | `047635865c49a0b3f882fadf16003a05c03b47ac` | administrative remote-state synchronization | pushed at `2026-07-19T15:00:55Z`; local and remote matched |
 
 The Task 12 evidence and independent-review correction commits were pushed after leader
 authorization. Local and origin both resolved to
 `035aa35c50724d2a8638846a2045b69e554f5a8e` before this final administrative checklist sync.
 That remote checkpoint does not authorize Phase C.
+
+The final Task 12 prerequisite audit re-fetched the branch and independently verified local
+`HEAD`, `origin/agent/research-lab-foundation`, and the GitHub branch ref at
+`047635865c49a0b3f882fadf16003a05c03b47ac`. GitHub reported the corresponding push at
+`2026-07-19T15:00:55Z`. No GitHub check runs were attached to that exact SHA; Task 12 therefore has
+reproducible local verification evidence but no automated merge-enforcement claim.
 
 ## Independent Task 12 review closure
 
@@ -45,6 +52,25 @@ required before Phase C real outcome-blind discovery. The canonical progress sna
 7–12 complete and Tasks 13–14 approval-gated. The public evidence was regenerated twice at the same
 explicit UTC timestamp; both complete files had SHA-256
 `6c88747b4580d106c93ecdff96f7e29264cd619b8605b45eff946dbc340b25e4`.
+
+### Autonomous prerequisite review completion
+
+The later Task 13 prerequisite audit identified that Task 12's implementer, specification, and
+code-quality reviews had not been recorded as three distinct stages. Those stages were completed
+before Task 13 implementation:
+
+| Review | Scope | Findings and disposition | Result |
+|---|---|---|---|
+| Implementer self-review | Task 12 commits `b69e389` through `0476358`; changed paths, Lore history, cross-platform test repairs, dashboard consistency, generated-file and secret hygiene | Confirmed the production algorithms were unchanged. Found stale remote-state wording and incomplete final checkpoint chronology; corrected all affected evidence/status surfaces. | accepted |
+| Independent specification review | Original Task 12 plan, inherited Task 6 chain, evidence hashes, remote ancestry, stop boundary, and current status documents | Found stale `EXPERIMENT_ACCURACY_OVERVIEW` remote wording, missing final `0476358` push/equality evidence, and stale Phase 0 gate wording. Each was corrected and independently rereviewed. | approved |
+| Independent code-quality review | Test repairs, dashboard generator and validators, public JSON, evidence/status consistency, commit hygiene, and prohibited-file scan | Found the same three documentation chronology defects and no production algorithm defect. Corrections passed rereview with no remaining finding. | approved |
+
+Fresh prerequisite-closure verification produced `124 passed in 15.97s` for the Task 12
+documentation-sensitive, golden, derived-publication, and motif tests; dashboard evidence
+verification again accepted 25 symbols and 26 features. The complete Windows suite at the corrected
+worktree produced **1,101 passed, 8 skipped in 147.98s**; retained log SHA-256 is
+`1aef236c42ba934cf1979d13403fae6caed2c0c30a923d5e25234206d04e17d9`. No real discovery,
+holdout access, outcome attachment, database mutation, or later-phase work occurred.
 
 ## Defects found by the gate
 

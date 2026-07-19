@@ -4,8 +4,9 @@
 
 **Status on 2026-07-18:** RR-000008 is complete, explicitly approved, atomically promoted, and
 post-promotion verified. The active reconciled view is bound to the checksum-pinned RR-000008
-candidate. Phase 0 is complete; Phase 4 hardening remains separately approval-gated and no real
-discovery, validation, strategy, or trading run has started.
+candidate. Phase 0 and the original deterministic Phase 4 Task 12 checkpoint are complete. Task 13
+is the authorized non-empirical residual-risk audit; real discovery, validation, strategy, and
+trading remain separately approval-gated and have not started.
 
 The approved promotion appended one immutable promotion row and 285 verified-coverage rows. No
 command changed the immutable dump, reset PostgreSQL, dropped durable schemas, interpolated
@@ -199,10 +200,10 @@ coverage rows, and left the receipt byte-identical.
 
 ## Approval boundary and remaining risks
 
-Phase 0 is closed at the promoted reconciliation boundary. The next operation is not another data
-publication: it is the separately gated Phase 4 hardening program for provenance reconstruction,
-outcome-blind discovery, stability, leakage controls, and trial accounting. It requires a new
-explicit approval before implementation or a real market experiment begins.
+Phase 0 is closed at the promoted reconciliation boundary. Deterministic Phase 4 hardening is also
+complete through its original Task 12 remote checkpoint. The next permitted non-empirical
+operation is the separately authorized independent residual-risk audit; any real outcome-blind
+discovery or market experiment remains separately approval-gated.
 
 Independent of promotion, `841,509` minutes remain explicitly unavailable, nine venue-conflict
 symbols remain quarantined by the earlier compatibility review, and there are still zero real
