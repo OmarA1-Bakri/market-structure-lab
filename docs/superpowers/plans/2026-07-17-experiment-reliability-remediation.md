@@ -557,25 +557,25 @@ test gaps, and every unresolved risk. Do not begin Phase B without explicit user
   - `tests/test_discovery_splits.py`
   - `tests/test_discovery_runs.py`
 
-- [ ] **Step 1: Write provenance-drift tests**
+- [x] **Step 1: Write provenance-drift tests**
 
 Reject a missing normalizer, wrong training partition, wrong selected feature list, changed
 normalizer bytes, mismatched feature publication, mismatched snapshot manifest, changed registry,
 uncommitted/dirty identity, wrong code commit, or changed lockfile before matrix construction.
 
-- [ ] **Step 2: Make normalization identity mandatory for discovery features**
+- [x] **Step 2: Make normalization identity mandatory for discovery features**
 
 Do not merely add another trusted string. Supply and verify the actual `RobustNormalizer` artifact
 and checksum-bearing `DerivedPublicationManifest`. Require a clean immutable dataset snapshot and the
 exact feature partition hashes used by the discovery/development inputs.
 
-- [ ] **Step 3: Introduce one verified discovery provenance value**
+- [x] **Step 3: Introduce one verified discovery provenance value**
 
 It should bind snapshot manifest hash, derived publication hash, registry hash, normalizer hash,
 feature names/order, split hash, code commit, and lock hash. `DiscoveryRunConfig` stores that identity;
 `run_discovery` verifies the supplied artifacts and row content against it.
 
-- [ ] **Step 4: Keep rows narrow**
+- [x] **Step 4: Keep rows narrow**
 
 Avoid duplicating large manifests into every `FeatureRow`. Rows retain stable IDs; the verified
 publication manifest owns dataset-wide provenance.
