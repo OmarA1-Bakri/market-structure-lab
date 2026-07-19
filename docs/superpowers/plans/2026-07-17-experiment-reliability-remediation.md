@@ -593,23 +593,23 @@ replay; memory remains bounded.
 - Modify: `src/market_structure_lab/discovery/runs.py`
 - Tests: `tests/test_discovery_stability.py`, `tests/test_phase4_golden.py`
 
-- [ ] **Step 1: Add failing drift and sampling tests**
+- [x] **Step 1: Add failing drift and sampling tests**
 
 Create cases where cluster frequencies stay constant while centroids or within-cluster dispersion
 shift; these must fail the adjacent-period policy. Prove subsamples are deterministic but do not
 force one member from every base cluster.
 
-- [ ] **Step 2: Extend adjacent-period evidence**
+- [x] **Step 2: Extend adjacent-period evidence**
 
 Report frequency JS distance, centroid displacement in frozen projected units, within-cluster scale
 change, assignment confidence/margin drift, and per-cluster support by period/asset.
 
-- [ ] **Step 3: Separate minimum support from coverage**
+- [x] **Step 3: Separate minimum support from coverage**
 
 Require explicit per-cluster event counts; a cluster cannot pass solely because it appears once in
 many assets.
 
-- [ ] **Step 4: Replace fixture plumbing thresholds**
+- [x] **Step 4: Replace fixture plumbing thresholds**
 
 Use a deterministic fixture with meaningful pass/fail margins. Thresholds remain software fixtures,
 not automatic real-research policy. Document that distinction.
