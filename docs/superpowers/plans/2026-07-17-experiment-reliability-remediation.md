@@ -664,23 +664,23 @@ first-feature-only behavior is removed or explicitly versioned as a univariate b
 - Modify: `src/market_structure_lab/discovery/transitions.py`
 - Tests: `tests/test_discovery_transitions.py`, `tests/test_discovery_runs.py`
 
-- [ ] **Step 1: Move hard-coded values into validated run configuration**
+- [x] **Step 1: Move hard-coded values into validated run configuration**
 
 Freeze horizon, bootstrap iterations, confidence level, block-length rule/value, minimum effective
 support, interval-width reporting, and sensitivity settings into config/run identity.
 
-- [ ] **Step 2: Add dependence diagnostics**
+- [x] **Step 2: Add dependence diagnostics**
 
 Select or justify block length from dwell/event sequences using a deterministic predeclared rule;
 report sensitivity across nearby block lengths. Do not optimize the rule against attractive
 transition results.
 
-- [ ] **Step 3: Improve interval-resolution tests**
+- [x] **Step 3: Improve interval-resolution tests**
 
 Test deterministic intervals, low-support behavior, zero destination counts, multiple boundaries,
 long dwell runs, and convergence/sensitivity as bootstrap iterations increase.
 
-- [ ] **Step 4: Preserve the descriptive boundary**
+- [x] **Step 4: Preserve the descriptive boundary**
 
 Do not add a significance or edge claim. Metrics and summaries must call these conditional
 recurrence estimates.
