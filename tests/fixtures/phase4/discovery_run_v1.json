@@ -364,9 +364,9 @@
       },
       "expected": {
         "status": "completed",
-        "manifest_sha256": "6d9792c1c58fc038af4481c5aa43307105e9c5a974a2246b1cc2e782db4036ec",
-        "identity_sha256": "91c966da03342b7002f058e5801d0553c02bb69871d892805cae5ea2d686de4a",
-        "config_sha256": "c80bf0e6b7e1046c7a9af68342f593f9ee1547f519685837c2c1ab9c75dd12d2",
+        "manifest_sha256": "c25931e546c7f28b92e83052019a9fd1e81db5d08fa56abb8c5dab1fd7105422",
+        "identity_sha256": "435d3871664e3f52d60dc145aafa7b3e834bf99e1bd4f75636635113a9003f26",
+        "config_sha256": "da90af43073ddfd3b8063d22c526274005784c9ae78f03687b158cfb50835ecf",
         "behaviour_ids": [
           "B-95434DA32383B8D9",
           "B-D36FD2F5998A3854"
@@ -374,12 +374,12 @@
         "artifact_sha256": {
           "behaviours.json": "dca6fb129b5ded4912e72a57ff9bed147dad198e58b39f75532d6c086394ecc6",
           "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "fc8bedbadffa98ffc041b4975c47da519ea11dd1249189f3f68e0e393a072c0f",
-          "metrics.json": "719cc8d42452c4a7fd706a793130fc966292b2ec7ecfe32dd367ab226f0725ff",
-          "motifs.json": "5da2402e81683419ac8e5f01cb943fcbd13799d1a8965c3f177e415652fbe6b1",
+          "config.json": "00981b14b26bae900e0fad3483f2b02e18ef683c2206268b9619592081e9c317",
+          "metrics.json": "69083ac6afbaf7897f44406ff8f92157d189b5aebe95c1cf080c01083e04363b",
+          "motifs.json": "121eb4daf299f8a7b5503287a395dfb2e9c8dd6915ed90cf0f7aa10074158368",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "ea0e6f764b15c225b55060a59a927bd2ac1749adc6e58ade19fc521f96c04e13",
-          "summary.md": "4416fc69bc5c4f7f80e8de94a7229a3fbb54689dcbc2cf32334f9ff7b0f4f3ad",
+          "summary.md": "89314140c8f3229e308e65bf914d18993d1e1bac1a62cf42f2f467d93a35649a",
           "transitions.json": "4586a21d8ff6e594531ab6a7c6275f4ea7a5205990fdf0e7c4d48048e54a3661"
         },
         "metrics": {
@@ -390,11 +390,50 @@
             "development": 0,
             "discovery": 0
           },
-          "motifs": 6,
+          "motif_candidates": 3,
+          "motifs_published": 3,
+          "motifs_rejected": 0,
           "status": "completed",
           "transitions": 2
         },
         "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
+      },
+      "motif_stability_policy": {
+        "policy_id": "phase4-golden-motif-stability-v1",
+        "policy_purpose": "software_fixture",
+        "window_lengths": [
+          2,
+          3,
+          4
+        ],
+        "exclusion_zones": [
+          1,
+          2
+        ],
+        "tie_seeds": [
+          7,
+          11
+        ],
+        "subsample_fraction": 0.75,
+        "distance_multipliers": [
+          0.9,
+          1.0,
+          1.1
+        ],
+        "maximum_distance": 0.5,
+        "max_windows": 64,
+        "top_k": 3,
+        "minimum_seed_rank_agreement": 0.5,
+        "minimum_subsample_agreement": 0.0,
+        "minimum_parameter_agreement": 0.1,
+        "minimum_recurrence_support": 1,
+        "minimum_asset_support": 1,
+        "minimum_period_support": 1,
+        "minimum_regime_support": 1,
+        "tie_policies": [
+          "canonical",
+          "seeded_hash"
+        ]
       }
     },
     "rejected": {
@@ -422,19 +461,19 @@
       },
       "expected": {
         "status": "rejected_unstable",
-        "manifest_sha256": "bc659ca8b7658c96846554edb76c7baf115917aa846dd394e46c82ddc77b0e83",
-        "identity_sha256": "5317e2fe5723aa9ae84d27a06eea12a1b084c9b8810f7243f795d44f4646ed4e",
-        "config_sha256": "a8cbca68306aa364b4f2f9702108041bc031b85e470842ccd993ec3eb70b3b2a",
+        "manifest_sha256": "8e38f3e10d39f2e14b01f3b83d252c69c7574d8a70c95d76b4e5bb5759947c9b",
+        "identity_sha256": "488a5eb3fae793ed8596fefa443393faa0db6cd5f17455c39977dfb2f5f594d2",
+        "config_sha256": "cb562a801cd39af609d70ddb0c621a06cd063be8b5af357f14f57ac44e31276b",
         "behaviour_ids": [],
         "artifact_sha256": {
           "behaviours.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
           "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "435fbf5a5ed34222971484df5366883404b639af2158736e461c0e40fd677636",
-          "metrics.json": "39617a9910ae2bbecb063d5fe2d3df491011eb60d96cda051e6af5728c4fb0c4",
-          "motifs.json": "5da2402e81683419ac8e5f01cb943fcbd13799d1a8965c3f177e415652fbe6b1",
+          "config.json": "b24247cbc598f01ada3e73246f79128ed24fe1cf45c5b5ba018b8cd1cf87fb51",
+          "metrics.json": "e2b73c8e5fa2d41731eca5c064e04abc3a18e013990ac92957609a4e15eb609e",
+          "motifs.json": "bf8284138a7f11f82296c44d023c9dd970bd65226337145b60c3415dbd18ce9e",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "5c74d7229e4801a5cf237121423ef9457b46448ef9c1fbe38fcc1c7ece499f7b",
-          "summary.md": "8d87b964312105a50df1d4abc8e2431aa38c0b40dfac9a463ee663ca802d9e30",
+          "summary.md": "a4ed6cb29d08f37bc509382b41cc0148450924d5cba84577bce919a57b475767",
           "transitions.json": "4586a21d8ff6e594531ab6a7c6275f4ea7a5205990fdf0e7c4d48048e54a3661"
         },
         "metrics": {
@@ -445,15 +484,54 @@
             "development": 0,
             "discovery": 0
           },
-          "motifs": 6,
+          "motif_candidates": 3,
+          "motifs_published": 0,
+          "motifs_rejected": 3,
           "status": "rejected_unstable",
           "transitions": 2
         },
         "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
+      },
+      "motif_stability_policy": {
+        "policy_id": "phase4-golden-motif-stability-v1",
+        "policy_purpose": "software_fixture",
+        "window_lengths": [
+          2,
+          3,
+          4
+        ],
+        "exclusion_zones": [
+          1,
+          2
+        ],
+        "tie_seeds": [
+          7,
+          11
+        ],
+        "subsample_fraction": 0.75,
+        "distance_multipliers": [
+          0.9,
+          1.0,
+          1.1
+        ],
+        "maximum_distance": 0.5,
+        "max_windows": 64,
+        "top_k": 3,
+        "minimum_seed_rank_agreement": 0.5,
+        "minimum_subsample_agreement": 0.0,
+        "minimum_parameter_agreement": 0.1,
+        "minimum_recurrence_support": 1,
+        "minimum_asset_support": 3,
+        "minimum_period_support": 1,
+        "minimum_regime_support": 1,
+        "tie_policies": [
+          "canonical",
+          "seeded_hash"
+        ]
       }
     }
   },
-  "interpretation_input_sha256": "892ae41ae6fcfe87da9cb7b2fd7b66f0b83e72d7aa3f72a22eed4f913b89c13b",
+  "interpretation_input_sha256": "7051e24975276473bf91eff90902ff66ad1c92f35c56993254b58a1f4c46c89a",
   "interpretation_response_sha256": "d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec",
   "interpretation_publication": {
     "expected": {
@@ -463,12 +541,122 @@
         "B-95434DA32383B8D9",
         "B-D36FD2F5998A3854"
       ],
-      "identity_sha256": "620a20d816a4675e66990b921717edbb9699fb51168305ca75ecf8307c954f26",
+      "identity_sha256": "432f0ac94d4517576e880cc5011f3a89c8d7d901e6adcec13bbf6c16598db31c",
       "artifact_sha256": {
         "evidence.json": "7f2e41df00768d1632e728592de28f859a70f2cf73144cb1213410f01a70d599",
-        "interpretations.json": "0798795c32c12a37e2f23a3fd5a0ffd34ae8eac512cadc18023e49fcc682b5d5"
+        "interpretations.json": "1e04d8a1525cfcf8608b72415d6154284beaf99893fe8159626d476530729b6b"
       },
-      "manifest_sha256": "2ce1988cd4b50ad227806ce55a49228a825c7728923e118e2696aae047858bb5"
+      "manifest_sha256": "3ae8b81d4fb546e3e19805a73cd89633eb3253597b9439483c49ab9df7a2230e"
     }
+  },
+  "motif_regime_assignments": {
+    "contract_id": "phase4-golden-regimes-v1",
+    "contract_version": "outcome-blind-regime-assignments-v1",
+    "algorithm_version": "symbol-partition-fixture-v1",
+    "information_policy": "contemporaneous",
+    "outcome_policy": "outcome_blind",
+    "regime_universe": [
+      "balanced",
+      "expanding"
+    ],
+    "assignments": [
+      [
+        "BTCUSDT|1m|2025-01-01T00:00:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-01T00:01:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-01T00:02:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-01T00:03:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-01T00:04:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-01T00:05:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-01T00:06:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-01T00:07:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-02T00:00:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-02T00:01:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-03T00:00:00Z",
+        "balanced"
+      ],
+      [
+        "BTCUSDT|1m|2025-01-03T00:01:00Z",
+        "balanced"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:00:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:01:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:02:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:03:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:04:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:05:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:06:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-01T00:07:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-02T00:00:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-02T00:01:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-03T00:00:00Z",
+        "expanding"
+      ],
+      [
+        "ETHUSDT|1m|2025-01-03T00:01:00Z",
+        "expanding"
+      ]
+    ],
+    "sha256": "00966656c758e288addacdc08176be13823db4e3bb9f0fb4e96201cf1cb59654"
   }
 }

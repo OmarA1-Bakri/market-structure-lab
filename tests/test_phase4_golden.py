@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta
@@ -16,13 +15,18 @@ from market_structure_lab.discovery import (
     BehaviourEvidencePack,
     ClusterObservation,
     DiscoveryRunManifest,
+    MOTIF_ALGORITHM_VERSION,
+    MotifObservation,
+    MotifRegimeAssignmentContract,
+    MotifStabilityPolicy,
     PartitionRole,
     StabilityPolicy,
     TimePartition,
+    build_contiguous_motif_sequences,
     build_feature_matrix,
-    discover_motifs,
     estimate_cluster_transitions,
     evaluate_cluster_stability,
+    evaluate_motif_stability,
     fit_pca,
     fit_projected_kmeans,
     freeze_behaviours,
@@ -66,6 +70,8 @@ class FrozenFixtureRunConfig:
     tolerance: float
     stability_policy: StabilityPolicy
     adjacent_period_stability_policy: AdjacentPeriodStabilityPolicy
+    motif_stability_policy: MotifStabilityPolicy
+    motif_regime_assignments: MotifRegimeAssignmentContract
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -169,6 +175,22 @@ def _run_arguments(
     adjacent_period_policy = AdjacentPeriodStabilityPolicy(
         **run["adjacent_period_stability_policy"]
     )
+    motif_policy_payload = dict(run["motif_stability_policy"])
+    for field in (
+        "window_lengths",
+        "exclusion_zones",
+        "tie_seeds",
+        "tie_policies",
+        "distance_multipliers",
+    ):
+        motif_policy_payload[field] = tuple(motif_policy_payload[field])
+    motif_stability_policy = MotifStabilityPolicy(**motif_policy_payload)
+    regime_payload = dict(fixture["motif_regime_assignments"])
+    regime_payload["regime_universe"] = tuple(regime_payload["regime_universe"])
+    regime_payload["assignments"] = tuple(
+        tuple(item) for item in regime_payload["assignments"]
+    )
+    motif_regime_assignments = MotifRegimeAssignmentContract(**regime_payload)
     config = FrozenFixtureRunConfig(
         run_id=run["run_id"],
         dataset_snapshot_id=fixture["dataset_snapshot"]["dataset_version"],
@@ -186,6 +208,8 @@ def _run_arguments(
         tolerance=fixture["caps"]["tolerance"],
         stability_policy=policy,
         adjacent_period_stability_policy=adjacent_period_policy,
+        motif_stability_policy=motif_stability_policy,
+        motif_regime_assignments=motif_regime_assignments,
         code_commit=fixture["code_commit"],
         lock_sha256=fixture["lock_sha256"],
     )
@@ -254,7 +278,17 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         symbols=tuple(row.symbol for row in selected_discovery),
         description="Neutral recurring outcome-blind feature configurations.",
     )
-    motif_payload = _motif_payload(selected_discovery, discovery_matrix)
+    motif_report = _motif_report(
+        discovery_rows=selected_discovery,
+        discovery_matrix=discovery_matrix,
+        development_rows=selected_development,
+        development_matrix=development_matrix,
+        development_periods=periods,
+        development_period_universe=period_order,
+        development_asset_universe=config.split.development.symbols,
+        regime_assignments=config.motif_regime_assignments,
+        policy=config.motif_stability_policy,
+    )
     transition_matrix = _transition_evidence(
         selected_discovery, clustering.assignments, config
     )
@@ -278,7 +312,9 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
             "development": development_matrix.dropped_null_rows,
         },
         "behaviours": len(behaviours),
-        "motifs": sum(len(group["matches"]) for group in motif_payload),
+        "motif_candidates": len(motif_report.candidates),
+        "motifs_published": motif_report.published_count,
+        "motifs_rejected": motif_report.rejected_count,
         "transitions": transition_matrix.total_transitions,
     }
     payloads: dict[str, bytes] = {
@@ -287,12 +323,17 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         "clustering.json": _json_file(clustering),
         "stability.json": _json_file(stability),
         "behaviours.json": _json_file(behaviours),
-        "motifs.json": _json_file(motif_payload),
+        "motifs.json": _json_file(motif_report),
         "transitions.json": _json_file(transition_matrix),
         "metrics.json": _json_file(metrics_payload),
         "summary.md": (
             f"# {config.run_id}\n\nStatus: {status}\n\n"
-            "Outcome-blind discovery; final holdout was not accessed.\n"
+            "Outcome-blind discovery; final holdout was not accessed.\n\n"
+            f"Cluster behaviours: {len(behaviours)} (independent stability path).\n"
+            f"Motif candidates: {len(motif_report.candidates)}; "
+            f"published: {motif_report.published_count}; "
+            f"rejected and retained: {motif_report.rejected_count}.\n"
+            "Only motifs accepted by the frozen motif policy support recurring evidence.\n"
         ).encode("utf-8"),
     }
     artifact_hashes = tuple(
@@ -344,40 +385,63 @@ def _adjacent_periods(rows: Sequence[FeatureRow]) -> tuple[tuple[str, ...], tupl
     )
 
 
-def _motif_payload(rows: Sequence[FeatureRow], matrix) -> tuple[dict[str, object], ...]:
-    groups: dict[tuple[str, str, int], list[float]] = defaultdict(list)
-    for row, values in zip(rows, matrix.values, strict=True):
-        groups[(row.symbol, row.timeframe, row.segment_id)].append(values[0])
-    payload: list[dict[str, object]] = []
-    for key in sorted(groups):
-        values = tuple(groups[key])
-        window_length = min(4, len(values)) if len(values) >= 4 else None
-        exclusion_zone = min(2, window_length - 1) if window_length is not None else None
-        max_windows = len(values) - window_length + 1 if window_length is not None else 0
-        matches = (
-            discover_motifs(
-                values,
-                window_length=window_length,
-                exclusion_zone=exclusion_zone,
-                max_windows=max_windows,
-                top_k=3,
+def _motif_report(
+    *,
+    discovery_rows: Sequence[FeatureRow],
+    discovery_matrix,
+    development_rows: Sequence[FeatureRow],
+    development_matrix,
+    development_periods: Sequence[str],
+    development_asset_universe: Sequence[str],
+    development_period_universe: Sequence[str],
+    regime_assignments: MotifRegimeAssignmentContract,
+    policy: MotifStabilityPolicy,
+):
+    expected = tuple(sorted((*discovery_matrix.row_ids, *development_matrix.row_ids)))
+    assigned = tuple(row_id for row_id, _ in regime_assignments.assignments)
+    if expected != assigned:
+        raise ValueError("golden regime assignments must exactly cover selected rows")
+    assignments = dict(regime_assignments.assignments)
+
+    def observations(rows, matrix, periods):
+        return tuple(
+            MotifObservation(
+                row_id=row_id,
+                timestamp=row.timestamp,
+                information_cutoff=row.information_cutoff,
+                symbol=row.symbol,
+                timeframe=row.timeframe,
+                segment_id=row.segment_id,
+                session_id=row.timestamp.date().isoformat(),
+                period_id=period,
+                regime_id=assignments[row_id],
+                values=values,
             )
-            if window_length is not None and exclusion_zone is not None
-            else ()
+            for row, row_id, values, period in zip(
+                rows, matrix.row_ids, matrix.values, periods, strict=True
+            )
         )
-        payload.append(
-            {
-                "symbol": key[0],
-                "timeframe": key[1],
-                "segment_id": key[2],
-                "window_length": window_length,
-                "exclusion_zone": exclusion_zone,
-                "max_windows": max_windows,
-                "top_k": 3,
-                "matches": [_jsonable(item) for item in matches],
-            }
-        )
-    return tuple(payload)
+
+    discovery_sequences = build_contiguous_motif_sequences(
+        observations(
+            discovery_rows,
+            discovery_matrix,
+            ("discovery",) * len(discovery_rows),
+        ),
+        feature_names=discovery_matrix.feature_names,
+    )
+    development_sequences = build_contiguous_motif_sequences(
+        observations(development_rows, development_matrix, development_periods),
+        feature_names=development_matrix.feature_names,
+    )
+    return evaluate_motif_stability(
+        discovery_sequences=discovery_sequences,
+        development_sequences=development_sequences,
+        development_asset_universe=development_asset_universe,
+        development_period_universe=development_period_universe,
+        development_regime_universe=regime_assignments.regime_universe,
+        policy=policy,
+    )
 
 
 def _transition_evidence(rows, assignments, config: FrozenFixtureRunConfig):
@@ -429,15 +493,15 @@ def _config_payload(config: FrozenFixtureRunConfig) -> dict[str, object]:
         "tolerance": config.tolerance,
         "stability_policy": _jsonable(config.stability_policy),
         "adjacent_period_stability_policy": _jsonable(config.adjacent_period_stability_policy),
+        "motif_stability_policy": _jsonable(config.motif_stability_policy),
+        "motif_regime_assignments": _jsonable(config.motif_regime_assignments),
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
         "orchestration_parameters": {
             "subsample_fraction": 0.75,
             "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
-            "motif_max_window_length": 4,
-            "motif_exclusion_zone": 2,
-            "motif_top_k": 3,
+            "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
             "transition_horizon": 1,
             "transition_bootstrap_iterations": 100,
             "transition_block_length": 2,
@@ -615,6 +679,7 @@ def _interpretations(
 def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path) -> None:
     fixture = _load_json(FIXTURE_PATH)
     assert STABILITY_ALGORITHM_VERSION == "cluster-stability-v2"
+    assert MOTIF_ALGORITHM_VERSION == "boundary-safe-multivariate-motifs-v3"
     assert fixture["schema_version"] == "phase4-discovery-fixture-v2"
     assert "holdout_rows" not in fixture
     assert all(
@@ -642,6 +707,7 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     )
     published_config = _load_json(stable_first_dir / "config.json")
     published_stability = _load_json(stable_first_dir / "stability.json")
+    published_motifs = _load_json(stable_first_dir / "motifs.json")
     assert (
         published_config["adjacent_period_stability_policy"]
         == (fixture["runs"]["stable"]["adjacent_period_stability_policy"])
@@ -656,6 +722,27 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     )
     assert published_stability["cluster_period_support"]
     assert published_stability["adjacent_period_evidence"]
+    assert published_motifs["algorithm_version"] == MOTIF_ALGORITHM_VERSION
+    assert published_motifs["feature_names"] == fixture["feature_names"]
+    assert published_config["motif_regime_assignments"] == fixture[
+        "motif_regime_assignments"
+    ]
+    assert published_motifs["development_regime_universe"] == ["balanced", "expanding"]
+    assert "unclassified" not in json.dumps(published_motifs)
+    assert published_motifs["candidates"]
+    assert all(candidate["accepted"] for candidate in published_motifs["candidates"])
+    for candidate in published_motifs["candidates"]:
+        assert len(candidate["seed_tie_evidence"]) == 4
+        assert len(candidate["subsample_evidence"]) == 4
+        assert len(candidate["parameter_evidence"]) == 18
+        assert all(
+            item["passed"] is (not item["rejection_reasons"])
+            for item in (
+                candidate["seed_tie_evidence"]
+                + candidate["subsample_evidence"]
+                + candidate["parameter_evidence"]
+            )
+        )
     assert _expected_run(stable_first, stable_first_dir) == fixture["runs"]["stable"]["expected"]
 
     rejected_first_root = tmp_path / "rejected-first"
@@ -676,6 +763,13 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
         )
         == fixture["runs"]["rejected"]["expected"]
     )
+    rejected_motifs = _load_json(
+        rejected_first_root / rejected_first.run_id / "motifs.json"
+    )
+    assert rejected_motifs["candidates"]
+    assert all(not candidate["accepted"] for candidate in rejected_motifs["candidates"])
+    assert all(candidate["rejection_reasons"] for candidate in rejected_motifs["candidates"])
+    assert all(candidate["universe_support"] for candidate in rejected_motifs["candidates"])
 
 
 def test_phase4_interpretation_input_is_frozen_from_real_evidence(tmp_path) -> None:

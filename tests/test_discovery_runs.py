@@ -30,10 +30,12 @@ from market_structure_lab.discovery import (
     AdjacentPeriodStabilityPolicy,
     BehaviourEvidencePack,
     DiscoveryRunConfig,
+    MotifStabilityPolicy,
     PartitionRole,
     StabilityPolicy,
     TimePartition,
     freeze_split,
+    freeze_motif_regime_assignments,
     make_discovery_input,
     publish_ai_interpretations,
     run_discovery,
@@ -114,6 +116,11 @@ def _row(
     )
 
 
+def _feature_row_id(row: FeatureRow) -> str:
+    timestamp = row.timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return f"{row.symbol}|{row.timeframe}|{timestamp}"
+
+
 def _controlled_repository(
     root: Path,
     lockfile_bytes: bytes,
@@ -171,6 +178,7 @@ def _fixture(
     track_runtime_module: bool = True,
     split_symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT"),
     minimum_asset_coverage: float = 0.0,
+    regime_assignment_mode: str = "complete",
 ):
     registry = _registry()
     discovery_partition = TimePartition(
@@ -322,6 +330,27 @@ def _fixture(
         max_rows=20,
         publication_manifest=feature_publication,
     )
+    regime_pairs = [
+        (
+            _feature_row_id(row),
+            "balanced" if row.symbol == "BTCUSDT" else "expanding",
+        )
+        for row in (*discovery.rows, *development.rows)
+    ]
+    if regime_assignment_mode == "missing":
+        regime_pairs.pop()
+    elif regime_assignment_mode == "extra":
+        regime_pairs.append(("UNKNOWN|1m|2025-01-01T00:00:00Z", "balanced"))
+    elif regime_assignment_mode != "complete":
+        raise ValueError("unsupported regime_assignment_mode fixture")
+    regime_assignments = freeze_motif_regime_assignments(
+        contract_id="software-test-regimes-v1",
+        algorithm_version="symbol-partition-fixture-v1",
+        information_policy="contemporaneous",
+        outcome_policy="outcome_blind",
+        regime_universe=("balanced", "expanding"),
+        assignments=regime_pairs,
+    )
     policy = (
         StabilityPolicy(1.0, 1.0, 0.0, 1.0, 1.0)
         if rejected
@@ -338,6 +367,7 @@ def _fixture(
         development=development,
         code_commit=code_commit,
         lockfile_bytes=lockfile_bytes,
+        motif_regime_assignment_sha256=regime_assignments.sha256,
     )
     config = DiscoveryRunConfig(
         run_id="DR-000502" if rejected else "DR-000501",
@@ -363,6 +393,27 @@ def _fixture(
             maximum_assignment_margin_drift=2.0,
             minimum_cluster_event_support=1,
         ),
+        motif_stability_policy=MotifStabilityPolicy(
+            policy_id="software-test-run-motifs-v1",
+            policy_purpose="software_fixture",
+            window_lengths=(2, 3),
+            exclusion_zones=(1, 2),
+            tie_seeds=(7, 11),
+            tie_policies=("canonical", "seeded_hash"),
+            subsample_fraction=0.75,
+            distance_multipliers=(0.9, 1.0, 1.1),
+            maximum_distance=0.25,
+            max_windows=20,
+            top_k=3,
+            minimum_seed_rank_agreement=0.5,
+            minimum_subsample_agreement=0.0,
+            minimum_parameter_agreement=0.1,
+            minimum_recurrence_support=1,
+            minimum_asset_support=1,
+            minimum_period_support=1,
+            minimum_regime_support=1,
+        ),
+        motif_regime_assignments=regime_assignments,
         code_commit=code_commit,
         lock_sha256=lock_sha256,
         feature_publication_id="FP-000501",
@@ -453,6 +504,12 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     published_config = json.loads(
         (tmp_path / first.run_id / "config.json").read_text(encoding="utf-8")
     )
+    published_motifs = json.loads(
+        (tmp_path / first.run_id / "motifs.json").read_text(encoding="utf-8")
+    )
+    published_metrics = json.loads(
+        (tmp_path / first.run_id / "metrics.json").read_text(encoding="utf-8")
+    )
     assert published_manifest["schema_version"] == "discovery-run-manifest-v2"
     assert published_manifest["transition_matrix"] == published_transitions
     assert published_config["adjacent_period_stability_policy"] == {
@@ -463,6 +520,21 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
         "policy_id": "software-test-run-adjacent-period-v1",
         "policy_purpose": "software_fixture",
     }
+    assert published_motifs["algorithm_version"] == "boundary-safe-multivariate-motifs-v3"
+    assert published_motifs["feature_names"] == ["auction_location", "volume_change"]
+    assert published_motifs["development_regime_universe"] == ["balanced", "expanding"]
+    assert "unclassified" not in json.dumps(published_motifs)
+    assert published_config["motif_regime_assignments"]["sha256"] == (
+        provenance.motif_regime_assignment_sha256
+    )
+    assert all(
+        candidate["accepted"] is (not candidate["rejection_reasons"])
+        for candidate in published_motifs["candidates"]
+    )
+    assert published_metrics["motif_candidates"] == len(published_motifs["candidates"])
+    assert published_metrics["motifs_published"] + published_metrics["motifs_rejected"] == (
+        published_metrics["motif_candidates"]
+    )
     assert replay.transition_matrix == first.transition_matrix
     receipt = verify_trial_receipt(tmp_path / first.run_id)
     assert receipt.mode is ExperimentMode.DISCOVERY
@@ -478,6 +550,44 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
         for path in (tmp_path / first.run_id).rglob("*")
         if path.is_file()
     }
+
+
+def test_motif_rejection_does_not_reject_independent_cluster_behaviours(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+    config = arguments["config"]
+    arguments["config"] = replace(
+        config,
+        motif_stability_policy=replace(
+            config.motif_stability_policy,
+            minimum_asset_support=3,
+        ),
+    )
+
+    manifest = _run(arguments)
+    metrics = json.loads(
+        (tmp_path / manifest.run_id / "metrics.json").read_text(encoding="utf-8")
+    )
+    motifs = json.loads(
+        (tmp_path / manifest.run_id / "motifs.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest.status == "completed"
+    assert len(manifest.behaviours) == 2
+    assert metrics["motifs_published"] == 0
+    assert metrics["motifs_rejected"] == metrics["motif_candidates"]
+    assert motifs["candidates"]
+    assert all(not candidate["accepted"] for candidate in motifs["candidates"])
+
+
+@pytest.mark.parametrize("regime_assignment_mode", ["missing", "extra"])
+def test_run_rejects_incomplete_or_unknown_regime_row_ids_before_motif_construction(
+    tmp_path,
+    regime_assignment_mode: str,
+) -> None:
+    arguments = _fixture(tmp_path, regime_assignment_mode=regime_assignment_mode)
+
+    with pytest.raises(ValueError, match="exactly cover selected rows"):
+        _run(arguments)
 
 
 def test_adjacent_period_policy_is_bound_into_run_identity(tmp_path) -> None:
@@ -497,6 +607,22 @@ def test_adjacent_period_policy_is_bound_into_run_identity(tmp_path) -> None:
         _run(changed)
 
 
+def test_regime_assignment_policy_and_hash_are_bound_to_verified_provenance(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+    config = arguments["config"]
+    changed_contract = freeze_motif_regime_assignments(
+        contract_id=config.motif_regime_assignments.contract_id,
+        algorithm_version="changed-contemporaneous-fixture-v2",
+        information_policy="contemporaneous",
+        outcome_policy="outcome_blind",
+        regime_universe=config.motif_regime_assignments.regime_universe,
+        assignments=config.motif_regime_assignments.assignments,
+    )
+
+    with pytest.raises(ValueError, match="motif_regime_assignment_sha256"):
+        replace(config, motif_regime_assignments=changed_contract)
+
+
 def test_run_uses_complete_frozen_development_asset_universe_before_publication(
     tmp_path,
 ) -> None:
@@ -505,10 +631,20 @@ def test_run_uses_complete_frozen_development_asset_universe_before_publication(
         split_symbols=("BTCUSDT", "ETHUSDT", "SOLUSDT"),
         minimum_asset_coverage=1.0,
     )
+    arguments["config"] = replace(
+        arguments["config"],
+        motif_stability_policy=replace(
+            arguments["config"].motif_stability_policy,
+            minimum_asset_support=3,
+        ),
+    )
 
     manifest = _run(arguments)
     stability = json.loads(
         (tmp_path / manifest.run_id / "stability.json").read_text(encoding="utf-8")
+    )
+    motifs = json.loads(
+        (tmp_path / manifest.run_id / "motifs.json").read_text(encoding="utf-8")
     )
 
     assert manifest.status == "rejected_unstable"
@@ -516,6 +652,18 @@ def test_run_uses_complete_frozen_development_asset_universe_before_publication(
     assert all(
         support["asset_event_counts"][-1] == ["SOLUSDT", 0]
         for support in stability["cluster_period_support"]
+    )
+    assert motifs["development_asset_universe"] == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    assert motifs["candidates"]
+    assert all(not candidate["accepted"] for candidate in motifs["candidates"])
+    assert all(
+        any(
+            item["dimension"] == "asset"
+            and item["member_id"] == "SOLUSDT"
+            and item["sequence_count"] == 0
+            for item in candidate["universe_support"]
+        )
+        for candidate in motifs["candidates"]
     )
 
 

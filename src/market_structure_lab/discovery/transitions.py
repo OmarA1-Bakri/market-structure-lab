@@ -8,7 +8,7 @@ from bisect import bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Iterable, Literal, Sequence
+from typing import Iterable, Literal, Protocol, Sequence
 
 _MAX_ROWS = 1_000_000
 _MAX_BOOTSTRAP_ITERATIONS = 10_000
@@ -17,6 +17,36 @@ _MAX_BOOTSTRAP_PROBABILITY_SAMPLES = 1_000_000
 _TRANSITION_ALGORITHM_VERSION: Literal["boundary-aware-dwell-transitions-v2"] = (
     "boundary-aware-dwell-transitions-v2"
 )
+
+
+class BoundaryObservation(Protocol):
+    """Shared observable fields defining one canonical contiguous sequence boundary."""
+
+    @property
+    def timestamp(self) -> datetime: ...
+
+    @property
+    def information_cutoff(self) -> datetime: ...
+
+    @property
+    def symbol(self) -> str: ...
+
+    @property
+    def timeframe(self) -> str: ...
+
+    @property
+    def segment_id(self) -> int: ...
+
+    @property
+    def session_id(self) -> str: ...
+
+
+def is_contiguous_observation(left: BoundaryObservation, right: BoundaryObservation) -> bool:
+    """Return whether two ordered observations share identity and causal time continuity."""
+
+    return _sequence_key(left) == _sequence_key(right) and (
+        left.information_cutoff == right.timestamp
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,7 +404,11 @@ def _compress_validated(
 ) -> tuple[ClusterObservation, ...]:
     compressed: list[ClusterObservation] = []
     for row in observations:
-        if compressed and _is_contiguous(compressed[-1], row) and compressed[-1].label == row.label:
+        if (
+            compressed
+            and is_contiguous_observation(compressed[-1], row)
+            and compressed[-1].label == row.label
+        ):
             compressed[-1] = replace(compressed[-1], information_cutoff=row.information_cutoff)
         else:
             compressed.append(row)
@@ -386,20 +420,14 @@ def _contiguous_sequences(
 ) -> tuple[tuple[ClusterObservation, ...], ...]:
     sequences: list[list[ClusterObservation]] = []
     for row in rows:
-        if not sequences or not _is_contiguous(sequences[-1][-1], row):
+        if not sequences or not is_contiguous_observation(sequences[-1][-1], row):
             sequences.append([row])
         else:
             sequences[-1].append(row)
     return tuple(tuple(sequence) for sequence in sequences)
 
 
-def _is_contiguous(left: ClusterObservation, right: ClusterObservation) -> bool:
-    return _sequence_key(left) == _sequence_key(right) and (
-        left.information_cutoff == right.timestamp
-    )
-
-
-def _sequence_key(row: ClusterObservation) -> tuple[str, str, int, str]:
+def _sequence_key(row: BoundaryObservation) -> tuple[str, str, int, str]:
     return row.symbol, row.timeframe, row.segment_id, row.session_id
 
 
@@ -413,7 +441,9 @@ def _boundary_evidence(
         raw_observation_count=len(observations),
         dwell_run_count=len(compressed),
         contiguous_sequence_count=len(sequences),
-        boundary_break_count=sum(not _is_contiguous(left, right) for left, right in adjacent),
+        boundary_break_count=sum(
+            not is_contiguous_observation(left, right) for left, right in adjacent
+        ),
         symbol_break_count=sum(left.symbol != right.symbol for left, right in adjacent),
         timeframe_break_count=sum(left.timeframe != right.timeframe for left, right in adjacent),
         segment_break_count=sum(left.segment_id != right.segment_id for left, right in adjacent),

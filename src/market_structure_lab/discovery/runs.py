@@ -8,7 +8,6 @@ import math
 import re
 import shutil
 import subprocess
-from collections import defaultdict
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -35,7 +34,15 @@ from market_structure_lab.discovery.evidence import (
 )
 from market_structure_lab.discovery.kmeans import fit_projected_kmeans
 from market_structure_lab.discovery.matrix import FeatureMatrix, build_feature_matrix
-from market_structure_lab.discovery.motifs import MotifMatch, discover_motifs
+from market_structure_lab.discovery.motifs import (
+    MOTIF_ALGORITHM_VERSION,
+    MotifDiscoveryReport,
+    MotifObservation,
+    MotifRegimeAssignmentContract,
+    MotifStabilityPolicy,
+    build_contiguous_motif_sequences,
+    evaluate_motif_stability,
+)
 from market_structure_lab.discovery.pca import fit_pca
 from market_structure_lab.discovery.splits import (
     DiscoveryInput,
@@ -78,9 +85,6 @@ _MAX_INTERPRETATIONS = 1_000
 _MAX_BUNDLE_ENTRIES = 20_000
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _SUBSAMPLE_FRACTION = 0.75
-_MOTIF_MAX_WINDOW_LENGTH = 4
-_MOTIF_EXCLUSION_ZONE = 2
-_MOTIF_TOP_K = 3
 _TRANSITION_BOOTSTRAP_ITERATIONS = 100
 _TRANSITION_BLOCK_LENGTH = 2
 _TRANSITION_CONFIDENCE_LEVEL = 0.95
@@ -112,6 +116,8 @@ class DiscoveryRunConfig:
     tolerance: float
     stability_policy: StabilityPolicy
     adjacent_period_stability_policy: AdjacentPeriodStabilityPolicy
+    motif_stability_policy: MotifStabilityPolicy
+    motif_regime_assignments: MotifRegimeAssignmentContract
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -166,6 +172,12 @@ class DiscoveryRunConfig:
             raise TypeError(
                 "adjacent_period_stability_policy must be an AdjacentPeriodStabilityPolicy"
             )
+        if not isinstance(self.motif_stability_policy, MotifStabilityPolicy):
+            raise TypeError("motif_stability_policy must be a MotifStabilityPolicy")
+        if not isinstance(self.motif_regime_assignments, MotifRegimeAssignmentContract):
+            raise TypeError(
+                "motif_regime_assignments must be a MotifRegimeAssignmentContract"
+            )
         _require_pattern(self.code_commit, _CODE_COMMIT, "code_commit")
         _require_sha256(self.lock_sha256, "lock_sha256")
         if not isinstance(self.provenance, DiscoveryProvenance):
@@ -193,6 +205,7 @@ class DiscoveryRunConfig:
             "split_sha256": self.split.sha256,
             "code_commit": self.code_commit,
             "lock_sha256": self.lock_sha256,
+            "motif_regime_assignment_sha256": self.motif_regime_assignments.sha256,
         }
         for field, expected in expected_provenance.items():
             if getattr(self.provenance, field) != expected:
@@ -406,7 +419,17 @@ def _run_discovery_implementation(
         symbols=tuple(row.symbol for row in selected_discovery),
         description="Neutral recurring outcome-blind feature configurations.",
     )
-    motif_payload = _motif_payload(selected_discovery, discovery_matrix)
+    motif_report = _motif_report(
+        discovery_rows=selected_discovery,
+        discovery_matrix=discovery_matrix,
+        development_rows=selected_development,
+        development_matrix=development_matrix,
+        development_periods=periods,
+        development_period_universe=period_order,
+        development_asset_universe=config.split.development.symbols,
+        regime_assignments=config.motif_regime_assignments,
+        policy=config.motif_stability_policy,
+    )
     transition_matrix = _transition_evidence(selected_discovery, clustering.assignments, config)
     status: Literal["completed", "rejected_unstable"] = (
         "completed" if stability.accepted else "rejected_unstable"
@@ -430,7 +453,9 @@ def _run_discovery_implementation(
             "development": development_matrix.dropped_null_rows,
         },
         "behaviours": len(behaviours),
-        "motifs": _motif_count(motif_payload),
+        "motif_candidates": len(motif_report.candidates),
+        "motifs_published": motif_report.published_count,
+        "motifs_rejected": motif_report.rejected_count,
         "transitions": transition_matrix.total_transitions,
     }
     payloads: dict[str, bytes] = {
@@ -439,12 +464,17 @@ def _run_discovery_implementation(
         "clustering.json": _json_file(clustering),
         "stability.json": _json_file(stability),
         "behaviours.json": _json_file(behaviours),
-        "motifs.json": _json_file(motif_payload),
+        "motifs.json": _json_file(motif_report),
         "transitions.json": _json_file(transition_matrix),
         "metrics.json": _json_file(metrics_payload),
         "summary.md": (
             f"# {config.run_id}\n\nStatus: {status}\n\n"
-            "Outcome-blind discovery; final holdout was not accessed.\n"
+            "Outcome-blind discovery; final holdout was not accessed.\n\n"
+            f"Cluster behaviours: {len(behaviours)} (independent stability path).\n"
+            f"Motif candidates: {len(motif_report.candidates)}; "
+            f"published: {motif_report.published_count}; "
+            f"rejected and retained: {motif_report.rejected_count}.\n"
+            "Only motifs accepted by the frozen motif policy support recurring evidence.\n"
         ).encode("utf-8"),
     }
     artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
@@ -695,6 +725,7 @@ def _verify_artifact_provenance(
         development=development,
         code_commit=config.code_commit,
         lockfile_bytes=lockfile_bytes,
+        motif_regime_assignment_sha256=config.motif_regime_assignments.sha256,
     )
     if verified != config.provenance:
         raise ValueError("supplied artifacts do not match verified discovery provenance")
@@ -810,44 +841,84 @@ def _adjacent_periods(
     return periods, ("development-early", "development-late")
 
 
-def _motif_payload(
-    rows: Sequence[FeatureRow], matrix: FeatureMatrix
-) -> tuple[dict[str, object], ...]:
-    groups: dict[tuple[str, str, int], list[float]] = defaultdict(list)
-    for row, values in zip(rows, matrix.values, strict=True):
-        groups[(row.symbol, row.timeframe, row.segment_id)].append(values[0])
-    payload: list[dict[str, object]] = []
-    for key in sorted(groups):
-        values = tuple(groups[key])
-        if len(values) < 4:
-            matches: tuple[MotifMatch, ...] = ()
-            window_length = None
-            exclusion_zone = None
-            max_windows = 0
-        else:
-            window_length = min(_MOTIF_MAX_WINDOW_LENGTH, len(values))
-            exclusion_zone = min(_MOTIF_EXCLUSION_ZONE, window_length - 1)
-            max_windows = len(values) - window_length + 1
-            matches = discover_motifs(
-                values,
-                window_length=window_length,
-                exclusion_zone=exclusion_zone,
-                max_windows=max_windows,
-                top_k=_MOTIF_TOP_K,
-            )
-        payload.append(
-            {
-                "symbol": key[0],
-                "timeframe": key[1],
-                "segment_id": key[2],
-                "window_length": window_length,
-                "exclusion_zone": exclusion_zone,
-                "max_windows": max_windows,
-                "top_k": _MOTIF_TOP_K,
-                "matches": [_jsonable(item) for item in matches],
-            }
+def _motif_report(
+    *,
+    discovery_rows: Sequence[FeatureRow],
+    discovery_matrix: FeatureMatrix,
+    development_rows: Sequence[FeatureRow],
+    development_matrix: FeatureMatrix,
+    development_periods: Sequence[str],
+    development_asset_universe: Sequence[str],
+    development_period_universe: Sequence[str],
+    regime_assignments: MotifRegimeAssignmentContract,
+    policy: MotifStabilityPolicy,
+) -> MotifDiscoveryReport:
+    expected_row_ids = tuple(sorted((*discovery_matrix.row_ids, *development_matrix.row_ids)))
+    assigned_row_ids = tuple(row_id for row_id, _ in regime_assignments.assignments)
+    if assigned_row_ids != expected_row_ids:
+        missing = sorted(set(expected_row_ids) - set(assigned_row_ids))
+        extra = sorted(set(assigned_row_ids) - set(expected_row_ids))
+        raise ValueError(
+            "motif regime assignments must exactly cover selected rows; "
+            f"missing={missing!r}; extra={extra!r}"
         )
-    return tuple(payload)
+    assignment_map = dict(regime_assignments.assignments)
+    discovery_observations = _motif_observations(
+        discovery_rows,
+        discovery_matrix,
+        periods=("discovery",) * len(discovery_rows),
+        regime_assignments=assignment_map,
+    )
+    development_observations = _motif_observations(
+        development_rows,
+        development_matrix,
+        periods=development_periods,
+        regime_assignments=assignment_map,
+    )
+    discovery_sequences = build_contiguous_motif_sequences(
+        discovery_observations,
+        feature_names=discovery_matrix.feature_names,
+    )
+    development_sequences = build_contiguous_motif_sequences(
+        development_observations,
+        feature_names=development_matrix.feature_names,
+    )
+    return evaluate_motif_stability(
+        discovery_sequences=discovery_sequences,
+        development_sequences=development_sequences,
+        development_asset_universe=development_asset_universe,
+        development_period_universe=development_period_universe,
+        development_regime_universe=regime_assignments.regime_universe,
+        policy=policy,
+    )
+
+
+def _motif_observations(
+    rows: Sequence[FeatureRow],
+    matrix: FeatureMatrix,
+    *,
+    periods: Sequence[str],
+    regime_assignments: Mapping[str, str],
+) -> tuple[MotifObservation, ...]:
+    if len(rows) != len(matrix.values) or len(rows) != len(periods):
+        raise RuntimeError("motif rows, matrix values, and periods must align")
+    return tuple(
+        MotifObservation(
+            row_id=row_id,
+            timestamp=row.timestamp,
+            information_cutoff=row.information_cutoff,
+            symbol=row.symbol,
+            timeframe=row.timeframe,
+            segment_id=row.segment_id,
+            session_id=row.timestamp.date().isoformat(),
+            period_id=period,
+            regime_id=regime_assignments[row_id],
+            values=values,
+        )
+        for row, row_id, values, period in zip(
+            rows, matrix.row_ids, matrix.values, periods, strict=True
+        )
+    )
 
 
 def _transition_evidence(
@@ -878,16 +949,6 @@ def _transition_evidence(
     )
 
 
-def _motif_count(payload: Sequence[Mapping[str, object]]) -> int:
-    total = 0
-    for group in payload:
-        matches = group.get("matches")
-        if not isinstance(matches, list):
-            raise RuntimeError("motif payload is internally inconsistent")
-        total += len(matches)
-    return total
-
-
 def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
     payload: dict[str, object] = {
         "run_id": config.run_id,
@@ -913,15 +974,15 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
         "tolerance": config.tolerance,
         "stability_policy": _jsonable(config.stability_policy),
         "adjacent_period_stability_policy": _jsonable(config.adjacent_period_stability_policy),
+        "motif_stability_policy": _jsonable(config.motif_stability_policy),
+        "motif_regime_assignments": _jsonable(config.motif_regime_assignments),
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
         "orchestration_parameters": {
             "subsample_fraction": _SUBSAMPLE_FRACTION,
             "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
-            "motif_max_window_length": _MOTIF_MAX_WINDOW_LENGTH,
-            "motif_exclusion_zone": _MOTIF_EXCLUSION_ZONE,
-            "motif_top_k": _MOTIF_TOP_K,
+            "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
             "transition_horizon": 1,
             "transition_bootstrap_iterations": _TRANSITION_BOOTSTRAP_ITERATIONS,
             "transition_block_length": _TRANSITION_BLOCK_LENGTH,
@@ -1007,7 +1068,9 @@ def _trial_config(
             "discovery_rows": "integer",
             "development_rows": "integer",
             "dropped_null_rows": "object",
-            "motifs": "integer",
+            "motif_candidates": "integer",
+            "motifs_published": "integer",
+            "motifs_rejected": "integer",
             "status": "string",
             "transitions": "integer",
         },

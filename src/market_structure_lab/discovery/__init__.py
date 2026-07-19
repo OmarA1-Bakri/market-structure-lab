@@ -11,7 +11,28 @@ from market_structure_lab.discovery.evidence import (
 )
 from market_structure_lab.discovery.kmeans import KMeansResult, fit_kmeans, fit_projected_kmeans
 from market_structure_lab.discovery.matrix import FeatureMatrix, build_feature_matrix
-from market_structure_lab.discovery.motifs import MotifMatch, discover_motifs
+from market_structure_lab.discovery.motifs import (
+    MOTIF_ALGORITHM_VERSION,
+    MOTIF_REGIME_ASSIGNMENT_VERSION,
+    UNIVARIATE_BASELINE_ALGORITHM_VERSION,
+    MotifCandidateEvidence,
+    MotifDiscoveryReport,
+    MotifMatch,
+    MotifObservation,
+    MotifPerturbationEvidence,
+    MotifRegimeAssignmentContract,
+    MotifRecurrenceSupport,
+    MotifSequence,
+    MotifStabilityPolicy,
+    MotifTiePolicy,
+    MotifUniverseSupport,
+    MultivariateMotifMatch,
+    build_contiguous_motif_sequences,
+    discover_motifs,
+    discover_multivariate_motifs,
+    evaluate_motif_stability,
+    freeze_motif_regime_assignments,
+)
 from market_structure_lab.discovery.pca import PCAProjection, fit_pca, pca_projection_sha256
 from market_structure_lab.discovery.runs import (
     DiscoveryRunConfig,
@@ -43,6 +64,7 @@ from market_structure_lab.discovery.stability import (
     evaluate_cluster_stability,
 )
 from market_structure_lab.discovery.transitions import (
+    BoundaryObservation,
     ClusterObservation,
     ClusterTransitionEstimate,
     ClusterTransitionMatrix,
@@ -50,6 +72,7 @@ from market_structure_lab.discovery.transitions import (
     TransitionBoundaryEvidence,
     compress_dwell_runs,
     estimate_cluster_transitions,
+    is_contiguous_observation,
 )
 
 __all__ = [
@@ -71,6 +94,20 @@ __all__ = [
     "InterpretationManifest",
     "KMeansResult",
     "MotifMatch",
+    "MotifObservation",
+    "MotifRegimeAssignmentContract",
+    "MotifPerturbationEvidence",
+    "MotifSequence",
+    "MultivariateMotifMatch",
+    "MotifStabilityPolicy",
+    "MotifTiePolicy",
+    "MotifUniverseSupport",
+    "MotifRecurrenceSupport",
+    "MotifCandidateEvidence",
+    "MotifDiscoveryReport",
+    "MOTIF_ALGORITHM_VERSION",
+    "MOTIF_REGIME_ASSIGNMENT_VERSION",
+    "UNIVARIATE_BASELINE_ALGORITHM_VERSION",
     "PCAProjection",
     "PartitionRole",
     "AdjacentClusterEvidence",
@@ -84,10 +121,14 @@ __all__ = [
     "TimePartition",
     "adjusted_rand_index",
     "build_feature_matrix",
+    "build_contiguous_motif_sequences",
     "compress_dwell_runs",
     "discover_motifs",
+    "discover_multivariate_motifs",
     "estimate_cluster_transitions",
     "evaluate_cluster_stability",
+    "evaluate_motif_stability",
+    "freeze_motif_regime_assignments",
     "fit_kmeans",
     "fit_pca",
     "fit_projected_kmeans",
@@ -98,4 +139,6 @@ __all__ = [
     "pca_projection_sha256",
     "publish_ai_interpretations",
     "run_discovery",
+    "BoundaryObservation",
+    "is_contiguous_observation",
 ]

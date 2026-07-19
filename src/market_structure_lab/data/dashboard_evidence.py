@@ -301,6 +301,7 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
         "development_rows",
         "event_ids",
         "durations_seconds",
+        "motif_regime_assignments",
         "runs",
         "interpretation_input_sha256",
         "interpretation_response_sha256",

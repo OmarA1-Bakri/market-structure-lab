@@ -137,6 +137,7 @@ class DiscoveryProvenance:
     split_sha256: str
     code_commit: str
     lock_sha256: str
+    motif_regime_assignment_sha256: str
     feature_partitions: tuple[tuple[str, str, str], ...]
     discovery_input_sha256: str
     development_input_sha256: str
@@ -160,6 +161,7 @@ def freeze_discovery_provenance(
     development: DiscoveryInput,
     code_commit: str,
     lockfile_bytes: bytes,
+    motif_regime_assignment_sha256: str,
 ) -> DiscoveryProvenance:
     """Validate and freeze the complete snapshot-to-discovery artifact chain."""
 
@@ -185,6 +187,8 @@ def freeze_discovery_provenance(
     if not isinstance(lockfile_bytes, bytes):
         raise TypeError("lockfile bytes are required")
     lock_sha256 = hashlib.sha256(lockfile_bytes).hexdigest()
+    if _SHA256.fullmatch(motif_regime_assignment_sha256) is None:
+        raise ValueError("motif regime assignment SHA-256 is invalid")
     identity = feature_publication.identity
     if feature_publication.publication_kind != "features":
         raise ValueError("discovery requires a feature publication")
@@ -258,6 +262,7 @@ def freeze_discovery_provenance(
         "split_sha256": split.sha256,
         "code_commit": code_commit,
         "lock_sha256": lock_sha256,
+        "motif_regime_assignment_sha256": motif_regime_assignment_sha256,
         "feature_partitions": [list(item) for item in feature_partitions],
         "discovery_input_sha256": discovery.content_sha256,
         "development_input_sha256": development.content_sha256,
@@ -271,6 +276,7 @@ def freeze_discovery_provenance(
         split_sha256=split.sha256,
         code_commit=code_commit,
         lock_sha256=lock_sha256,
+        motif_regime_assignment_sha256=motif_regime_assignment_sha256,
         feature_partitions=feature_partitions,
         discovery_input_sha256=discovery.content_sha256,
         development_input_sha256=development.content_sha256,
