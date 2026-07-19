@@ -281,15 +281,15 @@ Delivered contracts include:
 The committed golden fixture uses two symbols, 16 discovery rows, eight development rows, and
 separately frozen holdout metadata with no holdout rows or outcomes. Stable `DR-000601` replays
 byte-identically with two behaviours and manifest SHA-256
-`86d754f5be1c3d0b5e2a9d403a7af9c814231f7679421a560f14dc1bbc65b8f2`. Unstable
+`eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b`. Unstable
 `DR-000602` replays byte-identically with no behaviours and manifest SHA-256
-`cbadd46a15144ce89424b40c0d84687ce99764725b323d4f2f9dbb3b66f9e500`.
+`700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0`.
 
 The exact frozen interpretation prompt input SHA-256 is
-`dd306e3eea72684c28d3855e924785c805d1c7b0e8d8961736eab9c5fca526e5`; the parent session-model
-response SHA-256 is `d3a180687ff3e630b559f17c2433359bc86d76e301c585e84da6a0a77453ab06`.
+`9a695a20ca0e7757de142f4c6508c2955e9d1849a36dcce331559d9f34d65cec`; the parent session-model
+response SHA-256 is `d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec`.
 Real publication produced interpretation manifest SHA-256
-`b0370ffee5a3d64ae57fd3e4af798ec98fe00daee70dcb07a2ed08d1b545c53c`. The response proposes
+`b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119`. The response proposes
 falsifiable Phase 5 tests and explicitly records fixture/transition/asset/OHLCV limitations. It does
 not claim a validated edge.
 
@@ -325,11 +325,13 @@ Repository-wide integrating verification completed after the live freshness work
   `1.0248` MiB peak traced memory, and replayed at `730.15` candles/second. Timing is not an
   acceptance threshold.
 
-The recorded synthetic Phase 4 software-fixture verification gate passed; it is not a real-market
-experiment-readiness gate. Under the current Phase 0 review, Phase 4 remains gated pending
-independent provenance-chain verification, cluster and motif hardening, boundary-aware stability and
-transition evidence, leakage controls, and explicit phase approval. Phase 5 remains unstarted and
-separately gated.
+The Phase 4 deterministic software-hardening gate now passes. Tasks 7–11 bind concrete
+snapshot-to-discovery provenance, reject cluster structural drift, make motifs multivariate and
+boundary-safe with separate stability evidence, freeze dependence-aware transition uncertainty,
+and publish checksum-bound semantic-leakage receipts with an explicit manual-review limitation.
+Task 12 verified those contracts without running market discovery or opening the final holdout.
+This is not a real-market experiment-readiness, prediction, validation, strategy, or edge gate.
+Phase C requires separate explicit approval, and Phase 5 remains unstarted and separately gated.
 
 ## RR-000008 full-history reconciliation: complete and promoted
 
@@ -447,9 +449,31 @@ Exact operator commands, paths, status meanings, resumption procedure, compatibi
 deliberate snapshot policy are documented in
 [`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md).
 
-The Phase 4 implementation is synthetic software-fixture evidence only and is **not ready for real
-experiments**. After Phase 0 is complete, Phase 4 still requires independent provenance-chain
-verification, cluster and motif hardening, boundary-aware stability and transition evidence,
-leakage controls, and explicit user approval before any real outcome-blind market experiment. The
-committed golden data remain software-verification fixtures, not market evidence, a validated
-signal, or an edge.
+## Phase 4 hardening: software gate accepted, empirical work stopped
+
+The Phase 4 implementation remains synthetic software-fixture evidence only and is **not authorized
+for a real experiment**. The hardening work is complete at the software boundary:
+
+- concrete snapshot, publication, registry, normalizer, split, commit, and lock identities are
+  verified before matrix construction;
+- cluster evidence covers adjacent frequency, centroid, within-cluster scale, margin drift, and
+  explicit event support without stratifying every subsample by the base clusters;
+- motif sequences cannot bridge null-removal gaps, time gaps, session, symbol, timeframe, segment,
+  duplicate, out-of-order, or information-cutoff boundaries, and have separate multi-axis stability;
+- transition horizon, bootstrap, block, confidence, support, width, and sensitivity settings are
+  frozen and remain descriptive conditional-recurrence evidence; and
+- feature dependency/cutoff contracts and independent negative-test receipts are hash-bound while
+  retaining mandatory manual review.
+
+Fresh Task 12 evidence includes `414` Phase B targeted tests, `50` trial-accounting tests, `10`
+holdout/leakage pre-consumption sentinels, `13` bounded-work tests, `1,100` passed Windows-native
+tests with `8` explicit database skips, Mypy across `78` source files, Ruff across `144` Python
+files, package and dashboard builds, Compose validation, and independent clean-root byte comparison
+of stable, rejected, and interpretation publications. Exact commands, log hashes, artefact hashes,
+limitations, and the stop decision are in
+[`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md).
+
+The committed golden data remain software-verification fixtures, not market evidence, a validated
+signal, or an edge. The repository still contains zero verified real trials. A new research
+snapshot, empirical thresholds, and any real outcome-blind discovery remain Phase C work and must
+wait for explicit user approval.

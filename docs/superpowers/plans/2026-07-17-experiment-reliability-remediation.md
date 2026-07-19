@@ -158,20 +158,21 @@ The authoritative sweep is `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`.
 
 ### Phase 4 hardening exit criteria
 
-- [ ] Discovery verifies the complete derivation chain from snapshot through normalized feature
+- [x] Discovery verifies the complete derivation chain from snapshot through normalized feature
       publication.
-- [ ] Normalizer and publication identity drift fail before PCA or clustering reads rows.
-- [ ] Motifs cannot bridge dropped/null rows or any hard sequence boundary.
-- [ ] Cluster and motif stability policies are separately measured and frozen.
-- [ ] Adjacent-period stability covers frequency, centroid, and within-cluster dispersion drift.
-- [ ] Subsample stability does not force every base cluster into every sample.
-- [ ] Transition horizon, bootstrap iterations, block policy, confidence level, and diagnostics are
+- [x] Normalizer and publication identity drift fail before PCA or clustering reads rows.
+- [x] Motifs cannot bridge dropped/null rows or any hard sequence boundary.
+- [x] Cluster and motif stability policies are separately measured and frozen.
+- [x] Adjacent-period stability covers frequency, centroid, and within-cluster dispersion drift.
+- [x] Subsample stability does not force every base cluster into every sample.
+- [x] Transition horizon, bootstrap iterations, block policy, confidence level, and diagnostics are
       frozen run inputs.
-- [ ] Feature leakage evidence includes declared source dependencies and an independent audit.
-- [ ] A real outcome-blind discovery may run only after explicit approval and must not access final
+- [x] Feature leakage evidence includes declared source dependencies and an independent audit.
+- [x] A real outcome-blind discovery may run only after explicit approval and must not access final
       holdout rows or outcomes.
 - [ ] Every completed Phase 4 hardening task has a verified remote commit SHA recorded in the
-      evidence report.
+      evidence report. Tasks 7–11 are remotely verified; Task 12 is intentionally local under its
+      no-push constraint.
 
 ### Phase 5 readiness criteria
 
@@ -735,12 +736,12 @@ leakage patterns fail; the documentation states the residual manual-review limit
 - Update: `docs/EXPERIMENT_ACCURACY_OVERVIEW.md`
 - Create: `docs/PHASE4_HARDENING_EVIDENCE.md`
 
-- [ ] Run all Phase B targeted tests.
-- [ ] Run the complete repository verification chain from Task 6.
-- [ ] Re-run golden publication twice from clean roots and compare every byte.
-- [ ] Review bounded memory, holdout non-access, provenance linkage, trial accounting, sequence
+- [x] Run all Phase B targeted tests.
+- [x] Run the complete repository verification chain from Task 6.
+- [x] Re-run golden publication twice from clean roots and compare every byte.
+- [x] Review bounded memory, holdout non-access, provenance linkage, trial accounting, sequence
       boundaries, and absence of inferential/edge claims.
-- [ ] Write the evidence report and stop for explicit approval before any real discovery run.
+- [x] Write the evidence report and stop for explicit approval before any real discovery run.
 
 ---
 

@@ -65,7 +65,12 @@ market evidence. A new research snapshot still requires its own frozen provenanc
 
 The committed Phase 4 fixture contains 16 discovery rows and eight development rows (`docs/DISCOVERY_MVP.md:100-105`). It exercises the real split, matrix, PCA, K-means, stability, motif, transition, behaviour, evidence, and publication APIs. The original review reproduced three cross-platform golden failures caused by last-bit SciPy/LAPACK variation entering identity-bearing PCA projections. The repair introduced an explicit `deterministic-pca-v2` canonical numeric boundary, fail-closed handling for non-identifiable singular subspaces, and a reviewed fixture migration (`docs/benchmarks/phase4-golden-drift-diagnosis.md`).
 
-Fresh post-repair verification ran the 86-test discovery, behaviour, evidence, and golden suite on both Linux and Windows: **86 passed on each platform**. Ruff and Mypy also passed for the repaired discovery surface. This restores the software-fixture replay contract; it does not create market evidence. The fixture is not sampled market evidence, does not prove that its behaviours exist in cryptocurrency data, and is not evidence of profitability (`docs/DISCOVERY_MVP.md:137-148`; `docs/IMPLEMENTATION_STATUS.md:393-395`).
+The original 86-test cross-platform repair remains part of the audit trail. The subsequent Phase 4
+hardening gate ran 414 focused Phase B tests, 50 trial-accounting tests, 10 holdout/leakage
+pre-consumption sentinels, and 13 boundedness guards. The complete Windows-native suite passed with
+**1,100 passed and 8 isolated-PostgreSQL skips**; Ruff, Mypy, package build, lock, Compose, dashboard,
+and independent clean-root byte replay also passed (`docs/PHASE4_HARDENING_EVIDENCE.md`). This proves
+the software-fixture contract, not market recurrence or profitability.
 
 ### 4. Real experiment evidence: absent
 
@@ -75,8 +80,9 @@ The absence is now machine-readable rather than inferred from optimistic UI defa
 generator verifies the canonical ledger and reports exact mode/status counts: all four modes and all
 five terminal statuses are zero. It rejects malformed receipts, checksum drift, extra files, and
 interrupted staging, and it never counts the synthetic Phase 4 fixture as a real trial. Required
-snapshot, feature-publication, registry, and normalizer identities are receipt-bound assertions;
-this task does not prove their complete derivation chain.
+snapshot, feature-publication, registry, and normalizer identities are receipt-bound assertions.
+The Phase 4 hardening work now verifies their concrete checksum-bearing derivation chain before PCA
+or clustering may read rows. No real market publication has exercised that chain yet.
 
 Consequently:
 
@@ -90,16 +96,16 @@ Consequently:
 
 | Dimension | Current assessment | Confidence | Basis |
 |---|---|---:|---|
-| Deterministic software replay | Green for the synthetic fixture on Linux and Windows | High | Fresh post-repair suite: 86 passed per platform; explicit `deterministic-pca-v2` identity |
+| Deterministic software replay | Green for the synthetic fixture on Linux and Windows | High | 1,100-test Windows suite plus independent clean-root, every-byte replay; explicit `deterministic-pca-v2` identity |
 | Required-field candle validity | Strong for inspected source rows | High | Zero duplicates/null-required/invalid-OHLC/off-grid rows |
 | Full-universe temporal coverage | Weak and uneven | High | 7.739M minutes remain absent; 9 source conflicts; 12 provider-absent statuses |
 | Existing-row venue reconciliation | Complete, promoted | High | RR-000008 is active, receipt-bound, replay-idempotent, and publishes 67,632,983 verified canonical rows |
 | Outcome-blind access boundary | Structurally strong | High | Holdout rows are rejected and future/outcome feature classes are blocked |
-| End-to-end normalization provenance | Required identities, derivation still unverified | High | Canonical receipts require snapshot, feature-publication, registry, and normalizer identities; source-backed chain verification remains a post-Phase-0 Phase 4 hardening gate |
+| End-to-end normalization provenance | Concrete software chain verified; real publication unexercised | High | factory-created `DiscoveryProvenance` authenticates snapshot, publication, registry/dependencies, normalizer, split, feature order, commit, and lock before matrix construction |
 | Immutable trial accounting | Implemented but empirically empty | High | Canonical terminal receipts are atomic, idempotent, fail closed, and counted by verified mode/status; repository count is `n=0` |
 | Real detector/cluster stability | Unknown | High | No real discovery run exists |
-| Motif stability and boundary safety | Insufficient | High | Motifs are not stability-tested and orchestration lacks explicit time/session-contiguity checks |
-| Transition description | Structurally safe, statistically descriptive | High | The sole public path dwell-compresses, preserves boundary evidence, and exposes no adjacent-binomial/BH inference API |
+| Motif stability and boundary safety | Structurally strong; empirical calibration absent | High | Boundary-safe multivariate motifs retain separate seed/tie, subsample, parameter, asset, period, and outcome-blind regime evidence |
+| Transition description | Structurally safe, frozen, and statistically descriptive | High | The public path dwell-compresses, freezes dependence-aware uncertainty inputs/diagnostics, and exposes no adjacent-binomial/BH inference API |
 | Predictive validity after costs | Not measured | High | Phase 5 and strategy validation have not run |
 | Future experiment success rate | Not estimable (`n=0`) | High | No completed real research trials |
 
@@ -108,19 +114,21 @@ Consequently:
 1. **No empirical experiment exists.** There is nothing from which to estimate predictive accuracy, false-discovery rate, or promotion yield.
 2. **A new research snapshot is still required.** RR-000008 provenance is established, but any
    snapshot frozen before promotion may preserve known row-value errors and cannot be relabelled.
-3. **Provenance derivation is not end-to-end verified.** Canonical receipts now require snapshot,
-   feature-publication, registry, and normalizer identities, but Task 5 verifies the asserted
-   identities and published bytes rather than independently reconstructing their complete
-   derivation chain (`src/market_structure_lab/discovery/runs.py`;
-   `src/market_structure_lab/experiments/artifacts.py`).
-4. **The fixture does not validate meaningful stability thresholds.** Its accepted run uses maximally permissive ARI/JS/coverage thresholds, so it proves policy plumbing rather than empirical stability (`tests/fixtures/phase4/discovery_run_v1.json`).
-5. **Motif evidence is weaker than cluster evidence.** Motifs are computed once, only on the first selected feature, and are not tested across seeds, subsamples, adjacent periods, assets, or parameter perturbations. Grouping lacks explicit timestamp/session-contiguity checks after null-row removal (`src/market_structure_lab/discovery/runs.py`).
-6. **Transition uncertainty defaults are descriptive only.** The canonical path correctly dwell-compresses and boundary-checks, but orchestration pins just 100 bootstrap iterations and block length two without a dependence diagnostic or sensitivity analysis (`src/market_structure_lab/discovery/runs.py`).
-7. **Required hashes are asserted, not yet linked through the full derivation chain.** Receipt
-   verification prevents mutation or omission, but the discovery layer does not yet independently
-   prove that supplied rows came from the claimed snapshot, feature publication, normalizer, and
-   commit.
-8. **Semantic leakage remains a developer-declared risk.** Structural guards are good, but an improperly implemented future-derived feature with an innocuous name and incorrect leakage declaration could still pass.
+3. **Research thresholds are uncalibrated.** Fixture thresholds prove deterministic pass/reject
+   policy plumbing, not justified market-research cutoffs. Every stability, support, interval-width,
+   and search-space threshold needs preregistration before a real run.
+4. **Semantic leakage still requires human review.** Dependency receipts, producer replay, negative
+   tests, and pre-consumption guards are bound and verified, but arbitrary declarations and builder
+   semantics cannot be proved mechanically.
+5. **Real cluster and motif stability is unknown.** The software measures the required axes, but no
+   market run establishes their support, cross-asset coverage, adjacent-period drift, or regime
+   consistency.
+6. **Real transition resolution is unknown.** The policy freezes horizon, block selection,
+   bootstrap work, confidence, support, interval-width rejection, and sensitivity diagnostics, but
+   no market observations establish adequate effective support or interval width.
+7. **Predictive validation and cost robustness do not exist.** Phase 5 outcome attachment,
+   multiplicity controls, holdout evaluation, execution costs, and strategy construction remain
+   separately approval-gated.
 
 ## Canonical gates for future accuracy claims
 
@@ -195,23 +203,24 @@ Record every successful, rejected, inconclusive, failed, and abandoned trial. Af
 
 Do not publish a single “accuracy” percentage for the laboratory. Publish the reliability vector and each gate's evidence. The only currently defensible global status is:
 
-> **Synthetic golden replay restored; source data conditionally viable; full-history reconciliation promoted and receipt-bound; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
+> **Synthetic Phase 4 hardening verified; source data conditionally viable; full-history reconciliation promoted and receipt-bound; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
 
-The explicit RR-000008 promotion approval has been consumed and Phase 0 is closed. This review does
-not authorize Phase 4 hardening, a real discovery run, or Phase 5 validation. Later phases remain
-separately approval-gated.
+The explicit RR-000008 promotion approval has been consumed, Phase 0 is closed, and deterministic
+Phase 4 software hardening is complete. This review does not authorize a real discovery run or
+Phase 5 validation. Phase C and all later empirical work remain separately approval-gated.
 
 ## Terse review findings
 
 - `docs/RESEARCH_LOG.md:20-22: 🔴 blocker: no completed real research trial exists. Do not report experiment accuracy until trial artifacts exist.`
-- `docs/benchmarks/phase4-golden-drift-diagnosis.md: 🟢 closed: cross-platform PCA identity drift is versioned, fail-closed, and verified by 86 passing tests on both Linux and Windows.`
+- `docs/PHASE4_HARDENING_EVIDENCE.md: 🟢 closed: Phase 4 software contracts passed 1,100 Windows tests, focused safety suites, and independent every-byte clean-root replay.`
 - `data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json: 🟢 closed: all 1,583 units, 285 coverage intervals, candidate hashes, active view, and idempotent replay verify; a new research snapshot remains separately gated.`
-- `src/market_structure_lab/discovery/runs.py: 🟡 risk: receipts require normalizer/publication identities, but the full derivation chain is not independently verified.`
+- `src/market_structure_lab/discovery/splits.py: 🟢 closed: concrete checksum-bearing snapshot, publication, registry/dependency, normalizer, split, commit, lock, and feature-order identities fail closed before matrix construction.`
 - `src/market_structure_lab/transitions/__init__.py: 🟢 closed: the raw-adjacent binomial/BH surface is deleted; the canonical API requires boundary-aware observations and publishes dwell-run support plus boundary evidence.`
 - `src/market_structure_lab/experiments/artifacts.py: 🟢 closed: canonical terminal receipts are atomic, checksum-verified, immutable, idempotent, and retain failures/abandonment without swallowing the original exception.`
-- `tests/fixtures/phase4/discovery_run_v1.json:350-356: 🟡 risk: accepted fixture thresholds cannot reject instability. Label it policy-plumbing evidence, not stability evidence.`
-- `src/market_structure_lab/discovery/runs.py:_motif_payload: 🔴 bug: motif groups can bridge dropped rows, gaps, or sessions. Enforce explicit contiguity and add multi-axis motif stability.`
-- `src/market_structure_lab/discovery/runs.py:54-56: 🟡 risk: 100 bootstraps with fixed block length 2 are under-justified for inference. Make dependence-calibrated settings part of the frozen policy.`
+- `tests/fixtures/phase4/discovery_run_v1.json: 🟡 risk: fixture stability thresholds remain software-test values and are not calibrated research thresholds.`
+- `src/market_structure_lab/discovery/motifs.py: 🟢 closed: multivariate motif windows are boundary-safe and retain separate multi-axis stability evidence.`
+- `src/market_structure_lab/discovery/transitions.py: 🟢 closed: transition uncertainty inputs, work caps, diagnostics, sensitivity, and descriptive-only terminology are frozen in run identity.`
+- `src/market_structure_lab/features/registry.py: 🟡 risk: leakage receipts bind dependencies and independent review evidence, but manual semantic code review remains required.`
 - `src/market_structure_lab/data/dashboard_evidence.py: 🟢 closed: dashboard freshness is generated from one verified plan/report bundle with committed-publication rollback protection and an explicit evidence cutoff.`
 - `dashboard/src/components/reconciliation-status-panel.tsx: 🟢 closed: reconciliation promotion is displayed only from a checksum-verified receipt; snapshot and experiment eligibility remain explicit separate gates.`
 
@@ -231,3 +240,9 @@ separately approval-gated.
 | Keep per-unit reconciliation recovery within bounded memory | `b53239552b6de3f1b44c1a9e9258d38537d0d889` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-18 | Test-first `(run_id, work_unit_id)` lookup migration; disposable PostgreSQL index-only query-plan verification; live metadata and plan verification; RR-000008 promotion count remained zero |
 | Keep ledger verification aligned with comparable candle fields | `781a61df3da4f985706509cc6f2f75793d4e90a0` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-18 | Exact-match regression for absent optional dump fields; 43 candle/publication/preflight tests; Ruff; Mypy; bounded full-ledger semantic scan found zero invalid rows; read-only preflight subsequently passed |
 | Close Phase 0 at the receipt-bound reconciliation gate | `388bf19089b6f1011879f65eec546e383b5884b5` | `origin/agent/research-lab-foundation` matched local `HEAD` on 2026-07-18 | Explicitly authorized RR-000008 promotion; immutable receipt and byte-identical replay; 67,632,983 canonical rows; bounded hash and view plans; 908 Windows-native tests passed with 8 isolated-database skips; all 8 PostgreSQL profiles passed separately; Ruff, Mypy, dashboard, package build, lock, Compose, dump-hash, and diff verification passed |
+| Bind concrete discovery provenance before row access | `05248e1` | implementation and review checkpoint `ee120d5` are ancestors of `origin/agent/research-lab-foundation` at the 2026-07-19 cutoff | Concrete snapshot-to-normalizer derivation and drift failures verified before matrix construction |
+| Measure structural cluster stability without forced support | `6b06012` | implementation and review checkpoint `cd7ec74` are remote ancestors at cutoff | Seed, unstratified subsample, adjacent-period centroid/dispersion/frequency, asset, regime, and parameter evidence verified |
+| Make motifs boundary-safe and separately stable | `5c2ee0d` | implementation and review checkpoint `eb301c7` are remote ancestors at cutoff | Multivariate boundary and multi-axis motif evidence verified; rejected motifs remain recorded |
+| Freeze dependence-aware descriptive transition policy | `a7f8d5d` | implementation and review checkpoint `17ae818` are remote ancestors at cutoff | Horizon, bootstrap, block selection, diagnostics, sensitivity, work caps, and descriptive terminology verified |
+| Bind semantic leakage evidence before producer replay | `bd9f82b` | `origin/agent/research-lab-foundation` matched the baseline at cutoff | Dependency and builder evidence, independent review receipt, negative tests, and pre-consumption guards verified; manual semantic review remains required |
+| Close the Phase 4 deterministic hardening gate | local Task 12 evidence commit | intentionally not pushed by task constraint | 414 Phase B tests; 1,100-test Windows suite; every-byte clean-root replay; boundedness, holdout, provenance, accounting, boundary, and terminology audit; stop before Phase C |

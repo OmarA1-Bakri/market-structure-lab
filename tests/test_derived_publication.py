@@ -625,8 +625,8 @@ def test_verifier_rejects_manifest_dependency_digest_not_bound_to_receipt(
         ).hexdigest(),
     )
     (published / derived_data.MANIFEST_NAME).write_text(tampered.to_json(), encoding="utf-8")
-    (published / derived_data.SUCCESS_NAME).write_text(
-        tampered.publication_sha256 + "\n", encoding="utf-8"
+    (published / derived_data.SUCCESS_NAME).write_bytes(
+        f"{tampered.publication_sha256}\n".encode("ascii")
     )
 
     with pytest.raises(ValueError, match="not bound to the publication"):

@@ -9,6 +9,7 @@ The implemented path is:
 
 ```text
 Frozen Phase 3 FeatureRow records
+  -> verified snapshot/publication/registry/normalizer provenance
   -> chronological discovery/development guards
   -> bounded numeric feature matrix
   -> inspectable PCA
@@ -29,6 +30,12 @@ constant within and across discovery/development inputs. The final holdout is re
 and cannot be used for feature selection, cluster selection, threshold tuning, interpretation,
 parameter changes, or strategy construction.
 
+Before matrix construction, factory-created `DiscoveryProvenance` authenticates the concrete snapshot
+manifest, derived feature publication, registry/dependency contract, fitted normalizer, selected
+feature order, split, clean code commit, and lockfile. Changed artefacts, rows, feature order,
+partitions, commit state, or hashes fail before PCA or clustering reads discovery values. This is a
+verified software boundary; no real source-backed discovery publication has yet exercised it.
+
 Before feature rows can be published for discovery, each registered field must carry the causal
 dependency contract and independent checksum-bound leakage evidence documented in
 `docs/benchmarks/feature-leakage-audit-contract-v1.md`. The receipt binds actual serialized output
@@ -43,18 +50,23 @@ metadata and output binding are not proof that arbitrary builder code is leakage
 - PCA is an inspectable deterministic projection. Component signs and ordering are canonical.
 - K-means uses explicit seeds, canonical centroid/label ordering, bounded iterations, and a frozen
   tolerance. Empty clusters and invalid dimensions fail closed.
-- Stability records seeded reruns, deterministic 75% subsamples, adjacent development-period
-  Jensen-Shannon distance, per-cluster asset coverage, and nearby cluster-count perturbations.
-  Policy thresholds are frozen before evaluation. An unstable definition is retained as
+- Cluster stability records seeded reruns, deterministic unstratified subsamples, nearby
+  cluster-count perturbations, asset coverage, and adjacent development-period frequency,
+  centroid, within-cluster scale, assignment-margin, and per-cluster event-support evidence.
+  Policies are frozen before evaluation. An unstable definition is retained as
   `rejected_unstable` and produces no frozen behaviours.
-- Motif search is bounded per symbol/timeframe/segment. The Task 5 orchestration uses a maximum
-  four-observation window, exclusion zone two, and top-three results. It searches the first selected
-  discovery feature and does not cross a hard boundary.
+- Motif search consumes bounded multivariate contiguous sequences. It splits or rejects removed/null
+  rows, timestamp gaps, session/symbol/timeframe/segment changes, duplicate or out-of-order rows,
+  and non-contiguous information cutoffs. Separate motif evidence covers seed/tie rules,
+  deterministic subsamples, nearby windows/exclusion zones/distances, assets, adjacent periods, and
+  frozen outcome-blind regimes. Rejected motifs remain recorded and cannot support recurrence.
 - Transition evidence uses event/cluster observations with dwell compression and refuses symbol,
-  timeframe, segment, material-gap, session, or non-contiguous crossings. The run baseline uses
-  horizon one, 100 block-bootstrap iterations, block length two, and 95% intervals.
+  timeframe, segment, material-gap, session, or non-contiguous crossings. Horizon, bootstrap
+  iterations/seed, confidence, block rule/value, effective support, interval-width action, and
+  nearby block sensitivity are validated frozen run inputs.
 
-These values are pinned in each `config.json`; changing one changes the run identity.
+These values are pinned in each `config.json`; changing one changes the run identity. Golden
+fixture values demonstrate software pass/reject plumbing only and are not research thresholds.
 
 ## Frozen behaviour and AI evidence
 
@@ -163,3 +175,13 @@ metrics, and promotion criteria are frozen. It must use purging/embargo where la
 chronological walk-forward evaluation, asset holdouts where feasible, serial-dependence-aware
 uncertainty, multiple-testing controls, negative controls, and an untouched final holdout.
 Behaviour, interpretation, and hypothesis remain distinct from a validated edge.
+
+## Phase 4 hardening stop gate
+
+The Task 7–12 software-hardening gate is recorded in
+[`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md). It verifies deterministic
+provenance, structural stability, motif boundaries, frozen transition uncertainty, semantic
+leakage receipts, bounded work, holdout non-access, trial accounting, and byte-identical golden
+publication. The result remains synthetic software evidence only. No real discovery run, empirical
+calibration, outcome attachment, predictive validation, or strategy work is authorized without a
+separate explicit approval.

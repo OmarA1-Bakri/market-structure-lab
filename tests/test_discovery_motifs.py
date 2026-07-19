@@ -158,9 +158,7 @@ def test_contiguous_motif_sequences_split_at_every_canonical_boundary(
 
     assert tuple(len(sequence.observations) for sequence in sequences) == (1, 1)
     assert tuple(
-        observation.row_id
-        for sequence in sequences
-        for observation in sequence.observations
+        observation.row_id for sequence in sequences for observation in sequence.observations
     ) == ("r0", rows[1].row_id)
 
 
@@ -600,9 +598,7 @@ def test_evaluator_rejects_serialized_universe_evidence_before_search(monkeypatc
     sequence = build_contiguous_motif_sequences(
         tuple(
             _observation(f"r{index}", index, values)
-            for index, values in enumerate(
-                ((0.0, 0.0), (1.0, 2.0), (0.0, 0.0), (3.0, 3.0))
-            )
+            for index, values in enumerate(((0.0, 0.0), (1.0, 2.0), (0.0, 0.0), (3.0, 3.0)))
         ),
         feature_names=("auction_location", "volume_change"),
     )
