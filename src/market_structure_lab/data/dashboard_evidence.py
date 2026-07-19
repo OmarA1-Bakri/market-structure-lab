@@ -396,7 +396,7 @@ def _fixture_run(value: object, *, expected_status: str) -> dict[str, Any]:
         or expected.get("status") != expected_status
         or not _is_sha256(expected.get("manifest_sha256"))
         or not isinstance(expected.get("behaviour_ids"), list)
-        or expected.get("transition_algorithm_version") != "boundary-aware-dwell-transitions-v2"
+        or expected.get("transition_algorithm_version") != "boundary-aware-dwell-transitions-v3"
         or not isinstance(metrics, dict)
     ):
         raise ValueError("Phase 4 run fixture contract is invalid")

@@ -47,7 +47,7 @@ const compatibilityStates = new Set([
   "source_conflict",
   "source_unavailable",
 ]);
-const transitionAlgorithmVersion = "boundary-aware-dwell-transitions-v2";
+const transitionAlgorithmVersion = "boundary-aware-dwell-transitions-v3";
 
 let evidence;
 try {
@@ -271,8 +271,13 @@ for (const [key, status] of [
     !object(run.metrics) ||
     ![
       "behaviours",
-      "motifs",
+      "motif_candidates",
+      "motifs_published",
+      "motifs_rejected",
       "transitions",
+      "conditional_recurrence_estimates",
+      "conditional_recurrence_rejected",
+      "conditional_recurrence_descriptive_only",
       "discovery_rows",
       "development_rows",
     ].every((metric) => count(run.metrics[metric]))

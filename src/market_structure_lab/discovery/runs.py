@@ -61,6 +61,7 @@ from market_structure_lab.discovery.stability import (
 from market_structure_lab.discovery.transitions import (
     ClusterObservation,
     ClusterTransitionMatrix,
+    TransitionUncertaintyPolicy,
     estimate_cluster_transitions,
 )
 from market_structure_lab.features.models import FeatureRow
@@ -85,9 +86,6 @@ _MAX_INTERPRETATIONS = 1_000
 _MAX_BUNDLE_ENTRIES = 20_000
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 _SUBSAMPLE_FRACTION = 0.75
-_TRANSITION_BOOTSTRAP_ITERATIONS = 100
-_TRANSITION_BLOCK_LENGTH = 2
-_TRANSITION_CONFIDENCE_LEVEL = 0.95
 _ROW_IDENTITY_FIELDS = (
     "dataset_version",
     "config_version",
@@ -118,6 +116,7 @@ class DiscoveryRunConfig:
     adjacent_period_stability_policy: AdjacentPeriodStabilityPolicy
     motif_stability_policy: MotifStabilityPolicy
     motif_regime_assignments: MotifRegimeAssignmentContract
+    transition_uncertainty_policy: TransitionUncertaintyPolicy
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -175,9 +174,9 @@ class DiscoveryRunConfig:
         if not isinstance(self.motif_stability_policy, MotifStabilityPolicy):
             raise TypeError("motif_stability_policy must be a MotifStabilityPolicy")
         if not isinstance(self.motif_regime_assignments, MotifRegimeAssignmentContract):
-            raise TypeError(
-                "motif_regime_assignments must be a MotifRegimeAssignmentContract"
-            )
+            raise TypeError("motif_regime_assignments must be a MotifRegimeAssignmentContract")
+        if not isinstance(self.transition_uncertainty_policy, TransitionUncertaintyPolicy):
+            raise TypeError("transition_uncertainty_policy must be a TransitionUncertaintyPolicy")
         _require_pattern(self.code_commit, _CODE_COMMIT, "code_commit")
         _require_sha256(self.lock_sha256, "lock_sha256")
         if not isinstance(self.provenance, DiscoveryProvenance):
@@ -431,6 +430,15 @@ def _run_discovery_implementation(
         policy=config.motif_stability_policy,
     )
     transition_matrix = _transition_evidence(selected_discovery, clustering.assignments, config)
+    transition_estimates = tuple(
+        estimate for row in transition_matrix.rows for estimate in row.destinations
+    )
+    rejected_transition_estimates = sum(
+        estimate.evidence_status == "rejected" for estimate in transition_estimates
+    )
+    descriptive_only_transition_estimates = sum(
+        estimate.evidence_status == "descriptive_only" for estimate in transition_estimates
+    )
     status: Literal["completed", "rejected_unstable"] = (
         "completed" if stability.accepted else "rejected_unstable"
     )
@@ -457,6 +465,9 @@ def _run_discovery_implementation(
         "motifs_published": motif_report.published_count,
         "motifs_rejected": motif_report.rejected_count,
         "transitions": transition_matrix.total_transitions,
+        "conditional_recurrence_estimates": len(transition_estimates),
+        "conditional_recurrence_rejected": rejected_transition_estimates,
+        "conditional_recurrence_descriptive_only": (descriptive_only_transition_estimates),
     }
     payloads: dict[str, bytes] = {
         "config.json": _json_file(config_payload),
@@ -475,6 +486,10 @@ def _run_discovery_implementation(
             f"published: {motif_report.published_count}; "
             f"rejected and retained: {motif_report.rejected_count}.\n"
             "Only motifs accepted by the frozen motif policy support recurring evidence.\n"
+            f"Conditional recurrence estimates: {len(transition_estimates)}; "
+            f"rejected: {rejected_transition_estimates}; descriptive-only: "
+            f"{descriptive_only_transition_estimates}. These remain descriptive and "
+            "carry no inferential claim.\n"
         ).encode("utf-8"),
     }
     artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
@@ -785,6 +800,7 @@ def _verify_runtime_code_identity(
     if actual_lockfile != lockfile_bytes:
         raise ValueError("supplied lockfile bytes do not match runtime uv.lock")
 
+
 def _git_output(repository_root: Path, *arguments: str) -> str:
     try:
         completed = subprocess.run(
@@ -940,12 +956,8 @@ def _transition_evidence(
     )
     return estimate_cluster_transitions(
         observations,
-        horizon=1,
         max_rows=config.max_rows,
-        seed=config.seeds[0],
-        bootstrap_iterations=_TRANSITION_BOOTSTRAP_ITERATIONS,
-        block_length=_TRANSITION_BLOCK_LENGTH,
-        confidence_level=_TRANSITION_CONFIDENCE_LEVEL,
+        policy=config.transition_uncertainty_policy,
     )
 
 
@@ -976,6 +988,7 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
         "adjacent_period_stability_policy": _jsonable(config.adjacent_period_stability_policy),
         "motif_stability_policy": _jsonable(config.motif_stability_policy),
         "motif_regime_assignments": _jsonable(config.motif_regime_assignments),
+        "transition_uncertainty_policy": _jsonable(config.transition_uncertainty_policy),
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
@@ -983,10 +996,6 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
             "subsample_fraction": _SUBSAMPLE_FRACTION,
             "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
             "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
-            "transition_horizon": 1,
-            "transition_bootstrap_iterations": _TRANSITION_BOOTSTRAP_ITERATIONS,
-            "transition_block_length": _TRANSITION_BLOCK_LENGTH,
-            "transition_confidence_level": _TRANSITION_CONFIDENCE_LEVEL,
         },
     }
     payload.update(
@@ -1073,6 +1082,9 @@ def _trial_config(
             "motifs_rejected": "integer",
             "status": "string",
             "transitions": "integer",
+            "conditional_recurrence_estimates": "integer",
+            "conditional_recurrence_rejected": "integer",
+            "conditional_recurrence_descriptive_only": "integer",
         },
         hypothesis=None,
     )

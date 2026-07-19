@@ -22,6 +22,7 @@ from market_structure_lab.discovery import (
     PartitionRole,
     StabilityPolicy,
     TimePartition,
+    TransitionUncertaintyPolicy,
     build_contiguous_motif_sequences,
     build_feature_matrix,
     estimate_cluster_transitions,
@@ -72,6 +73,7 @@ class FrozenFixtureRunConfig:
     adjacent_period_stability_policy: AdjacentPeriodStabilityPolicy
     motif_stability_policy: MotifStabilityPolicy
     motif_regime_assignments: MotifRegimeAssignmentContract
+    transition_uncertainty_policy: TransitionUncertaintyPolicy
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -187,10 +189,13 @@ def _run_arguments(
     motif_stability_policy = MotifStabilityPolicy(**motif_policy_payload)
     regime_payload = dict(fixture["motif_regime_assignments"])
     regime_payload["regime_universe"] = tuple(regime_payload["regime_universe"])
-    regime_payload["assignments"] = tuple(
-        tuple(item) for item in regime_payload["assignments"]
-    )
+    regime_payload["assignments"] = tuple(tuple(item) for item in regime_payload["assignments"])
     motif_regime_assignments = MotifRegimeAssignmentContract(**regime_payload)
+    transition_policy_payload = dict(run["transition_uncertainty_policy"])
+    transition_policy_payload["sensitivity_offsets"] = tuple(
+        transition_policy_payload["sensitivity_offsets"]
+    )
+    transition_uncertainty_policy = TransitionUncertaintyPolicy(**transition_policy_payload)
     config = FrozenFixtureRunConfig(
         run_id=run["run_id"],
         dataset_snapshot_id=fixture["dataset_snapshot"]["dataset_version"],
@@ -210,6 +215,7 @@ def _run_arguments(
         adjacent_period_stability_policy=adjacent_period_policy,
         motif_stability_policy=motif_stability_policy,
         motif_regime_assignments=motif_regime_assignments,
+        transition_uncertainty_policy=transition_uncertainty_policy,
         code_commit=fixture["code_commit"],
         lock_sha256=fixture["lock_sha256"],
     )
@@ -234,10 +240,16 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
     assert isinstance(output_root, Path)
 
     discovery_matrix = build_feature_matrix(
-        discovery, registry, config.feature_names, config.max_rows  # type: ignore[arg-type]
+        discovery,
+        registry,
+        config.feature_names,
+        config.max_rows,  # type: ignore[arg-type]
     )
     development_matrix = build_feature_matrix(
-        development, registry, config.feature_names, config.max_rows  # type: ignore[arg-type]
+        development,
+        registry,
+        config.feature_names,
+        config.max_rows,  # type: ignore[arg-type]
     )
     selected_discovery = _selected_rows(discovery, discovery_matrix)  # type: ignore[arg-type]
     selected_development = _selected_rows(development, development_matrix)  # type: ignore[arg-type]
@@ -289,8 +301,15 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         regime_assignments=config.motif_regime_assignments,
         policy=config.motif_stability_policy,
     )
-    transition_matrix = _transition_evidence(
-        selected_discovery, clustering.assignments, config
+    transition_matrix = _transition_evidence(selected_discovery, clustering.assignments, config)
+    transition_estimates = tuple(
+        estimate for row in transition_matrix.rows for estimate in row.destinations
+    )
+    rejected_transition_estimates = sum(
+        estimate.evidence_status == "rejected" for estimate in transition_estimates
+    )
+    descriptive_only_transition_estimates = sum(
+        estimate.evidence_status == "descriptive_only" for estimate in transition_estimates
     )
     status = "completed" if stability.accepted else "rejected_unstable"
     config_payload = _config_payload(config)
@@ -316,6 +335,9 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         "motifs_published": motif_report.published_count,
         "motifs_rejected": motif_report.rejected_count,
         "transitions": transition_matrix.total_transitions,
+        "conditional_recurrence_estimates": len(transition_estimates),
+        "conditional_recurrence_rejected": rejected_transition_estimates,
+        "conditional_recurrence_descriptive_only": descriptive_only_transition_estimates,
     }
     payloads: dict[str, bytes] = {
         "config.json": _json_file(config_payload),
@@ -334,11 +356,13 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
             f"published: {motif_report.published_count}; "
             f"rejected and retained: {motif_report.rejected_count}.\n"
             "Only motifs accepted by the frozen motif policy support recurring evidence.\n"
+            f"Conditional recurrence estimates: {len(transition_estimates)}; "
+            f"rejected: {rejected_transition_estimates}; descriptive-only: "
+            f"{descriptive_only_transition_estimates}. These remain descriptive and "
+            "carry no inferential claim.\n"
         ).encode("utf-8"),
     }
-    artifact_hashes = tuple(
-        sorted((name, _sha256(content)) for name, content in payloads.items())
-    )
+    artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
     config_sha256 = _sha256(_canonical_json(config_payload))
     manifest_without_hash = {
         "schema_version": "discovery-run-manifest-v2",
@@ -459,12 +483,8 @@ def _transition_evidence(rows, assignments, config: FrozenFixtureRunConfig):
     )
     return estimate_cluster_transitions(
         observations,
-        horizon=1,
         max_rows=config.max_rows,
-        seed=config.seeds[0],
-        bootstrap_iterations=100,
-        block_length=2,
-        confidence_level=0.95,
+        policy=config.transition_uncertainty_policy,
     )
 
 
@@ -495,6 +515,7 @@ def _config_payload(config: FrozenFixtureRunConfig) -> dict[str, object]:
         "adjacent_period_stability_policy": _jsonable(config.adjacent_period_stability_policy),
         "motif_stability_policy": _jsonable(config.motif_stability_policy),
         "motif_regime_assignments": _jsonable(config.motif_regime_assignments),
+        "transition_uncertainty_policy": _jsonable(config.transition_uncertainty_policy),
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
@@ -502,10 +523,6 @@ def _config_payload(config: FrozenFixtureRunConfig) -> dict[str, object]:
             "subsample_fraction": 0.75,
             "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
             "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
-            "transition_horizon": 1,
-            "transition_bootstrap_iterations": 100,
-            "transition_block_length": 2,
-            "transition_confidence_level": 0.95,
         },
     }
 
@@ -698,6 +715,7 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     assert _bundle_bytes(stable_first_dir) == _bundle_bytes(stable_second_dir)
     published_manifest = _load_json(stable_first_dir / "manifest.json")
     published_transitions = _load_json(stable_first_dir / "transitions.json")
+    assert published_transitions["algorithm_version"] == ("boundary-aware-dwell-transitions-v3")
     assert published_manifest["transition_matrix"] == published_transitions
     assert published_manifest["transition_matrix"]["boundary_evidence"] == asdict(
         stable_first.transition_matrix.boundary_evidence
@@ -706,6 +724,28 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
         "deterministic-pca-v2"
     )
     published_config = _load_json(stable_first_dir / "config.json")
+    assert (
+        published_config["transition_uncertainty_policy"]
+        == fixture["runs"]["stable"]["transition_uncertainty_policy"]
+    )
+    assert (
+        published_transitions["uncertainty_policy"]
+        == published_config["transition_uncertainty_policy"]
+    )
+    assert published_transitions["dependence_diagnostics"]["selected_block_length"] >= 1
+    assert published_transitions["estimate_semantics"] == ("conditional_recurrence_estimate")
+    assert all(
+        {
+            "effective_support",
+            "evidence_status",
+            "interval_width",
+            "maximum_sensitivity_endpoint_delta",
+            "rejection_reasons",
+            "sensitivity",
+        }.issubset(estimate)
+        for row in published_transitions["rows"]
+        for estimate in row["destinations"]
+    )
     published_stability = _load_json(stable_first_dir / "stability.json")
     published_motifs = _load_json(stable_first_dir / "motifs.json")
     assert (
@@ -724,9 +764,7 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     assert published_stability["adjacent_period_evidence"]
     assert published_motifs["algorithm_version"] == MOTIF_ALGORITHM_VERSION
     assert published_motifs["feature_names"] == fixture["feature_names"]
-    assert published_config["motif_regime_assignments"] == fixture[
-        "motif_regime_assignments"
-    ]
+    assert published_config["motif_regime_assignments"] == fixture["motif_regime_assignments"]
     assert published_motifs["development_regime_universe"] == ["balanced", "expanding"]
     assert "unclassified" not in json.dumps(published_motifs)
     assert published_motifs["candidates"]
@@ -763,9 +801,7 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
         )
         == fixture["runs"]["rejected"]["expected"]
     )
-    rejected_motifs = _load_json(
-        rejected_first_root / rejected_first.run_id / "motifs.json"
-    )
+    rejected_motifs = _load_json(rejected_first_root / rejected_first.run_id / "motifs.json")
     assert rejected_motifs["candidates"]
     assert all(not candidate["accepted"] for candidate in rejected_motifs["candidates"])
     assert all(candidate["rejection_reasons"] for candidate in rejected_motifs["candidates"])

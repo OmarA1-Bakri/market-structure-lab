@@ -177,8 +177,8 @@
       "run_id": "DR-000601",
       "schema_version": "behaviour-evidence-pack-v2",
       "transition_matrix": {
-        "algorithm_version": "boundary-aware-dwell-transitions-v2",
-        "block_length": 2,
+        "algorithm_version": "boundary-aware-dwell-transitions-v3",
+        "block_length": 1,
         "bootstrap_iterations": 100,
         "boundary_evidence": {
           "boundary_break_count": 1,
@@ -193,17 +193,58 @@
         },
         "confidence_level": 0.95,
         "confidence_method": "boundary_block_bootstrap",
+        "dependence_diagnostics": {
+          "adjacent_transition_overlap_fraction": 0.0,
+          "dwell_run_to_observation_ratio": 0.25,
+          "longest_raw_dwell_run": 4,
+          "maximum_transition_sequence_length": 1,
+          "median_raw_dwell_run": 4.0,
+          "median_transition_sequence_length": 1.0,
+          "selected_block_length": 1,
+          "sensitivity_block_lengths": [],
+          "transition_sequence_count": 2,
+          "transition_sequence_lengths": [
+            1,
+            1
+          ]
+        },
+        "estimate_semantics": "conditional_recurrence_estimate",
         "horizon": 1,
         "rows": [
           {
             "destinations": [
+              {
+                "confidence_high": 0.0,
+                "confidence_low": 0.0,
+                "count": 0,
+                "destination_label": 0,
+                "effective_support": 2,
+                "estimate_semantics": "conditional_recurrence_estimate",
+                "evidence_status": "descriptive_only",
+                "interval_width": 0.0,
+                "maximum_sensitivity_endpoint_delta": 0.0,
+                "probability": 0.0,
+                "rejection_reasons": [
+                  "block_length_sensitivity_unavailable",
+                  "zero_destination_count"
+                ],
+                "sensitivity": []
+              },
               {
                 "confidence_high": 1.0,
                 "confidence_low": 1.0,
                 "count": 2,
                 "destination_label": 1,
                 "effective_support": 2,
-                "probability": 1.0
+                "estimate_semantics": "conditional_recurrence_estimate",
+                "evidence_status": "descriptive_only",
+                "interval_width": 0.0,
+                "maximum_sensitivity_endpoint_delta": 0.0,
+                "probability": 1.0,
+                "rejection_reasons": [
+                  "block_length_sensitivity_unavailable"
+                ],
+                "sensitivity": []
               }
             ],
             "effective_support": 2,
@@ -213,7 +254,25 @@
         ],
         "sample_unit": "dwell_run",
         "seed": 7,
-        "total_transitions": 2
+        "total_transitions": 2,
+        "uncertainty_policy": {
+          "block_length_rule": "fixed",
+          "block_length_value": 2,
+          "bootstrap_iterations": 100,
+          "bootstrap_seed": 7,
+          "confidence_level": 0.95,
+          "horizon": 1,
+          "interval_width_action": "report_only",
+          "maximum_interval_width": 1.0,
+          "maximum_sensitivity_endpoint_delta": 1.0,
+          "minimum_effective_support": 1,
+          "policy_id": "phase4-golden-transition-uncertainty-v1",
+          "policy_purpose": "synthetic_golden",
+          "sensitivity_offsets": [
+            -1,
+            1
+          ]
+        }
       }
     },
     {
@@ -386,8 +445,8 @@
       "run_id": "DR-000601",
       "schema_version": "behaviour-evidence-pack-v2",
       "transition_matrix": {
-        "algorithm_version": "boundary-aware-dwell-transitions-v2",
-        "block_length": 2,
+        "algorithm_version": "boundary-aware-dwell-transitions-v3",
+        "block_length": 1,
         "bootstrap_iterations": 100,
         "boundary_evidence": {
           "boundary_break_count": 1,
@@ -402,17 +461,58 @@
         },
         "confidence_level": 0.95,
         "confidence_method": "boundary_block_bootstrap",
+        "dependence_diagnostics": {
+          "adjacent_transition_overlap_fraction": 0.0,
+          "dwell_run_to_observation_ratio": 0.25,
+          "longest_raw_dwell_run": 4,
+          "maximum_transition_sequence_length": 1,
+          "median_raw_dwell_run": 4.0,
+          "median_transition_sequence_length": 1.0,
+          "selected_block_length": 1,
+          "sensitivity_block_lengths": [],
+          "transition_sequence_count": 2,
+          "transition_sequence_lengths": [
+            1,
+            1
+          ]
+        },
+        "estimate_semantics": "conditional_recurrence_estimate",
         "horizon": 1,
         "rows": [
           {
             "destinations": [
+              {
+                "confidence_high": 0.0,
+                "confidence_low": 0.0,
+                "count": 0,
+                "destination_label": 0,
+                "effective_support": 2,
+                "estimate_semantics": "conditional_recurrence_estimate",
+                "evidence_status": "descriptive_only",
+                "interval_width": 0.0,
+                "maximum_sensitivity_endpoint_delta": 0.0,
+                "probability": 0.0,
+                "rejection_reasons": [
+                  "block_length_sensitivity_unavailable",
+                  "zero_destination_count"
+                ],
+                "sensitivity": []
+              },
               {
                 "confidence_high": 1.0,
                 "confidence_low": 1.0,
                 "count": 2,
                 "destination_label": 1,
                 "effective_support": 2,
-                "probability": 1.0
+                "estimate_semantics": "conditional_recurrence_estimate",
+                "evidence_status": "descriptive_only",
+                "interval_width": 0.0,
+                "maximum_sensitivity_endpoint_delta": 0.0,
+                "probability": 1.0,
+                "rejection_reasons": [
+                  "block_length_sensitivity_unavailable"
+                ],
+                "sensitivity": []
               }
             ],
             "effective_support": 2,
@@ -422,11 +522,29 @@
         ],
         "sample_unit": "dwell_run",
         "seed": 7,
-        "total_transitions": 2
+        "total_transitions": 2,
+        "uncertainty_policy": {
+          "block_length_rule": "fixed",
+          "block_length_value": 2,
+          "bootstrap_iterations": 100,
+          "bootstrap_seed": 7,
+          "confidence_level": 0.95,
+          "horizon": 1,
+          "interval_width_action": "report_only",
+          "maximum_interval_width": 1.0,
+          "maximum_sensitivity_endpoint_delta": 1.0,
+          "minimum_effective_support": 1,
+          "policy_id": "phase4-golden-transition-uncertainty-v1",
+          "policy_purpose": "synthetic_golden",
+          "sensitivity_offsets": [
+            -1,
+            1
+          ]
+        }
       }
     }
   ],
-  "evidence_sha256": "5f6fb8a55d4fd165e395ab4bd10319ae12607a4d8ff36f5050226bfe4fcfba0f",
+  "evidence_sha256": "9d21451405553e835a77e7181fc6c96859ff73315be85d69a6597f516ff85895",
   "required_response_fields": [
     "behaviour_id",
     "neutral_name",
@@ -439,6 +557,6 @@
     "spuriousness_reasons"
   ],
   "run_id": "DR-000601",
-  "run_manifest_sha256": "c25931e546c7f28b92e83052019a9fd1e81db5d08fa56abb8c5dab1fd7105422",
+  "run_manifest_sha256": "a0d5293393309cb4071fef710e1a0b79bb7274e0fc61216f628ec18225ad6481",
   "schema_version": "phase4-interpretation-input-v2"
 }

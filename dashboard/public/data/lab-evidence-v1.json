@@ -792,7 +792,7 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-CB3E7F47FE808F3C",
+        "behaviour_id": "B-95434DA32383B8D9",
         "cautions": [
           "Fixture separation is synthetic and unusually strong.",
           "Transition support contains only two dwell-run events.",
@@ -819,7 +819,7 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-D6E06239FB9EC1EF",
+        "behaviour_id": "B-D36FD2F5998A3854",
         "cautions": [
           "Fixture separation is synthetic and unusually strong.",
           "Transition support contains only two dwell-run events.",
@@ -845,50 +845,60 @@
     "claim": "fixture only; no real-market recurrence or predictive evidence",
     "fixture_kind": "synthetic_golden",
     "fixture_path": "tests/fixtures/phase4/discovery_run_v1.json",
-    "fixture_sha256": "7cb098a040a8ec90ca8a38a5d1d50a6b422a3296e70f15025bc7ec8e4c41cb9a",
-    "interpretation_input_sha256": "3eac8e08aafce10c987298f1365d6570865329184e229477b95fd58656929873",
-    "interpretation_response_sha256": "b13972cac7c31f6f48118dc22fd384bacff81935ce6770a75ce6ad2e344f6c04",
+    "fixture_sha256": "04af66f0806708dc9ebadec1d94260e6b5e7ad139243798f9cf649f40efe461c",
+    "interpretation_input_sha256": "daf4b8451cd6777db0f99d1afbe4283a62188b8f21b6a2bd8fff5932a7ad91f4",
+    "interpretation_response_sha256": "d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec",
     "runs": {
       "rejected": {
         "behaviour_ids": [],
-        "manifest_sha256": "0a06164ce7dbe603c4c11fc9ee62812bf1bdb044ec16a78a6a0dcb24671268d7",
+        "manifest_sha256": "03b0fc8daa7738814000f3564da48417646992a5bc2b192009aebec637f882dc",
         "metrics": {
           "behaviours": 0,
+          "conditional_recurrence_descriptive_only": 2,
+          "conditional_recurrence_estimates": 2,
+          "conditional_recurrence_rejected": 0,
           "development_rows": 8,
           "discovery_rows": 16,
           "dropped_null_rows": {
             "development": 0,
             "discovery": 0
           },
-          "motifs": 6,
+          "motif_candidates": 3,
+          "motifs_published": 0,
+          "motifs_rejected": 3,
           "status": "rejected_unstable",
           "transitions": 2
         },
         "run_id": "DR-000602",
         "status": "rejected_unstable",
-        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v3"
       },
       "stable": {
         "behaviour_ids": [
-          "B-CB3E7F47FE808F3C",
-          "B-D6E06239FB9EC1EF"
+          "B-95434DA32383B8D9",
+          "B-D36FD2F5998A3854"
         ],
-        "manifest_sha256": "c06ddc20b8e606cb62aefa50a68a2624594abef06f8f760c6adc9dabc2dbdbc2",
+        "manifest_sha256": "a0d5293393309cb4071fef710e1a0b79bb7274e0fc61216f628ec18225ad6481",
         "metrics": {
           "behaviours": 2,
+          "conditional_recurrence_descriptive_only": 2,
+          "conditional_recurrence_estimates": 2,
+          "conditional_recurrence_rejected": 0,
           "development_rows": 8,
           "discovery_rows": 16,
           "dropped_null_rows": {
             "development": 0,
             "discovery": 0
           },
-          "motifs": 6,
+          "motif_candidates": 3,
+          "motifs_published": 3,
+          "motifs_rejected": 0,
           "status": "completed",
           "transitions": 2
         },
         "run_id": "DR-000601",
         "status": "completed",
-        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v3"
       }
     },
     "status": "fixture_contract_present",

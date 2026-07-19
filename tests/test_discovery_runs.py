@@ -41,6 +41,7 @@ from market_structure_lab.discovery import (
     run_discovery,
 )
 from market_structure_lab.discovery.splits import freeze_discovery_provenance
+from market_structure_lab.discovery.transitions import TransitionUncertaintyPolicy
 from market_structure_lab.features.normalization import (
     PartitionRole as NormalizerPartitionRole,
     RobustNormalizer,
@@ -92,6 +93,26 @@ def _registry() -> FeatureRegistry:
             ),
         ),
     )
+
+
+def _transition_uncertainty_policy(**changes) -> TransitionUncertaintyPolicy:
+    values = {
+        "policy_id": "software-test-run-transitions-v1",
+        "policy_purpose": "software_fixture",
+        "horizon": 1,
+        "bootstrap_seed": 17,
+        "bootstrap_iterations": 200,
+        "confidence_level": 0.95,
+        "block_length_rule": "cube_root_transition_support",
+        "block_length_value": 8,
+        "minimum_effective_support": 2,
+        "interval_width_action": "reject",
+        "maximum_interval_width": 0.95,
+        "sensitivity_offsets": (-1, 1),
+        "maximum_sensitivity_endpoint_delta": 0.5,
+    }
+    values.update(changes)
+    return TransitionUncertaintyPolicy(**values)
 
 
 def _row(
@@ -149,11 +170,15 @@ def _controlled_repository(
             ["git", "-C", str(repository), "config", "user.name", "Fixture"],
             check=True,
         )
-        tracked = ["uv.lock", "tracked.txt", "src"] if track_module else [
-            ".gitignore",
-            "uv.lock",
-            "tracked.txt",
-        ]
+        tracked = (
+            ["uv.lock", "tracked.txt", "src"]
+            if track_module
+            else [
+                ".gitignore",
+                "uv.lock",
+                "tracked.txt",
+            ]
+        )
         subprocess.run(["git", "-C", str(repository), "add", *tracked], check=True)
         subprocess.run(
             ["git", "-C", str(repository), "commit", "-q", "-m", "fixture"],
@@ -267,7 +292,9 @@ def _fixture(
     normalizer_rows = tuple(
         replace(
             row,
-            values={name: float(value) + normalizer_row_delta for name, value in row.values.items()},
+            values={
+                name: float(value) + normalizer_row_delta for name, value in row.values.items()
+            },
         )
         for row in discovery_rows
     )
@@ -414,6 +441,7 @@ def _fixture(
             minimum_regime_support=1,
         ),
         motif_regime_assignments=regime_assignments,
+        transition_uncertainty_policy=_transition_uncertainty_policy(),
         code_commit=code_commit,
         lock_sha256=lock_sha256,
         feature_publication_id="FP-000501",
@@ -510,8 +538,28 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     published_metrics = json.loads(
         (tmp_path / first.run_id / "metrics.json").read_text(encoding="utf-8")
     )
+    published_summary = (tmp_path / first.run_id / "summary.md").read_text(encoding="utf-8")
     assert published_manifest["schema_version"] == "discovery-run-manifest-v2"
     assert published_manifest["transition_matrix"] == published_transitions
+    assert published_transitions["estimate_semantics"] == ("conditional_recurrence_estimate")
+    assert (
+        published_transitions["uncertainty_policy"]
+        == published_config["transition_uncertainty_policy"]
+    )
+    transition_estimates = [
+        estimate for row in published_transitions["rows"] for estimate in row["destinations"]
+    ]
+    assert published_metrics["conditional_recurrence_estimates"] == len(transition_estimates)
+    assert published_metrics["conditional_recurrence_rejected"] == sum(
+        estimate["evidence_status"] == "rejected" for estimate in transition_estimates
+    )
+    assert published_metrics["conditional_recurrence_descriptive_only"] == sum(
+        estimate["evidence_status"] == "descriptive_only" for estimate in transition_estimates
+    )
+    assert "Conditional recurrence estimates" in published_summary
+    assert "significant" not in published_summary.lower()
+    assert "edge" not in published_summary.lower()
+    assert "promotion" not in published_summary.lower()
     assert published_config["adjacent_period_stability_policy"] == {
         "maximum_assignment_margin_drift": 2.0,
         "maximum_centroid_displacement": 1.0,
@@ -532,8 +580,9 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
         for candidate in published_motifs["candidates"]
     )
     assert published_metrics["motif_candidates"] == len(published_motifs["candidates"])
-    assert published_metrics["motifs_published"] + published_metrics["motifs_rejected"] == (
-        published_metrics["motif_candidates"]
+    assert (
+        published_metrics["motifs_published"] + published_metrics["motifs_rejected"]
+        == (published_metrics["motif_candidates"])
     )
     assert replay.transition_matrix == first.transition_matrix
     receipt = verify_trial_receipt(tmp_path / first.run_id)
@@ -564,12 +613,8 @@ def test_motif_rejection_does_not_reject_independent_cluster_behaviours(tmp_path
     )
 
     manifest = _run(arguments)
-    metrics = json.loads(
-        (tmp_path / manifest.run_id / "metrics.json").read_text(encoding="utf-8")
-    )
-    motifs = json.loads(
-        (tmp_path / manifest.run_id / "motifs.json").read_text(encoding="utf-8")
-    )
+    metrics = json.loads((tmp_path / manifest.run_id / "metrics.json").read_text(encoding="utf-8"))
+    motifs = json.loads((tmp_path / manifest.run_id / "motifs.json").read_text(encoding="utf-8"))
 
     assert manifest.status == "completed"
     assert len(manifest.behaviours) == 2
@@ -605,6 +650,40 @@ def test_adjacent_period_policy_is_bound_into_run_identity(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="identity conflict"):
         _run(changed)
+
+
+def test_every_transition_uncertainty_field_changes_frozen_config_identity(tmp_path) -> None:
+    config = _fixture(tmp_path)["config"]
+    policy = config.transition_uncertainty_policy
+    changes = {
+        "policy_id": "software-test-run-transitions-v2",
+        "policy_purpose": "research_fixture",
+        "horizon": 2,
+        "bootstrap_seed": 18,
+        "bootstrap_iterations": 201,
+        "confidence_level": 0.9,
+        "block_length_rule": "fixed",
+        "block_length_value": 7,
+        "minimum_effective_support": 3,
+        "interval_width_action": "report_only",
+        "maximum_interval_width": 0.9,
+        "sensitivity_offsets": (-2, 2),
+        "maximum_sensitivity_endpoint_delta": 0.4,
+    }
+    assert set(changes) == {item.name for item in fields(TransitionUncertaintyPolicy)}
+    base_payload = discovery_runs._config_payload(config)
+    base_hash = hashlib.sha256(discovery_runs._canonical_json(base_payload)).hexdigest()
+    assert base_payload["transition_uncertainty_policy"] == discovery_runs._jsonable(policy)
+
+    for field_name, value in changes.items():
+        changed_config = replace(
+            config,
+            transition_uncertainty_policy=replace(policy, **{field_name: value}),
+        )
+        changed_hash = hashlib.sha256(
+            discovery_runs._canonical_json(discovery_runs._config_payload(changed_config))
+        ).hexdigest()
+        assert changed_hash != base_hash, field_name
 
 
 def test_regime_assignment_policy_and_hash_are_bound_to_verified_provenance(tmp_path) -> None:
@@ -643,9 +722,7 @@ def test_run_uses_complete_frozen_development_asset_universe_before_publication(
     stability = json.loads(
         (tmp_path / manifest.run_id / "stability.json").read_text(encoding="utf-8")
     )
-    motifs = json.loads(
-        (tmp_path / manifest.run_id / "motifs.json").read_text(encoding="utf-8")
-    )
+    motifs = json.loads((tmp_path / manifest.run_id / "motifs.json").read_text(encoding="utf-8"))
 
     assert manifest.status == "rejected_unstable"
     assert stability["asset_coverage"] == pytest.approx(2 / 3)
@@ -704,18 +781,12 @@ def test_provenance_drift_is_rejected_before_matrix_construction(
         "missing normalizer": {"normalizer_artifact": None},
         "wrong training partition": {"normalizer_artifact": wrong_partition},
         "wrong selected feature list": {"normalizer_artifact": wrong_features},
-        "changed normalizer bytes": {
-            "normalizer_artifact": base["normalizer_artifact"] + b"\n"
-        },
+        "changed normalizer bytes": {"normalizer_artifact": base["normalizer_artifact"] + b"\n"},
         "mismatched feature publication": {
-            "feature_publication": replace(
-                base["feature_publication"], publication_sha256="0" * 64
-            )
+            "feature_publication": replace(base["feature_publication"], publication_sha256="0" * 64)
         },
         "mismatched snapshot manifest": {
-            "snapshot_manifest": replace(
-                base["snapshot_manifest"], snapshot_sha256="0" * 64
-            )
+            "snapshot_manifest": replace(base["snapshot_manifest"], snapshot_sha256="0" * 64)
         },
         "changed registry": {"registry": changed_registry},
         "uncommitted dirty identity": {
@@ -738,7 +809,10 @@ def test_provenance_drift_is_rejected_before_matrix_construction(
     for label, changes in cases.items():
         arguments = dict(base)
         arguments.update(changes)
-        with pytest.raises((TypeError, ValueError), match="provenance|normalizer|snapshot|publication|registry|commit|lock"):
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="provenance|normalizer|snapshot|publication|registry|commit|lock",
+        ):
             _run(arguments)
 
 
@@ -762,9 +836,7 @@ def test_public_discovery_rejects_legacy_fixture_bypass_before_matrix_constructi
 def test_production_discovery_module_exposes_no_legacy_replay_entrypoint() -> None:
     assert not hasattr(discovery_runs, "replay_frozen_discovery_fixture")
     assert not hasattr(discovery_runs, "_executing_module_path")
-    assert "legacy_fixture_schema" not in {
-        field.name for field in fields(DiscoveryRunConfig)
-    }
+    assert "legacy_fixture_schema" not in {field.name for field in fields(DiscoveryRunConfig)}
 
 
 @pytest.mark.parametrize("artifact", ("snapshot", "feature publication"))
@@ -1144,9 +1216,11 @@ def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
     assert read_trial_ledger(tmp_path) == (receipt,)
 
     boundary_evidence = run_manifest.transition_matrix.boundary_evidence
-    forged_matrix = replace(
-        run_manifest.transition_matrix,
-        boundary_evidence=replace(
+    forged_matrix = replace(run_manifest.transition_matrix)
+    object.__setattr__(
+        forged_matrix,
+        "boundary_evidence",
+        replace(
             boundary_evidence,
             raw_observation_count=boundary_evidence.raw_observation_count + 1,
         ),

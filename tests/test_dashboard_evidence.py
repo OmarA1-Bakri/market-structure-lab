@@ -231,7 +231,7 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     replay = evidence["software_replay"]
     assert replay["runs"]["stable"]["run_id"] == "DR-000601"
     assert replay["runs"]["stable"]["transition_algorithm_version"] == (
-        "boundary-aware-dwell-transitions-v2"
+        "boundary-aware-dwell-transitions-v3"
     )
     assert replay["runs"]["stable"]["behaviour_ids"] == [
         "B-95434DA32383B8D9",
@@ -412,8 +412,12 @@ def test_generator_rejects_noncanonical_publication_timestamps(
     [
         lambda run: run.pop("transition_algorithm_version"),
         lambda run: run.__setitem__("transition_algorithm_version", "legacy-v1"),
+        lambda run: run.__setitem__(
+            "transition_algorithm_version",
+            "boundary-aware-dwell-transitions-v2",
+        ),
     ],
-    ids=["missing", "wrong"],
+    ids=["missing", "wrong", "superseded-v2"],
 )
 def test_dashboard_verifier_rejects_invalid_transition_algorithm_version(
     tmp_path: Path,

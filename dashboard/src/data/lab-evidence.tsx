@@ -8,7 +8,7 @@ import {
 import { isTrialCounts, type TrialCounts } from "@/data/trial-counts";
 
 export const TRANSITION_ALGORITHM_VERSION =
-  "boundary-aware-dwell-transitions-v2" as const;
+  "boundary-aware-dwell-transitions-v3" as const;
 
 export type SymbolState =
   | "up_to_date"
@@ -212,8 +212,13 @@ function hasReplayMetrics(value: unknown): value is Record<string, number> {
     isObject(value) &&
     [
       "behaviours",
-      "motifs",
+      "motif_candidates",
+      "motifs_published",
+      "motifs_rejected",
       "transitions",
+      "conditional_recurrence_estimates",
+      "conditional_recurrence_rejected",
+      "conditional_recurrence_descriptive_only",
       "discovery_rows",
       "development_rows",
     ].every((key) => isNonNegative(value[key]))

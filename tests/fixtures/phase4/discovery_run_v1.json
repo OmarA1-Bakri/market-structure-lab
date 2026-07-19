@@ -364,9 +364,9 @@
       },
       "expected": {
         "status": "completed",
-        "manifest_sha256": "c25931e546c7f28b92e83052019a9fd1e81db5d08fa56abb8c5dab1fd7105422",
-        "identity_sha256": "435d3871664e3f52d60dc145aafa7b3e834bf99e1bd4f75636635113a9003f26",
-        "config_sha256": "da90af43073ddfd3b8063d22c526274005784c9ae78f03687b158cfb50835ecf",
+        "manifest_sha256": "a0d5293393309cb4071fef710e1a0b79bb7274e0fc61216f628ec18225ad6481",
+        "identity_sha256": "d7ea36267ffe1329b0a712abccc3e61e3cc66ed0d0e82c368e865f8b57855ebf",
+        "config_sha256": "3ca7c566f0a5b3cda5bb34d9fd3f9f27a4c5310cf7b072dcc6eb286c370bf40c",
         "behaviour_ids": [
           "B-95434DA32383B8D9",
           "B-D36FD2F5998A3854"
@@ -374,16 +374,19 @@
         "artifact_sha256": {
           "behaviours.json": "dca6fb129b5ded4912e72a57ff9bed147dad198e58b39f75532d6c086394ecc6",
           "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "00981b14b26bae900e0fad3483f2b02e18ef683c2206268b9619592081e9c317",
-          "metrics.json": "69083ac6afbaf7897f44406ff8f92157d189b5aebe95c1cf080c01083e04363b",
+          "config.json": "6a621fac1cc31955e9c960301babe4767c5104ab8ec12bed662c6a5d8bccb0c5",
+          "metrics.json": "da6525584588cc5edf9060861ec8f021bf337f2481f01fad6224ed24c9e76a1a",
           "motifs.json": "121eb4daf299f8a7b5503287a395dfb2e9c8dd6915ed90cf0f7aa10074158368",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "ea0e6f764b15c225b55060a59a927bd2ac1749adc6e58ade19fc521f96c04e13",
-          "summary.md": "89314140c8f3229e308e65bf914d18993d1e1bac1a62cf42f2f467d93a35649a",
-          "transitions.json": "4586a21d8ff6e594531ab6a7c6275f4ea7a5205990fdf0e7c4d48048e54a3661"
+          "summary.md": "6fcb1661a3cd686c73a4405900fc1427216ef422f11b7fb77953c09e4f212e43",
+          "transitions.json": "0331b791fd66a1cbbdc9252d15d05ee7dd79632d5dfcbacbe4fe223c025d44e9"
         },
         "metrics": {
           "behaviours": 2,
+          "conditional_recurrence_descriptive_only": 2,
+          "conditional_recurrence_estimates": 2,
+          "conditional_recurrence_rejected": 0,
           "development_rows": 8,
           "discovery_rows": 16,
           "dropped_null_rows": {
@@ -396,7 +399,7 @@
           "status": "completed",
           "transitions": 2
         },
-        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v3"
       },
       "motif_stability_policy": {
         "policy_id": "phase4-golden-motif-stability-v1",
@@ -434,6 +437,24 @@
           "canonical",
           "seeded_hash"
         ]
+      },
+      "transition_uncertainty_policy": {
+        "policy_id": "phase4-golden-transition-uncertainty-v1",
+        "policy_purpose": "synthetic_golden",
+        "horizon": 1,
+        "bootstrap_seed": 7,
+        "bootstrap_iterations": 100,
+        "confidence_level": 0.95,
+        "block_length_rule": "fixed",
+        "block_length_value": 2,
+        "minimum_effective_support": 1,
+        "interval_width_action": "report_only",
+        "maximum_interval_width": 1.0,
+        "sensitivity_offsets": [
+          -1,
+          1
+        ],
+        "maximum_sensitivity_endpoint_delta": 1.0
       }
     },
     "rejected": {
@@ -461,23 +482,26 @@
       },
       "expected": {
         "status": "rejected_unstable",
-        "manifest_sha256": "8e38f3e10d39f2e14b01f3b83d252c69c7574d8a70c95d76b4e5bb5759947c9b",
-        "identity_sha256": "488a5eb3fae793ed8596fefa443393faa0db6cd5f17455c39977dfb2f5f594d2",
-        "config_sha256": "cb562a801cd39af609d70ddb0c621a06cd063be8b5af357f14f57ac44e31276b",
+        "manifest_sha256": "03b0fc8daa7738814000f3564da48417646992a5bc2b192009aebec637f882dc",
+        "identity_sha256": "fdf0eaa3be88a99d2c4617105a5134a74fa0ba60c79d4733a15e3f27de59cfb4",
+        "config_sha256": "12b5acb7fb4f512485b48120639ee3d1514d866d5978b2b7a8bdc64e3e21f338",
         "behaviour_ids": [],
         "artifact_sha256": {
           "behaviours.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
           "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "b24247cbc598f01ada3e73246f79128ed24fe1cf45c5b5ba018b8cd1cf87fb51",
-          "metrics.json": "e2b73c8e5fa2d41731eca5c064e04abc3a18e013990ac92957609a4e15eb609e",
+          "config.json": "052052861341799f41c54d5cf46ccb28245598f0bc4a9eff86b654e97e57fab5",
+          "metrics.json": "a5c54003d093ab0717a775fcc263d80f508f6c0679b7861ae3f1d3a58d796406",
           "motifs.json": "bf8284138a7f11f82296c44d023c9dd970bd65226337145b60c3415dbd18ce9e",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "5c74d7229e4801a5cf237121423ef9457b46448ef9c1fbe38fcc1c7ece499f7b",
-          "summary.md": "a4ed6cb29d08f37bc509382b41cc0148450924d5cba84577bce919a57b475767",
-          "transitions.json": "4586a21d8ff6e594531ab6a7c6275f4ea7a5205990fdf0e7c4d48048e54a3661"
+          "summary.md": "2b88d93b715a4fd32b7f7a9218f79c599eb8ed96e62d254f739a8eb5d11388f9",
+          "transitions.json": "0331b791fd66a1cbbdc9252d15d05ee7dd79632d5dfcbacbe4fe223c025d44e9"
         },
         "metrics": {
           "behaviours": 0,
+          "conditional_recurrence_descriptive_only": 2,
+          "conditional_recurrence_estimates": 2,
+          "conditional_recurrence_rejected": 0,
           "development_rows": 8,
           "discovery_rows": 16,
           "dropped_null_rows": {
@@ -490,7 +514,7 @@
           "status": "rejected_unstable",
           "transitions": 2
         },
-        "transition_algorithm_version": "boundary-aware-dwell-transitions-v2"
+        "transition_algorithm_version": "boundary-aware-dwell-transitions-v3"
       },
       "motif_stability_policy": {
         "policy_id": "phase4-golden-motif-stability-v1",
@@ -528,10 +552,28 @@
           "canonical",
           "seeded_hash"
         ]
+      },
+      "transition_uncertainty_policy": {
+        "policy_id": "phase4-golden-transition-uncertainty-v1",
+        "policy_purpose": "synthetic_golden",
+        "horizon": 1,
+        "bootstrap_seed": 7,
+        "bootstrap_iterations": 100,
+        "confidence_level": 0.95,
+        "block_length_rule": "fixed",
+        "block_length_value": 2,
+        "minimum_effective_support": 1,
+        "interval_width_action": "report_only",
+        "maximum_interval_width": 1.0,
+        "sensitivity_offsets": [
+          -1,
+          1
+        ],
+        "maximum_sensitivity_endpoint_delta": 1.0
       }
     }
   },
-  "interpretation_input_sha256": "7051e24975276473bf91eff90902ff66ad1c92f35c56993254b58a1f4c46c89a",
+  "interpretation_input_sha256": "daf4b8451cd6777db0f99d1afbe4283a62188b8f21b6a2bd8fff5932a7ad91f4",
   "interpretation_response_sha256": "d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec",
   "interpretation_publication": {
     "expected": {
@@ -541,12 +583,12 @@
         "B-95434DA32383B8D9",
         "B-D36FD2F5998A3854"
       ],
-      "identity_sha256": "432f0ac94d4517576e880cc5011f3a89c8d7d901e6adcec13bbf6c16598db31c",
+      "identity_sha256": "47aaaefb162f6390a824b81ba7c324bb16bb880a706f70cacc6bcfe4beda4558",
       "artifact_sha256": {
-        "evidence.json": "7f2e41df00768d1632e728592de28f859a70f2cf73144cb1213410f01a70d599",
-        "interpretations.json": "1e04d8a1525cfcf8608b72415d6154284beaf99893fe8159626d476530729b6b"
+        "evidence.json": "f34ee6acd0c8315ecc82dffed9e8c545238dacdbcc8f755bf675fcd77bbed53c",
+        "interpretations.json": "17d604c52fb0c903a4b5c2f444bd0a5c0f00a7fb437777fcd5ac346b460743f7"
       },
-      "manifest_sha256": "3ae8b81d4fb546e3e19805a73cd89633eb3253597b9439483c49ab9df7a2230e"
+      "manifest_sha256": "4bba9523095c11d29188edab1b4b34b91b89ab3c6dcd6255a66e1ff970914550"
     }
   },
   "motif_regime_assignments": {

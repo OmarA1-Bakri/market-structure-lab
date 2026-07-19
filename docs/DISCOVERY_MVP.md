@@ -109,21 +109,21 @@ uv run pytest -q tests/test_phase4_golden.py
 ```
 
 The stable `DR-000601` fixture freezes two behaviours and has manifest SHA-256
-`c06ddc20b8e606cb62aefa50a68a2624594abef06f8f760c6adc9dabc2dbdbc2`. The unstable
+`a0d5293393309cb4071fef710e1a0b79bb7274e0fc61216f628ec18225ad6481`. The unstable
 `DR-000602` fixture is deterministically retained with no behaviours and manifest SHA-256
-`0a06164ce7dbe603c4c11fc9ee62812bf1bdb044ec16a78a6a0dcb24671268d7`.
+`03b0fc8daa7738814000f3564da48417646992a5bc2b192009aebec637f882dc`.
 
 The parent-model interpretation prompt input is frozen at
 `tests/fixtures/phase4/discovery_interpretation_input_v1.json`, SHA-256
-`3eac8e08aafce10c987298f1365d6570865329184e229477b95fd58656929873`. It is derived through the
+`daf4b8451cd6777db0f99d1afbe4283a62188b8f21b6a2bd8fff5932a7ad91f4`. It is derived through the
 real evidence-pack API.
 
 The session model's exact response and supplied provenance are stored separately at
 `tests/fixtures/phase4/discovery_interpretation_response_v1.json`, SHA-256
-`b13972cac7c31f6f48118dc22fd384bacff81935ce6770a75ce6ad2e344f6c04`. The test constructs real
+`d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec`. The test constructs real
 `AIInterpretation` records from those bytes and publishes them through
 `publish_ai_interpretations`. The interpretation manifest SHA-256 is
-`c2f1249ed0a3558f07e33ca11ebdb007c97a98975d682ca8a2bd576e8add6a60`. These are candidate
+`4bba9523095c11d29188edab1b4b34b91b89ab3c6dcd6255a66e1ff970914550`. These are candidate
 interpretations and proposed Phase 5 tests, not validation results.
 
 ## Interpretation of transitions
@@ -132,9 +132,16 @@ Transition rows estimate observed conditional frequencies such as
 `P(next cluster | current cluster)` after boundary checks and dwell compression. They are
 Markov-like summaries only. Phase 4 does not establish the Markov property, stationarity, causal
 mechanisms, or independent samples. Support counts and block-bootstrap intervals must accompany
-every probability, and low-support rows are descriptive evidence rather than significant signals.
-The serialized algorithm identity is `boundary-aware-dwell-transitions-v2`; discovery manifests and
-AI evidence packs retain the complete matrix so compression and boundary evidence survive replay.
+every probability. Low-support, wide-interval, or block-sensitive estimates are rejected or marked
+descriptive-only by the frozen policy; no transition estimate is a significance, edge, or promotion
+claim. The serialized algorithm identity is `boundary-aware-dwell-transitions-v3`; discovery
+manifests and AI evidence packs retain the full uncertainty policy, dependence diagnostics, nearby
+block-length sensitivity, and complete matrix so the evidence contract survives replay.
+
+Before any estimate Cartesian product or bootstrap call, the estimator computes conservative draw
+work as `transitions * bootstrap_iterations * (1 + actual sensitivity block count)` using checked
+integer bounds. Work above 10,000,000 transition draws is rejected. This CPU guard is independent
+of the existing 100,000 serialized-estimate cap and 1,000,000 stored bootstrap-probability cap.
 
 ## Approximation limits and Phase 5 boundary
 

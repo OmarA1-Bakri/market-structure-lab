@@ -9,14 +9,14 @@ import pytest
 from market_structure_lab.discovery import (
     AIInterpretation,
     BehaviourEvidencePack,
-    ClusterTransitionEstimate,
+    ClusterObservation,
     ClusterTransitionMatrix,
-    ClusterTransitionRow,
     FeatureMatrix,
     PartitionRole,
     StabilityPolicy,
     StabilityReport,
-    TransitionBoundaryEvidence,
+    TransitionUncertaintyPolicy,
+    estimate_cluster_transitions,
     fit_pca,
     fit_projected_kmeans,
     freeze_behaviours,
@@ -61,44 +61,36 @@ def _behaviour():
     )[0]
 
 
-def _transition_row() -> ClusterTransitionRow:
-    return ClusterTransitionRow(
-        source_label=0,
-        support=2,
-        destinations=(
-            ClusterTransitionEstimate(
-                destination_label=1,
-                count=2,
-                probability=1.0,
-                confidence_low=0.5,
-                confidence_high=1.0,
-            ),
-        ),
-    )
-
-
 def _transition_matrix() -> ClusterTransitionMatrix:
-    return ClusterTransitionMatrix(
-        algorithm_version="boundary-aware-dwell-transitions-v2",
-        horizon=1,
-        rows=(_transition_row(),),
-        total_transitions=2,
-        sample_unit="dwell_run",
-        confidence_method="boundary_block_bootstrap",
-        seed=7,
-        bootstrap_iterations=100,
-        block_length=2,
-        confidence_level=0.95,
-        boundary_evidence=TransitionBoundaryEvidence(
-            raw_observation_count=6,
-            dwell_run_count=3,
-            contiguous_sequence_count=1,
-            boundary_break_count=0,
-            symbol_break_count=0,
-            timeframe_break_count=0,
-            segment_break_count=0,
-            session_break_count=0,
-            non_contiguous_time_break_count=0,
+    observations = tuple(
+        ClusterObservation(
+            label=label,
+            timestamp=datetime(2025, 1, 1, 0, minute, tzinfo=UTC),
+            information_cutoff=datetime(2025, 1, 1, 0, minute + 1, tzinfo=UTC),
+            symbol="BTCUSDT",
+            timeframe="1m",
+            segment_id=0,
+            session_id="2025-01-01",
+        )
+        for minute, label in enumerate((0, 0, 1, 1, 0, 0))
+    )
+    return estimate_cluster_transitions(
+        observations,
+        max_rows=10,
+        policy=TransitionUncertaintyPolicy(
+            policy_id="evidence-pack-test-transition-uncertainty-v1",
+            policy_purpose="software_test",
+            horizon=1,
+            bootstrap_seed=7,
+            bootstrap_iterations=100,
+            confidence_level=0.95,
+            block_length_rule="fixed",
+            block_length_value=2,
+            minimum_effective_support=1,
+            interval_width_action="report_only",
+            maximum_interval_width=1.0,
+            sensitivity_offsets=(-1, 1),
+            maximum_sensitivity_endpoint_delta=1.0,
         ),
     )
 
