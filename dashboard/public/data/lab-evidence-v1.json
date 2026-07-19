@@ -1003,11 +1003,11 @@
       }
     ]
   },
-  "generated_at": "2026-07-19T14:36:43Z",
+  "generated_at": "2026-07-19T18:28:44Z",
   "phase_gate": {
-    "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete",
-    "next_required_evidence": "obtain explicit approval before Phase C real outcome-blind discovery",
-    "status": "complete_awaiting_phase_approval"
+    "active_phase": "Phase B Task 13 deterministic hardening: complete",
+    "next_required_evidence": "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint",
+    "status": "complete_task14_authorized"
   },
   "reconciliation": {
     "bounded_audit": {
@@ -1094,7 +1094,7 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-95434DA32383B8D9",
+        "behaviour_id": "B-8254215A00884732",
         "cautions": [
           "Fixture separation is synthetic and unusually strong.",
           "Transition support contains only two dwell-run events.",
@@ -1121,7 +1121,7 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-D36FD2F5998A3854",
+        "behaviour_id": "B-94E253BA77DC21DF",
         "cautions": [
           "Fixture separation is synthetic and unusually strong.",
           "Transition support contains only two dwell-run events.",
@@ -1149,32 +1149,33 @@
     "fixture_path": "tests/fixtures/phase4/discovery_run_v1.json",
     "fixture_producer": {
       "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
-      "builder_version": "phase4-fixture-producer-v1",
-      "input_schema": "phase4-fixture-source-v1"
+      "builder_version": "phase4-fixture-producer-v2",
+      "input_schema": "phase4-fixture-source-v2"
     },
-    "fixture_registry_sha256": "dee4e0d06bbf35aa5791e1f467e33782f535b7b5719f50973e4952869d2d3f0e",
-    "fixture_schema_version": "phase4-discovery-fixture-v3",
-    "fixture_sha256": "2fa71a218c6066a165c222a7c1d0386cb9bb3cb6e02cd309d9156871bcb0ed07",
-    "interpretation_input_sha256": "9a695a20ca0e7757de142f4c6508c2955e9d1849a36dcce331559d9f34d65cec",
-    "interpretation_publication_manifest_sha256": "b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119",
-    "interpretation_response_sha256": "d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec",
+    "fixture_registry_sha256": "192c974965dd9ec2c98a6dddaf84ce48e9aa552336c495efef7d6037e7459f63",
+    "fixture_schema_version": "phase4-discovery-fixture-v4",
+    "fixture_sha256": "f516650c962c87a22466b5d986321666daeeb6464ca122bc3c14aac82eff61d5",
+    "interpretation_input_sha256": "9f6b8bb56143b1ce6298d5e409fff41d50bbd1bb10cd5901bf0fbcf455d3aae6",
+    "interpretation_publication_manifest_sha256": "57959a105814d8e090f5353cb571c292cf3c8a4dc69806ba20a8a8381439937f",
+    "interpretation_response_sha256": "ca49bc5572d22042723891f3e1047e6812f8e4595f6ce9e04fae793e32eb4577",
     "runs": {
       "rejected": {
         "artifact_sha256": {
           "behaviours.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
-          "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "c0b09f5732699d1f9d386aeacc5266c668cc4a9a8af97bbbbdab33512089a8f8",
-          "metrics.json": "a5c54003d093ab0717a775fcc263d80f508f6c0679b7861ae3f1d3a58d796406",
-          "motifs.json": "bf8284138a7f11f82296c44d023c9dd970bd65226337145b60c3415dbd18ce9e",
+          "clustering.json": "0762ede2048070278c58835f3f8648d89938808913ce42de7002dd351d67a326",
+          "config.json": "7ddf4c221116cc9bbf03b90a1d1c41e26687319e548ed46a10a6ff8d55e49464",
+          "metrics.json": "b54abb725c09288d575368999510b526132b54c278f89c087a225cc109a87a84",
+          "missingness.json": "40e04243c8d249f8d9323ca39dbde66d36aac53275c575ad249ab60ed5e1b5c0",
+          "motifs.json": "77f78fc01a9a5a10178e03348d43b656d156f3c3cccb809516638ee73a1419d9",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "5c74d7229e4801a5cf237121423ef9457b46448ef9c1fbe38fcc1c7ece499f7b",
-          "summary.md": "2b88d93b715a4fd32b7f7a9218f79c599eb8ed96e62d254f739a8eb5d11388f9",
+          "summary.md": "bdf8931fce794085f9131f4249cafb51074b09477028fda7cff0dcdfc28588ad",
           "transitions.json": "0331b791fd66a1cbbdc9252d15d05ee7dd79632d5dfcbacbe4fe223c025d44e9"
         },
         "behaviour_ids": [],
-        "config_sha256": "00f1080f1aba3f950e363918a74390ea2f9c9d89e9a89aa8f82d0c3942f099a4",
-        "identity_sha256": "d544e10dd8d6903114367b6bdcd1f4d814be8c1bfd9d017cbcb5b2dca7a283d9",
-        "manifest_sha256": "700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0",
+        "config_sha256": "345747df49dabf330a2a095dd8e59e4829467d1e1ee4365625fd257f8c63631f",
+        "identity_sha256": "661c2e6cccd9ec9c29cb097d748c252a50aefa5b1b1569d3571d669668df7296",
+        "manifest_sha256": "4ca6d4b6b3ca8e89b56c853f1b4235338ee5fa92d9b536e9cb3e07057ed371e9",
         "metrics": {
           "behaviours": 0,
           "conditional_recurrence_descriptive_only": 2,
@@ -1186,11 +1187,74 @@
             "development": 0,
             "discovery": 0
           },
+          "missingness": {
+            "development": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 8,
+              "partition_role": "development",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 8,
+              "selected_row_ids_sha256": "916b159b2cc15a177c736e12127559a2425e1b2024e1aa4e0ad55bd3b4fafecc"
+            },
+            "discovery": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 16,
+              "partition_role": "discovery",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 16,
+              "selected_row_ids_sha256": "8aa03ae161fd716332cbfb97ad00014e4d8b15e1fb220cd89dd45bc93a4ebe1c"
+            },
+            "policy": {
+              "maximum_evidence_groups": 32,
+              "maximum_per_feature_drop_fraction": 0.0,
+              "maximum_total_drop_fraction": 0.0,
+              "policy_id": "phase4-golden-complete-case-v1"
+            },
+            "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+            "schema_version": "discovery-missingness-evidence-v1"
+          },
           "motif_candidates": 3,
           "motifs_published": 0,
           "motifs_rejected": 3,
           "status": "rejected_unstable",
-          "transitions": 2
+          "transitions": 2,
+          "work_budget": {
+            "budget_sha256": "fae49bd65c767128dbdb5fc26061c60c2c79b0693ab5ad902435ed9e3669f2d7",
+            "bundle_entries": 11,
+            "clusters": 2,
+            "feature_cells": 48,
+            "kmeans_iterations": 100,
+            "materialized_rows": 24,
+            "maximum_partition_pca_cells": 32,
+            "maximum_partition_pca_rows": 16,
+            "pca_features": 2,
+            "seeds": 2,
+            "total_stability_fits": 6
+          }
         },
         "run_id": "DR-000602",
         "status": "rejected_unstable",
@@ -1198,23 +1262,24 @@
       },
       "stable": {
         "artifact_sha256": {
-          "behaviours.json": "dca6fb129b5ded4912e72a57ff9bed147dad198e58b39f75532d6c086394ecc6",
-          "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "8b38b3a328a9654915959477cc36e07c53f2b106273a8d83e15e9732f1222a0d",
-          "metrics.json": "da6525584588cc5edf9060861ec8f021bf337f2481f01fad6224ed24c9e76a1a",
-          "motifs.json": "121eb4daf299f8a7b5503287a395dfb2e9c8dd6915ed90cf0f7aa10074158368",
+          "behaviours.json": "3ce91579e00f910f3535fb4256e3d6f25ed6c7fb1b90c8b9d65a12e2966f8bc4",
+          "clustering.json": "0762ede2048070278c58835f3f8648d89938808913ce42de7002dd351d67a326",
+          "config.json": "b449b74145166a13d4ba0169399973f900538a349f87c0eb0453864879cbbdee",
+          "metrics.json": "0d5d910eccefdef06a2ff09c4bc40b2a604eb7a1eca293e6721b44c17a51f45e",
+          "missingness.json": "40e04243c8d249f8d9323ca39dbde66d36aac53275c575ad249ab60ed5e1b5c0",
+          "motifs.json": "67ea7b72c3c49652e0c2ed93f22780783cb9d9c05b0bf0e2d9f7e9f36d4db981",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "ea0e6f764b15c225b55060a59a927bd2ac1749adc6e58ade19fc521f96c04e13",
-          "summary.md": "6fcb1661a3cd686c73a4405900fc1427216ef422f11b7fb77953c09e4f212e43",
+          "summary.md": "ca822d0884bde5a560b6c89150a9083b5743ecb17bb9f49e1847f0e140ff8a32",
           "transitions.json": "0331b791fd66a1cbbdc9252d15d05ee7dd79632d5dfcbacbe4fe223c025d44e9"
         },
         "behaviour_ids": [
-          "B-95434DA32383B8D9",
-          "B-D36FD2F5998A3854"
+          "B-8254215A00884732",
+          "B-94E253BA77DC21DF"
         ],
-        "config_sha256": "1dc35d4f30ee73740972906770ebfcb8b6efaf7f3c54408fcf32ead595932819",
-        "identity_sha256": "e6ed0930ac3be8b9b3f500aad5174a2bee70286ece1ed1005ec4657a8d4c3009",
-        "manifest_sha256": "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b",
+        "config_sha256": "fc54c3f2e785bc46412c3fd2639071fa47c0282ac54d1d1ac51b9a1f5cec5889",
+        "identity_sha256": "b7d0be263d64c254257f5931d84cc48d26a4580834cdfed13fa09808c875a9d0",
+        "manifest_sha256": "404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e",
         "metrics": {
           "behaviours": 2,
           "conditional_recurrence_descriptive_only": 2,
@@ -1226,11 +1291,74 @@
             "development": 0,
             "discovery": 0
           },
+          "missingness": {
+            "development": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 8,
+              "partition_role": "development",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 8,
+              "selected_row_ids_sha256": "916b159b2cc15a177c736e12127559a2425e1b2024e1aa4e0ad55bd3b4fafecc"
+            },
+            "discovery": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 16,
+              "partition_role": "discovery",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 16,
+              "selected_row_ids_sha256": "8aa03ae161fd716332cbfb97ad00014e4d8b15e1fb220cd89dd45bc93a4ebe1c"
+            },
+            "policy": {
+              "maximum_evidence_groups": 32,
+              "maximum_per_feature_drop_fraction": 0.0,
+              "maximum_total_drop_fraction": 0.0,
+              "policy_id": "phase4-golden-complete-case-v1"
+            },
+            "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+            "schema_version": "discovery-missingness-evidence-v1"
+          },
           "motif_candidates": 3,
           "motifs_published": 3,
           "motifs_rejected": 0,
           "status": "completed",
-          "transitions": 2
+          "transitions": 2,
+          "work_budget": {
+            "budget_sha256": "fae49bd65c767128dbdb5fc26061c60c2c79b0693ab5ad902435ed9e3669f2d7",
+            "bundle_entries": 11,
+            "clusters": 2,
+            "feature_cells": 48,
+            "kmeans_iterations": 100,
+            "materialized_rows": 24,
+            "maximum_partition_pca_cells": 32,
+            "maximum_partition_pca_rows": 16,
+            "pca_features": 2,
+            "seeds": 2,
+            "total_stability_fits": 6
+          }
         },
         "run_id": "DR-000601",
         "status": "completed",

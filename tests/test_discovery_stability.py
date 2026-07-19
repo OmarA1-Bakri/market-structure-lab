@@ -4,6 +4,7 @@ import math
 from dataclasses import replace
 
 import pytest
+import market_structure_lab.discovery.stability as stability_module
 
 from market_structure_lab.discovery import (
     FeatureMatrix,
@@ -236,6 +237,39 @@ def test_stability_evaluation_records_seed_subsample_period_asset_and_perturbati
     assert first.accepted
 
 
+def test_stability_refits_use_the_frozen_iteration_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery, development, projection, clustering, symbols, periods = _stability_fixture()
+    observed: list[int] = []
+    original = stability_module.fit_kmeans
+
+    def record_fit(*args, **kwargs):
+        observed.append(kwargs["max_iterations"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(stability_module, "fit_kmeans", record_fit)
+    with pytest.raises(RuntimeError, match="within 1 iterations"):
+        evaluate_cluster_stability(
+            discovery=discovery,
+            development=development,
+            projection=projection,
+            base_result=clustering,
+            symbols=symbols,
+            asset_universe=tuple(sorted(set(symbols))),
+            periods=periods,
+            period_order=("2025-02", "2025-03"),
+            seeds=(3, 11),
+            subsample_fraction=0.75,
+            policy=StabilityPolicy(-1.0, -1.0, 1.0, 0.0, -1.0),
+            adjacent_period_policy=_software_fixture_policy(),
+            max_iterations=1,
+        )
+
+    assert observed
+    assert set(observed) == {1}
+
+
 def test_stability_evaluation_rejects_when_a_frozen_threshold_fails() -> None:
     discovery, development, projection, clustering, symbols, periods = _stability_fixture()
 
@@ -314,6 +348,44 @@ def test_stability_evaluation_uses_deterministic_unstratified_subsamples() -> No
 
     assert report == replay
     assert report.subsample_ari == (-1.0,)
+
+
+def test_stability_rejects_total_fit_budget_before_refitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery = _matrix("discovery", ((-2.0,), (-1.0,), (1.0,), (2.0,)))
+    development = _matrix("development", ((-2.0,), (-1.0,), (1.0,), (2.0,)))
+    projection = fit_pca(discovery, 1)
+    clustering = fit_projected_kmeans(
+        discovery,
+        projection,
+        clusters=2,
+        seed=7,
+        max_iterations=20,
+        tolerance=1e-12,
+    )
+    monkeypatch.setattr(stability_module, "_MAX_TOTAL_FITS", 2)
+    monkeypatch.setattr(
+        stability_module,
+        "fit_kmeans",
+        lambda *args, **kwargs: pytest.fail("fit ran before aggregate budget preflight"),
+    )
+
+    with pytest.raises(ValueError, match="stability fits"):
+        evaluate_cluster_stability(
+            discovery=discovery,
+            development=development,
+            projection=projection,
+            base_result=clustering,
+            symbols=("BTCUSDT",) * 4,
+            asset_universe=("BTCUSDT",),
+            periods=("p1", "p1", "p2", "p2"),
+            period_order=("p1", "p2"),
+            seeds=(3, 11),
+            subsample_fraction=0.75,
+            policy=StabilityPolicy(0.0, 0.0, 1.0, 0.0, -1.0),
+            adjacent_period_policy=_software_fixture_policy(),
+        )
 
 
 @pytest.mark.parametrize(

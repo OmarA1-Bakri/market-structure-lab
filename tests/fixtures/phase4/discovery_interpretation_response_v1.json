@@ -7,14 +7,14 @@
   },
   "interpretations": [
     {
-      "behaviour_id": "B-D36FD2F5998A3854",
-      "neutral_name": "Low Volume Auction State",
-      "description": "Observed windows combine a low auction-location value with declining relative volume across both fixture assets.",
-      "candidate_mechanism_inference": "Inference: the joint configuration may reflect a recurring low-location auction condition with contracting activity, without identifying its cause.",
+      "behaviour_id": "B-8254215A00884732",
+      "neutral_name": "High Volume Auction State",
+      "description": "Observed windows combine a high auction-location value with current volume above the explicit causal baseline across both fixture assets.",
+      "candidate_mechanism_inference": "Inference: the joint configuration may reflect a recurring high-location auction condition with above-baseline observed volume, without identifying its cause.",
       "falsifiable_hypothesis": "On untouched Phase 5 data, events assigned to this frozen detector will have a different distribution of 15-minute forward returns and realized volatility than time-matched negative controls.",
       "detector_fields": [
         "auction_location",
-        "volume_change"
+        "volume_deviation_from_baseline"
       ],
       "proposed_horizon": "15 closed one-minute candles",
       "proposed_metrics": [
@@ -31,14 +31,14 @@
       ]
     },
     {
-      "behaviour_id": "B-95434DA32383B8D9",
-      "neutral_name": "High Volume Auction State",
-      "description": "Observed windows combine a high auction-location value with rising relative volume across both fixture assets.",
-      "candidate_mechanism_inference": "Inference: the joint configuration may reflect a recurring high-location auction condition with expanding activity, without identifying its cause.",
+      "behaviour_id": "B-94E253BA77DC21DF",
+      "neutral_name": "Low Volume Auction State",
+      "description": "Observed windows combine a low auction-location value with current volume below the explicit causal baseline across both fixture assets.",
+      "candidate_mechanism_inference": "Inference: the joint configuration may reflect a recurring low-location auction condition with below-baseline observed volume, without identifying its cause.",
       "falsifiable_hypothesis": "On untouched Phase 5 data, events assigned to this frozen detector will have a different distribution of 15-minute forward returns and realized volatility than time-matched negative controls.",
       "detector_fields": [
         "auction_location",
-        "volume_change"
+        "volume_deviation_from_baseline"
       ],
       "proposed_horizon": "15 closed one-minute candles",
       "proposed_metrics": [

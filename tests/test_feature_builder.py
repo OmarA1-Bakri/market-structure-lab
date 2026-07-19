@@ -19,6 +19,7 @@ from market_structure_lab.auction.engine import (
     StructuralEvent,
     StructuralEventKind,
 )
+from market_structure_lab.auction.replay import snapshot_stream_sha256
 from market_structure_lab.auction.models import AuctionCandle
 import market_structure_lab.features.builder as feature_builder_module
 
@@ -84,6 +85,138 @@ def test_builder_emits_immutable_replayable_producer_bound_batch(tmp_path: Path)
     assert batch.artifact_sha256 == batch.content_sha256
 
 
+def _builder_state(builder: FeatureBuilder) -> tuple[object, ...]:
+    return (
+        tuple(builder._history),
+        builder._latest,
+        builder._last_location,
+        builder._location_dwell,
+    )
+
+
+def test_batch_rejects_undeclared_preseeded_builder_context_without_mutation(
+    tmp_path: Path,
+) -> None:
+    builder = FeatureBuilder()
+    builder.update(snapshot(0))
+    before = _builder_state(builder)
+    destination = tmp_path / "preseeded.jsonl"
+
+    with pytest.raises(ValueError, match="empty continuation context"):
+        builder.build_batch(
+            [snapshot(1)],
+            artifact_path=destination,
+            maximum_rows=1,
+        )
+
+    assert _builder_state(builder) == before
+    assert not destination.exists()
+    assert not destination.with_name(f".{destination.name}.tmp").exists()
+
+
+def test_batch_binds_exact_ordered_snapshot_stream_and_empty_starting_context(
+    tmp_path: Path,
+) -> None:
+    snapshots = (snapshot(0), snapshot(1))
+    first = FeatureBuilder().build_batch(
+        snapshots,
+        artifact_path=tmp_path / "first.jsonl",
+        maximum_rows=2,
+    )
+    same_output_different_input = FeatureBuilder().build_batch(
+        (replace(snapshots[0], window_id="different-window-instance"), snapshots[1]),
+        artifact_path=tmp_path / "different-input.jsonl",
+        maximum_rows=2,
+    )
+    second = FeatureBuilder().build_batch(
+        snapshots,
+        artifact_path=tmp_path / "second.jsonl",
+        maximum_rows=2,
+    )
+
+    assert first.input_snapshot_stream_sha256 == snapshot_stream_sha256(snapshots)
+    assert first.input_snapshot_stream_sha256 == second.input_snapshot_stream_sha256
+    assert first.starting_context_sha256 == second.starting_context_sha256
+    assert first.content_sha256 == same_output_different_input.content_sha256
+    assert (
+        first.input_snapshot_stream_sha256
+        != same_output_different_input.input_snapshot_stream_sha256
+    )
+    lease = FeatureBuildBatch.verify_issued(first)
+    metadata = FeatureBuildBatch.resolve_lease(first, lease)
+    assert metadata.input_snapshot_stream_sha256 == first.input_snapshot_stream_sha256
+    assert metadata.starting_context_sha256 == first.starting_context_sha256
+
+
+def test_failed_batch_restores_exact_state_removes_output_and_retries_cleanly(
+    tmp_path: Path,
+) -> None:
+    builder = FeatureBuilder()
+    before = _builder_state(builder)
+    failed_path = tmp_path / "failed.jsonl"
+
+    def failing_snapshots():
+        yield snapshot(0)
+        yield object()
+
+    with pytest.raises(TypeError, match="AuctionSnapshot"):
+        builder.build_batch(
+            failing_snapshots(),
+            artifact_path=failed_path,
+            maximum_rows=2,
+        )
+
+    assert _builder_state(builder) == before
+    assert not failed_path.exists()
+    assert not failed_path.with_name(f".{failed_path.name}.tmp").exists()
+
+    inputs = (snapshot(0), snapshot(1))
+    retry = builder.build_batch(
+        inputs,
+        artifact_path=tmp_path / "retry.jsonl",
+        maximum_rows=2,
+    )
+    clean = FeatureBuilder().build_batch(
+        inputs,
+        artifact_path=tmp_path / "clean.jsonl",
+        maximum_rows=2,
+    )
+    assert tuple(retry.iter_rows()) == tuple(clean.iter_rows())
+    assert retry.content_sha256 == clean.content_sha256
+    assert retry.input_snapshot_stream_sha256 == clean.input_snapshot_stream_sha256
+    assert retry.starting_context_sha256 == clean.starting_context_sha256
+
+
+def test_failed_final_issuance_revokes_batch_and_restores_output_and_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = FeatureBuilder()
+    before = _builder_state(builder)
+    destination = tmp_path / "issuance-failure.jsonl"
+    original_issue = feature_builder_module._issue_feature_build_batch
+    captured: list[FeatureBuildBatch] = []
+
+    def fail_after_issue(batch: FeatureBuildBatch) -> FeatureBuildBatch:
+        captured.append(original_issue(batch))
+        raise RuntimeError("issuance fault")
+
+    monkeypatch.setattr(feature_builder_module, "_issue_feature_build_batch", fail_after_issue)
+    with pytest.raises(RuntimeError, match="issuance fault"):
+        builder.build_batch(
+            [snapshot(0)],
+            artifact_path=destination,
+            maximum_rows=1,
+        )
+
+    assert _builder_state(builder) == before
+    assert not destination.exists()
+    assert not destination.with_name(f".{destination.name}.tmp").exists()
+    assert len(captured) == 1
+    with pytest.raises(ValueError, match="exact issued FeatureBuildBatch"):
+        tuple(captured[0].iter_rows())
+
+
 def test_batch_replay_uses_authoritative_absolute_path_after_working_directory_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -106,11 +239,31 @@ def test_batch_replay_uses_authoritative_absolute_path_after_working_directory_c
     assert tuple(batch.iter_rows()) == (FeatureBuilder().update(snapshot(0)),)
 
 
+def test_feature_batch_rejects_aggregate_bytes_before_record_write(tmp_path: Path) -> None:
+    builder = FeatureBuilder()
+    before = _builder_state(builder)
+    destination = tmp_path / "oversized.jsonl"
+
+    with pytest.raises(ValueError, match="aggregate byte budget"):
+        builder.build_batch(
+            [snapshot(0)],
+            artifact_path=destination,
+            maximum_rows=1,
+            maximum_total_bytes=1,
+        )
+
+    assert _builder_state(builder) == before
+    assert not destination.exists()
+    assert not destination.with_name(f".{destination.name}.tmp").exists()
+
+
 def _batch_constructor_fields(batch: FeatureBuildBatch) -> dict[str, object]:
     return {
         "artifact_path": batch.artifact_path,
         "artifact_sha256": batch.artifact_sha256,
         "content_sha256": batch.content_sha256,
+        "input_snapshot_stream_sha256": batch.input_snapshot_stream_sha256,
+        "starting_context_sha256": batch.starting_context_sha256,
         "row_count": batch.row_count,
         "builder_id": batch.builder_id,
         "builder_version": batch.builder_version,
@@ -118,6 +271,7 @@ def _batch_constructor_fields(batch: FeatureBuildBatch) -> dict[str, object]:
         "dependency_contract_sha256": batch.dependency_contract_sha256,
         "registry_id": batch.registry_id,
         "maximum_row_bytes": batch.maximum_row_bytes,
+        "maximum_total_bytes": batch.maximum_total_bytes,
     }
 
 
@@ -256,6 +410,7 @@ def test_replay_uses_authenticated_metadata_snapshot_during_concurrent_attribute
         "content_sha256",
         "row_count",
         "maximum_row_bytes",
+        "maximum_total_bytes",
     ):
         object.__setattr__(issued, field_name, getattr(donor, field_name))
     object.__setattr__(issued, "builder_id", "forged-builder")

@@ -16,7 +16,12 @@ from market_structure_lab.profiles.binning import (
     target_count_bins,
     volatility_scaled_bins,
 )
-from market_structure_lab.profiles.models import Candle, ProfileSnapshot
+from market_structure_lab.profiles.models import (
+    DEFAULT_PROFILE_WORK_BUDGET,
+    Candle,
+    ProfileSnapshot,
+    ProfileWorkBudget,
+)
 from market_structure_lab.profiles.volume import (
     VolumeProfile,
     build_volume_profile,
@@ -33,11 +38,13 @@ __all__ = [
     "BinContribution",
     "BinDefinition",
     "Candle",
+    "DEFAULT_PROFILE_WORK_BUDGET",
     "FixedStepBins",
     "LogPriceBins",
     "LowerTimeframeReconstruction",
     "ProfileAccumulator",
     "ProfileSnapshot",
+    "ProfileWorkBudget",
     "TickSizeBins",
     "TargetCountBins",
     "TriangularCloseAllocation",

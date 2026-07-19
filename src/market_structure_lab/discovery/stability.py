@@ -15,6 +15,8 @@ from market_structure_lab.discovery.pca import PCAProjection, pca_projection_sha
 from market_structure_lab.discovery.splits import PartitionRole
 
 _MAX_ITERATIONS = 100
+_MAX_SEEDS = 128
+_MAX_TOTAL_FITS = 258
 _TOLERANCE = 1e-12
 STABILITY_ALGORITHM_VERSION = "cluster-stability-v2"
 
@@ -310,6 +312,7 @@ def evaluate_cluster_stability(
     subsample_fraction: float,
     policy: StabilityPolicy,
     adjacent_period_policy: AdjacentPeriodStabilityPolicy,
+    max_iterations: int = _MAX_ITERATIONS,
 ) -> StructuralStabilityReport:
     """Evaluate a frozen fit on bounded discovery and development matrices."""
 
@@ -329,6 +332,16 @@ def evaluate_cluster_stability(
         raise TypeError("policy must be a StabilityPolicy")
     if not isinstance(adjacent_period_policy, AdjacentPeriodStabilityPolicy):
         raise TypeError("adjacent_period_policy must be an AdjacentPeriodStabilityPolicy")
+    if (
+        isinstance(max_iterations, bool)
+        or not isinstance(max_iterations, int)
+        or not 1 <= max_iterations <= _MAX_ITERATIONS
+    ):
+        raise ValueError("max_iterations must be within the stability safety bound")
+    seed_values = _validated_seeds(seeds)
+    total_fit_budget = len(seed_values) * 2 + 2
+    if total_fit_budget > _MAX_TOTAL_FITS:
+        raise ValueError("aggregate stability fits exceed the safety bound")
 
     projection_digest = pca_projection_sha256(discovery, projection)
     scores = _validated_projection(projection, discovery_rows, feature_width)
@@ -342,7 +355,6 @@ def evaluate_cluster_stability(
         raise ValueError("observed symbols must belong to the configured asset_universe")
     period_values = _validated_names(periods, len(development_rows), "periods")
     ordered_periods = _validated_period_order(period_order, period_values)
-    seed_values = _validated_seeds(seeds)
     fraction = _validated_fraction(subsample_fraction)
 
     seed_ari = tuple(
@@ -352,14 +364,21 @@ def evaluate_cluster_stability(
                 scores,
                 clusters=cluster_count,
                 seed=seed,
-                max_iterations=_MAX_ITERATIONS,
+                max_iterations=max_iterations,
                 tolerance=_TOLERANCE,
             ).assignments,
         )
         for seed in seed_values
     )
     subsample_ari = tuple(
-        _subsample_ari(scores, base_result.assignments, cluster_count, seed, fraction)
+        _subsample_ari(
+            scores,
+            base_result.assignments,
+            cluster_count,
+            seed,
+            fraction,
+            max_iterations,
+        )
         for seed in seed_values
     )
     cluster_period_support = _cluster_period_support(
@@ -386,6 +405,7 @@ def evaluate_cluster_stability(
         base_result.assignments,
         cluster_count,
         seed_values[0],
+        max_iterations,
     )
     return StructuralStabilityReport(
         policy=policy,
@@ -623,6 +643,8 @@ def _validated_seeds(seeds: Sequence[int]) -> tuple[int, ...]:
         raise TypeError("seeds must contain integers")
     if len(set(values)) != len(values):
         raise ValueError("seeds must be unique")
+    if len(values) > _MAX_SEEDS:
+        raise ValueError("seeds exceed the stability safety bound")
     return values
 
 
@@ -639,6 +661,7 @@ def _subsample_ari(
     cluster_count: int,
     seed: int,
     fraction: float,
+    max_iterations: int,
 ) -> float:
     sample_size = max(cluster_count, math.floor(len(scores) * fraction))
     sample_size = min(sample_size, len(scores))
@@ -652,7 +675,7 @@ def _subsample_ari(
         sampled_scores,
         clusters=cluster_count,
         seed=seed,
-        max_iterations=_MAX_ITERATIONS,
+        max_iterations=max_iterations,
         tolerance=_TOLERANCE,
     )
     return adjusted_rand_index(
@@ -827,6 +850,7 @@ def _parameter_perturbation_ari(
     assignments: tuple[int, ...],
     cluster_count: int,
     seed: int,
+    max_iterations: int,
 ) -> tuple[float, ...]:
     distinct = len(set(scores))
     candidates: list[int] = []
@@ -843,7 +867,7 @@ def _parameter_perturbation_ari(
                 scores,
                 clusters=candidate,
                 seed=seed,
-                max_iterations=_MAX_ITERATIONS,
+                max_iterations=max_iterations,
                 tolerance=_TOLERANCE,
             ).assignments,
         )

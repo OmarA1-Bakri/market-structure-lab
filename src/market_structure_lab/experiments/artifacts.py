@@ -293,6 +293,15 @@ class TrialAbandoned(RuntimeError):
     """Signal an explicit abandoned attempt while preserving the original exception."""
 
 
+class TrialArtifactBudgetExceeded(ValueError):
+    """A trial bundle exceeded a caller-frozen byte or entry admission limit."""
+
+    def __init__(self, message: str, *, observed: int, limit: int) -> None:
+        super().__init__(message)
+        self.observed = observed
+        self.limit = limit
+
+
 def save_experiment_result(
     *,
     config: ExperimentConfig,
@@ -304,6 +313,8 @@ def save_experiment_result(
     warnings: Sequence[str] = (),
     artifacts: Mapping[str, str | bytes] | None = None,
     root: str | Path = "data/exports/trials",
+    maximum_total_bytes: int | None = None,
+    maximum_entries: int | None = None,
 ) -> ExperimentResult:
     """Atomically publish one immutable terminal receipt and its exact artifacts."""
 
@@ -328,6 +339,14 @@ def save_experiment_result(
             raise TypeError("artifact content must be str or bytes")
     if len(payloads) > _MAX_ARTIFACTS:
         raise ValueError("trial artifact count exceeds the bounded limit")
+    for value, label in (
+        (maximum_total_bytes, "maximum_total_bytes"),
+        (maximum_entries, "maximum_entries"),
+    ):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            raise ValueError(f"{label} must be a positive integer or None")
 
     artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
     identity = config.identity_dict()
@@ -345,6 +364,19 @@ def save_experiment_result(
     manifest_values["receipt_sha256"] = _sha256(_canonical_json(manifest_values))
     manifest = _manifest_from_dict(manifest_values)
     payloads[_RECEIPT_NAME] = _json_file(manifest.to_dict())
+    if maximum_entries is not None and len(payloads) > maximum_entries:
+        raise TrialArtifactBudgetExceeded(
+            "trial bundle entries exceed the frozen limit",
+            observed=len(payloads),
+            limit=maximum_entries,
+        )
+    total_bytes = sum(len(content) for content in payloads.values())
+    if maximum_total_bytes is not None and total_bytes > maximum_total_bytes:
+        raise TrialArtifactBudgetExceeded(
+            "trial bundle bytes exceed the frozen limit",
+            observed=total_bytes,
+            limit=maximum_total_bytes,
+        )
     root_path = Path(root)
     if not path_exists_no_follow(root_path):
         root_path.mkdir(parents=True)

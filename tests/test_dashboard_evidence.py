@@ -10,7 +10,8 @@ from typing import Any, Callable
 
 import pytest
 
-from market_structure_lab.data.dashboard_evidence import generate_lab_evidence
+import market_structure_lab.data.dashboard_evidence as dashboard_evidence_module
+from market_structure_lab.data.dashboard_evidence import generate_lab_evidence, write_lab_evidence
 from market_structure_lab.data.freshness import (
     CanonicalSeriesState,
     FreshnessManifest,
@@ -230,37 +231,37 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     assert accuracy["derivation_chain_verified"] is False
     assert accuracy["fixture_trials_counted_as_real"] is False
     replay = evidence["software_replay"]
-    assert replay["fixture_schema_version"] == "phase4-discovery-fixture-v3"
+    assert replay["fixture_schema_version"] == "phase4-discovery-fixture-v4"
     assert replay["fixture_producer"] == {
         "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
-        "builder_version": "phase4-fixture-producer-v1",
-        "input_schema": "phase4-fixture-source-v1",
+        "builder_version": "phase4-fixture-producer-v2",
+        "input_schema": "phase4-fixture-source-v2",
     }
     assert replay["runs"]["stable"]["run_id"] == "DR-000601"
     assert replay["runs"]["stable"]["manifest_sha256"] == (
-        "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b"
+        "404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e"
     )
     assert replay["runs"]["stable"]["identity_sha256"] == (
-        "e6ed0930ac3be8b9b3f500aad5174a2bee70286ece1ed1005ec4657a8d4c3009"
+        "b7d0be263d64c254257f5931d84cc48d26a4580834cdfed13fa09808c875a9d0"
     )
     assert replay["runs"]["stable"]["config_sha256"] == (
-        "1dc35d4f30ee73740972906770ebfcb8b6efaf7f3c54408fcf32ead595932819"
+        "fc54c3f2e785bc46412c3fd2639071fa47c0282ac54d1d1ac51b9a1f5cec5889"
     )
     assert replay["runs"]["rejected"]["manifest_sha256"] == (
-        "700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0"
+        "4ca6d4b6b3ca8e89b56c853f1b4235338ee5fa92d9b536e9cb3e07057ed371e9"
     )
     assert replay["runs"]["rejected"]["identity_sha256"] == (
-        "d544e10dd8d6903114367b6bdcd1f4d814be8c1bfd9d017cbcb5b2dca7a283d9"
+        "661c2e6cccd9ec9c29cb097d748c252a50aefa5b1b1569d3571d669668df7296"
     )
     assert replay["runs"]["rejected"]["config_sha256"] == (
-        "00f1080f1aba3f950e363918a74390ea2f9c9d89e9a89aa8f82d0c3942f099a4"
+        "345747df49dabf330a2a095dd8e59e4829467d1e1ee4365625fd257f8c63631f"
     )
     assert replay["runs"]["stable"]["transition_algorithm_version"] == (
         "boundary-aware-dwell-transitions-v3"
     )
     assert replay["runs"]["stable"]["behaviour_ids"] == [
-        "B-95434DA32383B8D9",
-        "B-D36FD2F5998A3854",
+        "B-8254215A00884732",
+        "B-94E253BA77DC21DF",
     ]
     assert {item["neutral_name"] for item in replay["behaviours"]} == {
         "High Volume Auction State",
@@ -277,11 +278,29 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     )
 
 
+def test_dashboard_evidence_write_rejects_oversized_payload_before_filesystem_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    output = tmp_path / "public" / "lab-evidence-v1.json"
+    monkeypatch.setattr(dashboard_evidence_module, "MAX_LAB_EVIDENCE_BYTES", 1)
+
+    with pytest.raises(ValueError, match="evidence exceeds"):
+        write_lab_evidence(
+            repository,
+            output,
+            generated_at="2026-07-17T03:00:00Z",
+        )
+
+    assert not output.exists()
+    assert not output.with_suffix(output.suffix + ".tmp").exists()
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
         lambda fixture: fixture.__setitem__("schema_version", "phase4-discovery-fixture-v2"),
-        lambda fixture: fixture.__setitem__("schema_version", "phase4-discovery-fixture-v4"),
+        lambda fixture: fixture.__setitem__("schema_version", "phase4-discovery-fixture-v5"),
         lambda fixture: fixture.__setitem__("unexpected", True),
         lambda fixture: fixture["fixture_producer"].pop("builder_id"),
         lambda fixture: fixture["fixture_producer"].__setitem__("unexpected", True),
@@ -292,7 +311,7 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     ],
     ids=(
         "stale-v2",
-        "unknown-v4",
+        "unknown-v5",
         "extra-top-level",
         "missing-producer-field",
         "extra-producer-field",
@@ -302,7 +321,7 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
         "malformed-raw-source",
     ),
 )
-def test_dashboard_rejects_nonexact_phase4_v3_fixture_contract(
+def test_dashboard_rejects_nonexact_phase4_v4_fixture_contract(
     tmp_path: Path,
     mutation: Callable[[dict[str, Any]], object],
 ) -> None:
@@ -316,18 +335,18 @@ def test_dashboard_rejects_nonexact_phase4_v3_fixture_contract(
         generate_lab_evidence(root, generated_at="2026-07-17T03:00:00Z")
 
 
-def test_public_dashboard_evidence_uses_current_phase4_v3_manifest() -> None:
+def test_public_dashboard_evidence_uses_current_phase4_v4_manifest() -> None:
     repository = Path(__file__).parents[1]
     artifact = repository / "dashboard" / "public" / "data" / "lab-evidence-v1.json"
     evidence = json.loads(artifact.read_text(encoding="utf-8"))
     replay = evidence["software_replay"]
 
-    assert replay["fixture_schema_version"] == "phase4-discovery-fixture-v3"
+    assert replay["fixture_schema_version"] == "phase4-discovery-fixture-v4"
     assert replay["runs"]["stable"]["manifest_sha256"] == (
-        "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b"
+        "404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e"
     )
     assert replay["runs"]["rejected"]["manifest_sha256"] == (
-        "700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0"
+        "4ca6d4b6b3ca8e89b56c853f1b4235338ee5fa92d9b536e9cb3e07057ed371e9"
     )
     assert (
         replay["fixture_sha256"]
@@ -337,11 +356,11 @@ def test_public_dashboard_evidence_uses_current_phase4_v3_manifest() -> None:
         artifact.read_text(encoding="utf-8")
     )
     assert evidence["phase_gate"] == {
-        "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete",
+        "active_phase": "Phase B Task 13 deterministic hardening: complete",
         "next_required_evidence": (
-            "obtain explicit approval before Phase C real outcome-blind discovery"
+            "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint"
         ),
-        "status": "complete_awaiting_phase_approval",
+        "status": "complete_task14_authorized",
     }
 
 
@@ -478,10 +497,10 @@ def test_promoted_full_history_uses_checksum_verified_receipt_without_claiming_s
         "reconciliation_provenance_established_snapshot_not_frozen"
     )
     assert evidence["phase_gate"] == {
-        "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete",
-        "status": "complete_awaiting_phase_approval",
+        "active_phase": "Phase B Task 13 deterministic hardening: complete",
+        "status": "complete_task14_authorized",
         "next_required_evidence": (
-            "obtain explicit approval before Phase C real outcome-blind discovery"
+            "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint"
         ),
     }
 

@@ -95,7 +95,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 |---|---|---|
 | Task 1 — golden replay | Complete | Cross-platform deterministic PCA repair and reviewed fixture migration; 86 discovery/golden tests passed on Linux and Windows. |
 | Task 2 — RR-000008 | Complete and explicitly promoted | All 1,583 frozen work units are terminal and verified. The approved append-only promotion has one row, 285 non-overlapping coverage intervals, an immutable receipt, exact origin counts, zero out-of-coverage replacements, and byte-identical replay. |
-| Task 3 — dashboard contract | Complete at the promoted Phase 0 and deterministic Phase 4 boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, 285 receipt-bound intervals, snapshot-not-frozen eligibility, `not_estimable` experiment accuracy, and the explicit approval gate before Phase C. |
+| Task 3 — dashboard contract | Complete at the promoted Phase 0 and deterministic Phase 4 boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, 285 receipt-bound intervals, snapshot-not-frozen eligibility, `not_estimable` experiment accuracy, and the verified Task 13 checkpoint gate before the authorized Task 14. |
 | Task 4 — transition safety | Complete | Raw adjacent binomial/BH research surface removed; boundary-aware dwell/event path is canonical. |
 | Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; verified real-trial count remains `n=0`. |
 | Task 6 — Phase 0 gate | Complete | Promotion, canonical-view audit, dashboard, written evidence, full verification, Lore commit, and remote SHA check are complete at `388bf19089b6f1011879f65eec546e383b5884b5`. |
@@ -104,8 +104,9 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 9 — motif boundaries and stability | Complete | Multivariate motifs cannot bridge hard sequence boundaries and retain separate multi-axis stability/support evidence. |
 | Task 10 — transition uncertainty | Complete | Horizon, bootstrap, block selection, confidence, diagnostics, sensitivity, work caps, and descriptive-only terminology are frozen. |
 | Task 11 — semantic leakage evidence | Complete | Dependency/builder contracts, independent review receipts, negative tests, and pre-consumption guards are bound; residual manual review remains explicit. |
-| Task 12 — Phase 4 hardening gate | Complete and remotely checkpointed; stopped before Phase C | Deterministic hardening evidence is committed at `b69e38973d5a30cacf636a399d0b30d76d794004`, with the reviewed consistency follow-up at `035aa35c50724d2a8638846a2045b69e554f5a8e`; both are remotely verified. |
-| Tasks 13–14 | Approval-gated | Do not run real outcome-blind discovery, outcome attachment, validation, or edge evaluation without the preceding written gate and explicit approval. |
+| Task 12 — original Phase 4 hardening gate | Complete and remotely checkpointed | The evidence/review chain is complete through prerequisite-closure baseline `3cf3721f1ec694b61ec1da78d0b7be24fea93caf`; local and remote match. Task 12 authorizes only the explicitly instructed Task 13 audit, not Phase C. |
+| Task 13 — independent residual-risk verification | In progress; explicitly authorized | Challenge the completed Task 12 snapshot, reproduce every finding, correct only confirmed defects, complete three reviews and full verification, and push one distinct checkpoint before any empirical work. |
+| Tasks 14–15 | Explicitly authorized after prerequisite gates | The 2026-07-19 instruction authorizes continuous downstream execution, but Task 14 may start only after the verified Task 13 checkpoint and Task 15 only after Task 14 evidence; no stage may be skipped. |
 
 ## Skill and workflow routing
 
@@ -176,9 +177,11 @@ The authoritative sweep is `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`.
 - [x] Feature leakage evidence includes declared source dependencies and an independent audit.
 - [x] A real outcome-blind discovery may run only after explicit approval and must not access final
       holdout rows or outcomes.
-- [x] Every completed Phase 4 hardening task has a verified remote commit SHA recorded in the
-      evidence report. Tasks 7–12 are remotely verified; Task 12 evidence is at `b69e389` and its
-      reviewed consistency follow-up is at `035aa35`.
+- [ ] The Task 13 residual-risk audit has reproduced and classified all ten review areas, corrected
+      every confirmed defect, completed the three-part review loop, passed targeted/full/golden
+      verification, and recorded a verified remote checkpoint.
+- [x] Every completed Phase 4 hardening task through Task 12 has a verified remote commit SHA
+      recorded in the evidence report; the final Task 12 prerequisite baseline is `3cf3721`.
 
 ### Phase 5 readiness criteria
 
@@ -202,14 +205,15 @@ Task 1 golden diagnosis
 Phase 0 evidence gate and explicit approval
   └─> Task 7 provenance chain
       ├─> Task 8 cluster stability
-      ├─> Task 9 motif boundaries/stability
+      ├─> Task 9 motif boundaries and stability
       ├─> Task 10 transition uncertainty policy
       └─> Task 11 semantic leakage evidence
-          └─> Task 12 Phase 4 hardening evidence gate and explicit approval
+          └─> Task 12 original Phase 4 hardening verification
+              └─> Task 13 independent residual-risk verification
 
-Phase 4 hardening gate and explicit approval
-  └─> Task 13 real outcome-blind discovery
-      └─> Task 14 separate Phase 5 validation plan
+Task 13 completion and final Phase B approval gate
+  └─> Task 14 first real outcome-blind discovery
+      └─> Task 15 separate Phase 5 validation plan
 ```
 
 ---
@@ -749,11 +753,129 @@ leakage patterns fail; the documentation states the residual manual-review limit
       boundaries, and absence of inferential/edge claims.
 - [x] Write the evidence report and stop for explicit approval before any real discovery run.
 
+**Acceptance:** all original Phase B verification requirements pass; the Phase 4 hardening evidence
+report records every command, hash, residual risk, and unavailable check; one Lore-compliant Task 12
+checkpoint is pushed and its remote SHA is verified.
+
+Task 12 does not authorize Phase C or a real discovery run. When Task 13 has been explicitly
+authorized, continue directly into Task 13 without an additional approval pause. No real discovery,
+final-holdout access, outcome attachment, validation, strategy, execution, leverage, or trading work
+may begin.
+
+---
+
+### Task 13: Independently verify and close residual Phase 4 hardening risks
+
+**Authoritative baseline:** the completed Task 12 local and remote SHA
+`3cf3721f1ec694b61ec1da78d0b7be24fea93caf`.
+
+This is a separate post-Task-12 adversarial verification task. It challenges software correctness,
+state transactions, type contracts, provenance, leakage evidence, publication linkage,
+missingness-selection, bounded work, and quality enforcement. It does not run real discovery,
+inspect holdout rows or outcomes, attach outcomes, estimate accuracy, validate an edge, construct a
+strategy, or begin Phase 5/execution/trading.
+
+**Inspect and modify only after diagnosis:**
+
+- `src/market_structure_lab/auction/engine.py`, `auction/windows.py`, and relevant profile/node
+  collaborators;
+- `src/market_structure_lab/features/builder.py`, `normalization.py`, and `registry.py`;
+- `src/market_structure_lab/data/derived.py`;
+- `src/market_structure_lab/discovery/matrix.py`, `behaviours.py`, `runs.py`, and `splits.py`;
+- `tests/phase4_fixture_producer.py` and the canonical owning tests;
+- the Phase 4 discovery, implementation-status, accuracy, evidence, and roadmap documents.
+
+- [x] **Step 1: Freeze baseline and reproduce every independent finding**
+
+Record branch, exact Task 12 local/remote SHA and equality, comparison with `bd9f82b`, tracked
+worktree state, collection count, targeted/full/dashboard/cross-platform results, and attached CI
+checks. For each area below, inspect implementation and tests, run the smallest reproduction, and
+record only `Confirmed`, `Partially confirmed`, `Refuted`, `Already fixed`, or
+`Not independently verifiable`, with severity, symbol, evidence, root cause, provenance, required
+correction, and regression acceptance criteria:
+
+1. `AuctionEngine.update()` transactional correctness across every mutable collaborator, fault
+   stage, reset, and retry; failed updates must restore exact pre-call state and preserve every
+   applicable reset cause.
+2. `FeatureBuilder.build_batch()` hidden state, explicit continuation context, input-stream binding,
+   rollback, issuance/revocation, and deterministic retry.
+3. Integer-feature normalization boundaries; normalized floats must not impersonate raw
+   integer-valued `FeatureRow` values or the raw registry identity.
+4. Behaviour event/duration bindings; row, event, duration, and event-publication identities must be
+   joined by a stable explicit key rather than parallel position.
+5. Phase 4 fixture `volume_change` provenance; a trailing observation must be the actual preceding
+   causal row with matching symbol/timeframe/segment/continuity, or the feature must be renamed.
+6. Leakage approval/receipt reconstruction; validation must reconstruct approval identity from
+   reviewer, review artifact, per-field tests, and negative-test evidence while retaining the manual
+   review limitation.
+7. Event-publication linkage to the exact verified source feature publication, registry,
+   dependency contract, approval, receipt logical identity, and receipt artifact.
+8. Structural missingness and complete-case selection; bounded evidence and a frozen rejection or
+   inconclusive policy must make selection auditable without imputation.
+9. Aggregate resource/work budgets for profile, rows/records/matrix, PCA/clustering/stability,
+   motifs, transitions, evidence, publication, and dashboard paths; invalid configurations must
+   fail deterministic preflight before expensive work.
+10. Automated quality enforcement; distinguish collection, executed tests, cross-platform checks,
+    dashboard checks, CI attachment, and local claims without calling lint/typecheck/build tests.
+
+Do not change production code, schemas, identities, manifests, fixtures, or expected hashes before
+the relevant failing reproduction or refuting proof exists. Publish the ten-area verdict table
+before broad correction.
+
+- [x] **Step 2: Correct confirmed state, type, and binding defects test-first**
+
+Make auction advancement transactional using a pure transition, provisional atomic swap, or
+complete rollback snapshot that includes window policy, node tracker, contribution cache, profile,
+latest input/snapshot, symbol, and timeframe. Preserve simultaneous reset causes. Make feature
+batches depend only on declared input plus explicit frozen continuation, bind the ordered input
+stream and starting context, revoke incomplete issuance, restore exact state, and support clean
+retry. Represent transformed values in a separately typed normalized layer rather than weakening
+raw integer validation. Replace behaviour positional metadata with a frozen keyed binding enforcing
+coverage, uniqueness, canonical order, source-publication identity, and deterministic hash. Run
+each failing test red before the minimum correction and green immediately after it.
+
+- [x] **Step 3: Correct confirmed provenance, missingness, and budget defects test-first**
+
+For genuine trailing features, prove previous timestamp/order, symbol, timeframe, segment,
+continuity, and value linkage; otherwise truthfully rename and independently review every identity
+migration and byte change. Reconstruct leakage approvals during receipt validation and use bounded
+no-follow hash verification when underlying artifacts are supplied; otherwise state that internal
+identity consistency does not prove the claimed review occurred. Reject unrelated event/feature
+publication identities before row iteration. Publish bounded missingness evidence with frozen total
+and per-feature drop policies and deterministic rejected/inconclusive outcomes; never impute. Add
+only confirmed missing preflights, reusing existing bounded-work primitives, and freeze every limit
+that changes output, admissibility, or evidence volume.
+
+- [ ] **Step 4: Verify, review, evidence, checkpoint, push, and stop**
+
+Run the focused auction/window/feature/derived/matrix/run/split/golden tests, Ruff format and lint,
+Mypy, `git diff --check`, the dashboard `npm ci`/evidence/lint/typecheck/build chain, the complete
+repository `uv sync --locked`/Pytest/build/Compose chain, applicable Windows/PowerShell checks, and
+two independent clean-root golden replays comparing every filename and byte. Record that the
+dashboard has no automated test command when still true. Determine whether checks attach to exact
+final `HEAD`; add no external or governance-heavy tooling and record any remaining enforcement risk.
+
+Complete and record implementer self-review, independent specification review, and independent
+code-quality review. Resolve every finding and rerun affected tests plus the final full chain. Update
+`docs/PHASE4_HARDENING_EVIDENCE.md`, create one distinct Lore-compliant Task 13 commit, push without
+history rewriting, verify local/remote equality, create a small evidence-only follow-up only if the
+final SHA must be recorded, and verify equality again before Task 14.
+
+**Acceptance:** every independent residual-risk finding has a reproduced verdict; confirmed defects
+are corrected and regression-tested; targeted and complete verification are finished; clean golden
+publications replay byte-identically or every intentional migration is independently reviewed; the
+three-part review loop is complete; written evidence is updated; the final Lore-compliant Task 13
+checkpoint is pushed; and the remote branch SHA is verified against local `HEAD`.
+
+The final Phase B boundary remains mandatory. Under the explicit 2026-07-19 continuous-execution
+instruction, proceed into Task 14 only after the Task 13 evidence checkpoint is pushed and its remote
+SHA is verified. No real discovery may begin before that proof.
+
 ---
 
 ## Phase C — Empirical calibration (separately gated)
 
-### Task 13: Freeze and run the first real outcome-blind discovery
+### Task 14: Freeze and run the first real outcome-blind discovery
 
 This task resolves the “no empirical discovery evidence” gap only. It does **not** estimate edge
 accuracy and must not attach outcomes.
@@ -784,7 +906,7 @@ untouched.
 
 ---
 
-### Task 14: Create the separate Phase 5 validation plan
+### Task 15: Create the separate Phase 5 validation plan
 
 Do not implement Phase 5 under this plan. After real behaviours are frozen, create a new consensus
 plan that defines:
@@ -855,7 +977,7 @@ strategy or leverage work is included.
 | More bootstrap iterations create false confidence | Calibrate block policy and report effective support/sensitivity, not only iteration count |
 | Semantic leakage is claimed “solved” by metadata | Pair declared dependencies with adversarial tests and independent review; document residual limits |
 | Full-universe gaps bias experiments | Freeze only approved contiguous scoped intervals; never weaken gates or impute |
-| Phase boundaries are silently skipped | Written evidence report and explicit approval at the end of Phases A and B |
+| Phase boundaries are silently skipped | Written evidence and verified remote checkpoint through Task 13 before the already-authorized Task 14 |
 | A popular skill injects unreviewed assumptions | Treat skills as checklists; record version and adoption decisions; preregister project-specific policy |
 | ML is introduced before a baseline earns it | Require naive and simple baselines, a fixed search budget, and untouched incremental evidence |
 | A discovered edge is beta, momentum, volatility, or liquidity exposure | Freeze exposure diagnostics and require residual robustness before promotion |
@@ -863,13 +985,15 @@ strategy or leverage work is included.
 
 ## Definition of done
 
-This remediation program is complete only when Tasks 1–12 pass their verification gates and the
-Phase A/B evidence reports are accepted. Tasks 13–14 are explicitly later, approval-gated empirical
-work. The broader goal is not to guarantee an edge; it is to create a process capable of rejecting
-false structure and false alpha while identifying any behaviour that survives reproducibility,
-stability, untouched validation, exposure adjustment, costs, and program-level trial accounting.
-The program does not become “accurate” merely by completing code changes; empirical accuracy remains
-unestimated until enough preregistered Phase 5 trials exist to report a trial-yield interval.
+The deterministic hardening programme is complete only when Tasks 1–13 pass their verification
+gates and the final Task 13 Phase B evidence checkpoint is accepted. Tasks 14–15 remain later,
+sequentially gated empirical work and are explicitly authorized by the 2026-07-19 instruction only
+after their prerequisites. The broader goal is not to guarantee an edge; it is to create
+a process capable of rejecting false structure and false alpha while identifying any behaviour that
+survives reproducibility, stability, untouched validation, exposure adjustment, costs, and
+program-level trial accounting. The programme does not become “accurate” merely by completing code
+changes; empirical accuracy remains unestimated until enough preregistered Phase 5 trials exist to
+report a trial-yield interval.
 
 ## Execution handoff
 

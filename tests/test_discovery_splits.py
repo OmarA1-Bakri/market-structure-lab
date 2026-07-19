@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+import market_structure_lab.discovery.splits as splits_module
 
 from market_structure_lab.discovery.splits import (
     DiscoveryInput,
@@ -476,6 +477,22 @@ def test_make_discovery_input_rejects_invalid_limits_before_iteration(max_rows: 
             registry=_registry(),
             purpose="fit",
             max_rows=max_rows,  # type: ignore[arg-type]
+        )
+
+
+def test_make_discovery_input_rejects_materialization_budget_before_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery, _, _ = _partitions()
+    monkeypatch.setattr(splits_module, "MAX_DISCOVERY_INPUT_ROWS", 1)
+
+    with pytest.raises(ValueError, match="materialization safety bound"):
+        make_discovery_input(
+            partition=discovery,
+            rows=_ExplodingRows(),
+            registry=_registry(),
+            purpose="fit",
+            max_rows=2,
         )
 
 

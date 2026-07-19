@@ -305,9 +305,9 @@ hardening, boundary and transition controls, leakage defenses, and explicit user
 mandatory. Current snapshot policy correctly rejects partial/provider-absent coverage, so research
 must use an approved contiguous/scoped universe or resolve those gaps rather than weaken the gate.
 Stable replay pins
-manifest SHA-256 `eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b`;
+manifest SHA-256 `404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e`;
 the unstable fixture pins
-`700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0` and publishes no
+`4ca6d4b6b3ca8e89b56c853f1b4235338ee5fa92d9b536e9cb3e07057ed371e9` and publishes no
 behaviours.
 
 Transition probabilities are boundary-aware Markov-like conditional summaries, not evidence that

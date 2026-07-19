@@ -24,15 +24,19 @@ from market_structure_lab.data.derived import (
     DerivedPublicationIdentity,
     FeatureLeakageFieldEvidence,
     LeakageAuditApproval,
+    LeakageAuditReceipt,
     LeakageNegativePattern,
     PublicationBusyError,
     PublicationCleanupError,
+    PublishedEventBinding,
     feature_partition_records,
+    iter_published_event_bindings,
     publish_feature_rows as publish_feature_batch,
     publish_market_events,
     read_derived_manifest,
     read_leakage_audit_receipt,
     verify_derived_publication,
+    verify_published_event_bindings,
 )
 from market_structure_lab.events.models import EventKind, make_event
 from market_structure_lab.features.builder import FeatureBuildBatch, FeatureBuilder
@@ -121,6 +125,60 @@ def publish_feature_rows(
     )
 
 
+def publish_event_source(
+    snapshots,
+    *,
+    output_root: Path,
+    active: FeatureRegistry,
+):
+    source_manifest = publish_feature_rows(
+        snapshots,
+        output_root=output_root,
+        identity=identity(active),
+        registry=active,
+        leakage_audit=leakage_approval(active),
+    )
+    source_directory = (
+        output_root / "dataset_version=DS-000009" / "feature_set=FS-000001" / "features"
+    )
+    return source_directory, source_manifest
+
+
+def publish_event_binding_fixture(output_root: Path):
+    active = registry()
+    frozen = identity(active)
+    snapshots = [feature_snapshot(1), feature_snapshot(2)]
+    builder = FeatureBuilder()
+    rows = [builder.update(snapshot) for snapshot in snapshots]
+    events = [
+        make_event(
+            EventKind.FIXED_WINDOW,
+            row.timestamp - timedelta(minutes=1),
+            row.information_cutoff,
+            row,
+            "fixed-v1",
+            registry=active,
+        )
+        for row in rows
+    ]
+    source_directory, source_manifest = publish_event_source(
+        snapshots,
+        output_root=output_root,
+        active=active,
+    )
+    event_manifest = publish_market_events(
+        events,
+        output_root=output_root,
+        identity=frozen,
+        registry=active,
+        source_feature_directory=source_directory,
+        source_feature_manifest=source_manifest,
+        max_rows_per_part=2,
+    )
+    event_directory = output_root / "dataset_version=DS-000009" / "feature_set=FS-000001" / "events"
+    return event_directory, event_manifest, rows
+
+
 def build_feature_batch(
     snapshots,
     *,
@@ -140,6 +198,8 @@ def feature_batch_constructor_fields(batch: FeatureBuildBatch) -> dict[str, obje
         "artifact_path": batch.artifact_path,
         "artifact_sha256": batch.artifact_sha256,
         "content_sha256": batch.content_sha256,
+        "input_snapshot_stream_sha256": batch.input_snapshot_stream_sha256,
+        "starting_context_sha256": batch.starting_context_sha256,
         "row_count": batch.row_count,
         "builder_id": batch.builder_id,
         "builder_version": batch.builder_version,
@@ -147,6 +207,7 @@ def feature_batch_constructor_fields(batch: FeatureBuildBatch) -> dict[str, obje
         "dependency_contract_sha256": batch.dependency_contract_sha256,
         "registry_id": batch.registry_id,
         "maximum_row_bytes": batch.maximum_row_bytes,
+        "maximum_total_bytes": batch.maximum_total_bytes,
     }
 
 
@@ -190,8 +251,8 @@ def test_feature_publication_emits_checksum_bound_independent_leakage_receipt(
     receipt = read_leakage_audit_receipt(published / LEAKAGE_AUDIT_NAME)
 
     assert manifest.leakage_audit_receipt_sha256 == receipt.receipt_sha256
-    assert manifest.schema_version == 3
-    assert receipt.schema_version == 2
+    assert manifest.schema_version == 4
+    assert receipt.schema_version == 3
     assert receipt.feature_registry_sha256 == active.sha256
     assert (
         receipt.dependency_contract_sha256
@@ -201,6 +262,24 @@ def test_feature_publication_emits_checksum_bound_independent_leakage_receipt(
     assert receipt.approval_sha256 == approval.sha256
     assert receipt.publication_identity_sha256 == frozen.sha256
     assert receipt.builder_output_sha256 == manifest.feature_builder_output_sha256
+    assert receipt.input_snapshot_stream_sha256 == manifest.feature_input_snapshot_stream_sha256
+    assert receipt.starting_context_sha256 == manifest.feature_starting_context_sha256
+    expected_build_budget_sha256 = hashlib.sha256(
+        json.dumps(
+            {
+                "maximum_row_bytes": feature_builder_module.MAX_FEATURE_BUILD_ROW_BYTES,
+                "maximum_total_bytes": feature_builder_module.MAX_FEATURE_BUILD_BATCH_BYTES,
+                "schema_version": 1,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert (
+        receipt.feature_build_budget_sha256
+        == manifest.feature_build_budget_sha256
+        == expected_build_budget_sha256
+    )
     assert receipt.published_content_sha256 == manifest.content_sha256
     assert receipt.builder_output_row_count == manifest.row_count
     assert tuple(item.feature_name for item in receipt.fields) == active.names
@@ -212,6 +291,99 @@ def test_feature_publication_emits_checksum_bound_independent_leakage_receipt(
     )
     assert receipt.residual_manual_review_required is True
     verify_derived_publication(published, manifest)
+
+
+def test_feature_build_aggregate_budget_changes_publication_and_receipt_identity(
+    tmp_path: Path,
+) -> None:
+    active = registry()
+    snapshot_value = feature_snapshot(0)
+    (tmp_path / "first-batch").mkdir()
+    (tmp_path / "second-batch").mkdir()
+    first_batch = FeatureBuilder().build_batch(
+        [snapshot_value],
+        artifact_path=tmp_path / "first-batch" / "rows.jsonl",
+        maximum_rows=1,
+        maximum_total_bytes=feature_builder_module.MAX_FEATURE_BUILD_BATCH_BYTES,
+    )
+    second_batch = FeatureBuilder().build_batch(
+        [snapshot_value],
+        artifact_path=tmp_path / "second-batch" / "rows.jsonl",
+        maximum_rows=1,
+        maximum_total_bytes=feature_builder_module.MAX_FEATURE_BUILD_BATCH_BYTES - 1,
+    )
+
+    first = publish_feature_batch(
+        first_batch,
+        output_root=tmp_path / "first",
+        identity=identity(active),
+        registry=active,
+        leakage_audit=leakage_approval(active),
+    )
+    second = publish_feature_batch(
+        second_batch,
+        output_root=tmp_path / "second",
+        identity=identity(active),
+        registry=active,
+        leakage_audit=leakage_approval(active),
+    )
+    first_receipt = read_leakage_audit_receipt(
+        tmp_path
+        / "first"
+        / "dataset_version=DS-000009"
+        / "feature_set=FS-000001"
+        / "features"
+        / LEAKAGE_AUDIT_NAME
+    )
+    second_receipt = read_leakage_audit_receipt(
+        tmp_path
+        / "second"
+        / "dataset_version=DS-000009"
+        / "feature_set=FS-000001"
+        / "features"
+        / LEAKAGE_AUDIT_NAME
+    )
+
+    assert first.content_sha256 == second.content_sha256
+    assert first.feature_build_budget_sha256 != second.feature_build_budget_sha256
+    assert first.publication_sha256 != second.publication_sha256
+    assert first_receipt.feature_build_budget_sha256 == first.feature_build_budget_sha256
+    assert second_receipt.feature_build_budget_sha256 == second.feature_build_budget_sha256
+
+
+def test_leakage_receipt_reconstructs_and_rejects_a_forged_approval_identity(
+    tmp_path: Path,
+) -> None:
+    active = registry()
+    approval = leakage_approval(active)
+    frozen = identity(active)
+    publish_feature_rows(
+        [feature_snapshot(0)],
+        output_root=tmp_path,
+        identity=frozen,
+        registry=active,
+        leakage_audit=approval,
+    )
+    published = tmp_path / "dataset_version=DS-000009" / "feature_set=FS-000001" / "features"
+    receipt = read_leakage_audit_receipt(published / LEAKAGE_AUDIT_NAME)
+
+    with pytest.raises(ValueError, match="approval identity"):
+        LeakageAuditReceipt.create(
+            feature_registry_sha256=receipt.feature_registry_sha256,
+            dependency_contract_sha256=receipt.dependency_contract_sha256,
+            approval_sha256="f" * 64,
+            publication_identity_sha256=receipt.publication_identity_sha256,
+            builder_output_sha256=receipt.builder_output_sha256,
+            input_snapshot_stream_sha256=receipt.input_snapshot_stream_sha256,
+            starting_context_sha256=receipt.starting_context_sha256,
+            feature_build_budget_sha256=receipt.feature_build_budget_sha256,
+            published_content_sha256=receipt.published_content_sha256,
+            builder_output_row_count=receipt.builder_output_row_count,
+            reviewer_id=receipt.reviewer_id,
+            review_artifact_sha256=receipt.review_artifact_sha256,
+            negative_test_evidence=receipt.negative_test_evidence,
+            fields=receipt.fields,
+        )
 
 
 def test_plain_feature_rows_are_rejected_without_a_producer_envelope(tmp_path: Path) -> None:
@@ -633,6 +805,42 @@ def test_verifier_rejects_manifest_dependency_digest_not_bound_to_receipt(
         verify_derived_publication(published)
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    ["feature_input_snapshot_stream_sha256", "feature_starting_context_sha256"],
+)
+def test_verifier_rejects_feature_derivation_context_not_bound_to_receipt(
+    tmp_path: Path,
+    field_name: str,
+) -> None:
+    active = registry()
+    manifest = publish_feature_rows(
+        [feature_snapshot(0)],
+        output_root=tmp_path,
+        identity=identity(active),
+        registry=active,
+        leakage_audit=leakage_approval(active),
+    )
+    published = tmp_path / "dataset_version=DS-000009" / "feature_set=FS-000001" / "features"
+    provisional = replace(
+        manifest,
+        **{field_name: "0" * 64, "publication_sha256": "0" * 64},
+    )
+    tampered = replace(
+        provisional,
+        publication_sha256=hashlib.sha256(
+            derived_data._canonical_json(provisional.logical_dict())
+        ).hexdigest(),
+    )
+    (published / derived_data.MANIFEST_NAME).write_text(tampered.to_json(), encoding="utf-8")
+    (published / derived_data.SUCCESS_NAME).write_bytes(
+        f"{tampered.publication_sha256}\n".encode("ascii")
+    )
+
+    with pytest.raises(ValueError, match="not bound to the publication"):
+        verify_derived_publication(published)
+
+
 def test_close_after_publication_authentication_but_before_replay_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -918,7 +1126,7 @@ def test_verifier_rejects_a_supplied_manifest_that_differs_from_disk(tmp_path: P
     with pytest.raises(ValueError, match="does not exactly match"):
         verify_derived_publication(
             published,
-            replace(manifest, max_rows_per_part=manifest.max_rows_per_part + 1),
+            replace(manifest, max_buffered_rows=0),
         )
 
 
@@ -1030,6 +1238,114 @@ def test_feature_publication_has_fixed_chunks_and_deterministic_paths(tmp_path: 
     )
     assert (published / "_SUCCESS").is_file()
     verify_derived_publication(published)
+
+
+def test_publication_rejects_pathological_partition_buffer_before_rows_are_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = registry()
+    batch = build_feature_batch(
+        [feature_snapshot(0)],
+        artifact_path=tmp_path / "batch" / "rows.jsonl",
+        maximum_rows=1,
+    )
+
+    def exploding_rows(self, metadata=None) -> Iterator[FeatureRow]:
+        raise AssertionError("feature rows were read before publication budget validation")
+        yield
+
+    monkeypatch.setattr(FeatureBuildBatch, "iter_rows", exploding_rows)
+
+    with pytest.raises(ValueError, match="max_rows_per_part exceeds"):
+        publish_feature_batch(
+            batch,
+            output_root=tmp_path,
+            identity=identity(active),
+            registry=active,
+            leakage_audit=leakage_approval(active),
+            max_rows_per_part=derived_data._MAX_ROWS_PER_PART + 1,
+        )
+
+
+def test_feature_publication_rejects_known_row_budget_before_rows_are_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = registry()
+    batch = build_feature_batch(
+        [feature_snapshot(0)],
+        artifact_path=tmp_path / "batch" / "rows.jsonl",
+        maximum_rows=1,
+    )
+
+    def exploding_rows(self, metadata=None) -> Iterator[FeatureRow]:
+        raise AssertionError("feature rows were read before publication row-budget validation")
+        yield
+
+    monkeypatch.setattr(derived_data, "_MAX_PUBLICATION_ROWS", 0)
+    monkeypatch.setattr(FeatureBuildBatch, "iter_rows", exploding_rows)
+
+    with pytest.raises(ValueError, match="publication row budget exceeded"):
+        publish_feature_batch(
+            batch,
+            output_root=tmp_path,
+            identity=identity(active),
+            registry=active,
+            leakage_audit=leakage_approval(active),
+        )
+
+
+def test_publication_rejects_partition_count_before_excess_partition_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = registry()
+    batch = build_feature_batch(
+        [feature_snapshot(0), feature_snapshot(1)],
+        artifact_path=tmp_path / "batch" / "rows.jsonl",
+        maximum_rows=2,
+    )
+    monkeypatch.setattr(derived_data, "_MAX_PUBLICATION_PARTITIONS", 1)
+
+    def exploding_rows(self, metadata=None) -> Iterator[FeatureRow]:
+        raise AssertionError("feature rows were read before partition-budget validation")
+        yield
+
+    monkeypatch.setattr(FeatureBuildBatch, "iter_rows", exploding_rows)
+
+    with pytest.raises(ValueError, match="publication partition budget exceeded"):
+        publish_feature_batch(
+            batch,
+            output_root=tmp_path,
+            identity=identity(active),
+            registry=active,
+            leakage_audit=leakage_approval(active),
+            max_rows_per_part=1,
+        )
+
+    published = tmp_path / "dataset_version=DS-000009" / "feature_set=FS-000001" / "features"
+    assert not published.exists()
+
+
+def test_publication_rejects_buffer_byte_budget_before_parquet_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = registry()
+    monkeypatch.setattr(derived_data, "_MAX_PUBLICATION_BUFFER_BYTES", 1)
+
+    with pytest.raises(ValueError, match="publication buffer byte budget exceeded"):
+        publish_feature_rows(
+            [feature_snapshot(0)],
+            output_root=tmp_path,
+            identity=identity(active),
+            registry=active,
+            leakage_audit=leakage_approval(active),
+        )
+
+    published = tmp_path / "dataset_version=DS-000009" / "feature_set=FS-000001" / "features"
+    assert not published.exists()
 
 
 def test_feature_publication_requires_normalizer_identity_before_rows_are_read(
@@ -1442,8 +1758,9 @@ def test_feature_producer_rejects_duplicate_and_out_of_order_snapshots(tmp_path:
 def test_event_publication_uses_fixed_schema_and_records_overlap(tmp_path: Path) -> None:
     active = registry()
     frozen = identity(active)
-    row_one = feature_row(1)
-    row_two = feature_row(2)
+    builder = FeatureBuilder()
+    row_one = builder.update(feature_snapshot(1))
+    row_two = builder.update(feature_snapshot(2))
     events = [
         make_event(
             EventKind.ROLLING_WINDOW,
@@ -1465,11 +1782,18 @@ def test_event_publication_uses_fixed_schema_and_records_overlap(tmp_path: Path)
             metadata={"volume_ratio": 2.0},
         ),
     ]
+    source_directory, source_manifest = publish_event_source(
+        [feature_snapshot(1), feature_snapshot(2)],
+        output_root=tmp_path,
+        active=active,
+    )
     manifest = publish_market_events(
         events,
         output_root=tmp_path,
         identity=frozen,
         registry=active,
+        source_feature_directory=source_directory,
+        source_feature_manifest=source_manifest,
         max_rows_per_part=1,
     )
     published = tmp_path / "dataset_version=DS-000009" / "feature_set=FS-000001" / "events"
@@ -1481,6 +1805,21 @@ def test_event_publication_uses_fixed_schema_and_records_overlap(tmp_path: Path)
     assert manifest.evidence.maximum_concurrency == 2
     assert manifest.evidence.overlap_event_ratio == 1.0
     assert manifest.evidence.event_trigger_versions == ("expansion-v1", "rolling-v1")
+    assert manifest.schema_version == 4
+    assert manifest.source_feature_publication_sha256 == source_manifest.publication_sha256
+    assert manifest.source_feature_registry_sha256 == active.sha256
+    assert manifest.source_feature_dependency_contract_sha256 == active.dependency_contract_sha256
+    assert manifest.source_leakage_audit_approval_sha256 == frozen.leakage_audit_approval_sha256
+    assert (
+        manifest.source_leakage_audit_receipt_sha256 == source_manifest.leakage_audit_receipt_sha256
+    )
+    assert (
+        manifest.source_leakage_audit_artifact_sha256
+        == source_manifest.leakage_audit_artifact_sha256
+    )
+    assert manifest.source_feature_binding_count == 2
+    assert len(manifest.source_feature_binding_sha256 or "") == 64
+    assert manifest.source_feature_partitions == source_manifest.partitions
     assert "metadata_json" in frame.columns
     assert "metadata" not in frame.columns
     assert "feature_values" not in frame.columns
@@ -1491,6 +1830,8 @@ def test_event_publication_uses_fixed_schema_and_records_overlap(tmp_path: Path)
             output_root=tmp_path,
             identity=frozen,
             registry=active,
+            source_feature_directory=source_directory,
+            source_feature_manifest=source_manifest,
             max_rows_per_part=1,
         )
         == manifest
@@ -1500,8 +1841,9 @@ def test_event_publication_uses_fixed_schema_and_records_overlap(tmp_path: Path)
 def test_duplicate_and_out_of_order_event_rows_fail_closed(tmp_path: Path) -> None:
     active = registry()
     frozen = identity(active)
-    row_one = feature_row(1)
-    row_two = feature_row(2)
+    builder = FeatureBuilder()
+    row_one = builder.update(feature_snapshot(1))
+    row_two = builder.update(feature_snapshot(2))
     event_one = make_event(
         EventKind.FIXED_WINDOW,
         row_one.timestamp - timedelta(minutes=1),
@@ -1518,6 +1860,11 @@ def test_duplicate_and_out_of_order_event_rows_fail_closed(tmp_path: Path) -> No
         "fixed-v1",
         registry=active,
     )
+    source_directory, source_manifest = publish_event_source(
+        [feature_snapshot(1), feature_snapshot(2)],
+        output_root=tmp_path / "source",
+        active=active,
+    )
 
     with pytest.raises(ValueError, match="duplicate events row"):
         publish_market_events(
@@ -1525,6 +1872,8 @@ def test_duplicate_and_out_of_order_event_rows_fail_closed(tmp_path: Path) -> No
             output_root=tmp_path / "duplicate",
             identity=frozen,
             registry=active,
+            source_feature_directory=source_directory,
+            source_feature_manifest=source_manifest,
         )
     with pytest.raises(
         ValueError,
@@ -1535,4 +1884,305 @@ def test_duplicate_and_out_of_order_event_rows_fail_closed(tmp_path: Path) -> No
             output_root=tmp_path / "ordering",
             identity=frozen,
             registry=active,
+            source_feature_directory=source_directory,
+            source_feature_manifest=source_manifest,
         )
+
+
+@pytest.mark.parametrize(
+    "manifest_change",
+    [
+        {"publication_sha256": "0" * 64},
+        {"feature_dependency_contract_sha256": "0" * 64},
+        {"leakage_audit_receipt_sha256": "0" * 64},
+        {"leakage_audit_artifact_sha256": "0" * 64},
+    ],
+)
+def test_event_source_linkage_is_rejected_before_event_iteration(
+    tmp_path: Path,
+    manifest_change: dict[str, object],
+) -> None:
+    active = registry()
+    source_directory, source_manifest = publish_event_source(
+        [feature_snapshot(1), feature_snapshot(2)],
+        output_root=tmp_path / "source",
+        active=active,
+    )
+    consumed = 0
+
+    def events():
+        nonlocal consumed
+        consumed += 1
+        yield object()
+
+    with pytest.raises(ValueError, match="source feature publication"):
+        publish_market_events(
+            events(),
+            output_root=tmp_path / "events",
+            identity=identity(active),
+            registry=active,
+            source_feature_directory=source_directory,
+            source_feature_manifest=replace(source_manifest, **manifest_change),
+        )
+    assert consumed == 0
+
+
+def test_event_publication_rejects_unrelated_approval_before_event_iteration(
+    tmp_path: Path,
+) -> None:
+    active = registry()
+    source_directory, source_manifest = publish_event_source(
+        [feature_snapshot(1)],
+        output_root=tmp_path / "source",
+        active=active,
+    )
+    consumed = 0
+
+    def events():
+        nonlocal consumed
+        consumed += 1
+        yield object()
+
+    unrelated = replace(identity(active), leakage_audit_approval_sha256="f" * 64)
+    with pytest.raises(ValueError, match="leakage approval"):
+        publish_market_events(
+            events(),
+            output_root=tmp_path / "events",
+            identity=unrelated,
+            registry=active,
+            source_feature_directory=source_directory,
+            source_feature_manifest=source_manifest,
+        )
+    assert consumed == 0
+
+
+def test_event_feature_values_must_be_backed_by_exact_source_publication(
+    tmp_path: Path,
+) -> None:
+    active = registry()
+    source_directory, source_manifest = publish_event_source(
+        [feature_snapshot(1), feature_snapshot(2)],
+        output_root=tmp_path / "source",
+        active=active,
+    )
+    unrelated_row = feature_row(2)
+    event = make_event(
+        EventKind.FIXED_WINDOW,
+        unrelated_row.timestamp - timedelta(minutes=1),
+        unrelated_row.information_cutoff,
+        unrelated_row,
+        "fixed-v1",
+        registry=active,
+    )
+
+    with pytest.raises(ValueError, match="backed by the source feature publication"):
+        publish_market_events(
+            [event],
+            output_root=tmp_path / "events",
+            identity=identity(active),
+            registry=active,
+            source_feature_directory=source_directory,
+            source_feature_manifest=source_manifest,
+        )
+
+
+def test_event_source_partition_scan_count_is_bounded_independent_of_event_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = registry()
+    frozen = identity(active)
+    snapshots = [feature_snapshot(1), feature_snapshot(2)]
+    builder = FeatureBuilder()
+    rows = [builder.update(snapshot) for snapshot in snapshots]
+    events = [
+        make_event(
+            EventKind.FIXED_WINDOW,
+            row.timestamp - timedelta(minutes=1),
+            row.information_cutoff,
+            row,
+            "fixed-v1",
+            registry=active,
+        )
+        for row in rows
+    ]
+    source_directory, source_manifest = publish_event_source(
+        snapshots,
+        output_root=tmp_path / "source",
+        active=active,
+    )
+    source_partition = source_directory / source_manifest.partitions[0].path
+    source_scans = 0
+    real_scan_parquet = derived_data.pl.scan_parquet
+
+    def counted_scan_parquet(source, *args, **kwargs):
+        nonlocal source_scans
+        if Path(source) == source_partition:
+            source_scans += 1
+        return real_scan_parquet(source, *args, **kwargs)
+
+    monkeypatch.setattr(derived_data.pl, "scan_parquet", counted_scan_parquet)
+
+    publish_market_events(
+        events,
+        output_root=tmp_path / "events",
+        identity=frozen,
+        registry=active,
+        source_feature_directory=source_directory,
+        source_feature_manifest=source_manifest,
+    )
+
+    assert source_scans == 2  # one publication verification plus one bounded binding index
+
+
+def test_event_publication_rejects_pathological_partition_buffer_before_event_iteration(
+    tmp_path: Path,
+) -> None:
+    active = registry()
+    source_directory, source_manifest = publish_event_source(
+        [feature_snapshot(1)],
+        output_root=tmp_path / "source",
+        active=active,
+    )
+    consumed = 0
+
+    def events():
+        nonlocal consumed
+        consumed += 1
+        yield object()
+
+    with pytest.raises(ValueError, match="max_rows_per_part exceeds"):
+        publish_market_events(
+            events(),
+            output_root=tmp_path / "events",
+            identity=identity(active),
+            registry=active,
+            source_feature_directory=source_directory,
+            source_feature_manifest=source_manifest,
+            max_rows_per_part=derived_data._MAX_ROWS_PER_PART + 1,
+        )
+    assert consumed == 0
+
+
+def test_published_event_bindings_stream_in_deterministic_bounded_batches(
+    tmp_path: Path,
+) -> None:
+    directory, manifest, rows = publish_event_binding_fixture(tmp_path)
+
+    bindings = tuple(
+        iter_published_event_bindings(
+            directory,
+            manifest,
+            maximum_rows_per_batch=1,
+        )
+    )
+
+    assert bindings == tuple(
+        PublishedEventBinding(
+            row_id=(
+                f"{row.symbol}|{row.timeframe}|{row.timestamp.isoformat().replace('+00:00', 'Z')}"
+            ),
+            event_id=binding.event_id,
+            duration_seconds=120.0,
+            event_publication_sha256=manifest.publication_sha256,
+        )
+        for row, binding in zip(rows, bindings, strict=True)
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda values: values[:-1], "missing"),
+        (
+            lambda values: (
+                *values,
+                replace(
+                    values[-1],
+                    row_id="BTCUSDT|1m|2025-01-01T00:03:00Z",
+                    event_id="EV-" + "F" * 64,
+                ),
+            ),
+            "extra",
+        ),
+        (lambda values: (values[0], values[0]), "duplicate"),
+        (
+            lambda values: (replace(values[0], event_publication_sha256="f" * 64), values[1]),
+            "foreign event publication",
+        ),
+        (
+            lambda values: (
+                replace(values[0], event_id=values[1].event_id),
+                replace(values[1], event_id=values[0].event_id),
+            ),
+            "semantic content mismatch",
+        ),
+    ],
+    ids=("missing", "extra", "duplicate", "foreign", "semantic-reorder"),
+)
+def test_published_event_binding_verifier_rejects_noncanonical_bindings(
+    tmp_path: Path,
+    mutation,
+    message: str,
+) -> None:
+    directory, manifest, _ = publish_event_binding_fixture(tmp_path)
+    canonical = tuple(iter_published_event_bindings(directory, manifest))
+    expected_row_ids = tuple(binding.row_id for binding in canonical)
+
+    with pytest.raises(ValueError, match=message):
+        verify_published_event_bindings(
+            directory,
+            manifest,
+            mutation(canonical),
+            expected_row_ids=expected_row_ids,
+            maximum_rows_per_batch=1,
+        )
+
+
+def test_published_event_binding_verifier_joins_by_row_id_not_physical_order(
+    tmp_path: Path,
+) -> None:
+    directory, manifest, _ = publish_event_binding_fixture(tmp_path)
+    canonical = tuple(iter_published_event_bindings(directory, manifest))
+
+    verify_published_event_bindings(
+        directory,
+        manifest,
+        canonical[::-1],
+        expected_row_ids=tuple(binding.row_id for binding in canonical[::-1]),
+        maximum_rows_per_batch=1,
+    )
+
+
+def test_published_event_binding_verifier_enforces_aggregate_input_byte_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory, manifest, _ = publish_event_binding_fixture(tmp_path)
+    canonical = tuple(iter_published_event_bindings(directory, manifest))
+    monkeypatch.setattr(derived_data, "_MAX_EVENT_BINDING_INPUT_BYTES", 1)
+
+    with pytest.raises(ValueError, match="binding input byte budget exceeded"):
+        verify_published_event_bindings(
+            directory,
+            manifest,
+            canonical,
+            expected_row_ids=tuple(binding.row_id for binding in canonical),
+        )
+
+
+def test_published_event_binding_reader_rejects_manifest_and_schema_mismatch(
+    tmp_path: Path,
+) -> None:
+    directory, manifest, _ = publish_event_binding_fixture(tmp_path)
+    changed_schema = replace(
+        manifest,
+        parquet_schema=tuple(
+            (name, "String" if name == "information_cutoff" else dtype)
+            for name, dtype in manifest.parquet_schema
+        ),
+        publication_sha256="0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="does not exactly match"):
+        tuple(iter_published_event_bindings(directory, changed_schema))

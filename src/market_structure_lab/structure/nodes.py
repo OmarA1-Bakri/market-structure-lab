@@ -67,6 +67,16 @@ class NodePersistenceTracker:
     def __init__(self) -> None:
         self._previous: tuple[ProfileNode, ...] = ()
 
+    def transaction_checkpoint(self) -> tuple[ProfileNode, ...]:
+        """Capture the immutable persistence tuple in constant time."""
+
+        return self._previous
+
+    def restore_transaction(self, checkpoint: tuple[ProfileNode, ...]) -> None:
+        """Restore an earlier persistence tuple without replacing this tracker."""
+
+        self._previous = checkpoint
+
     def update(self, nodes: Sequence[ProfileNode]) -> tuple[ProfileNode, ...]:
         persisted = tuple(self._with_persistence(node) for node in nodes)
         self._previous = persisted

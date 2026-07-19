@@ -1,5 +1,5 @@
 {
-  "schema_version": "phase4-discovery-fixture-v3",
+  "schema_version": "phase4-discovery-fixture-v4",
   "dataset_snapshot": {
     "dataset_version": "DS-000601",
     "sha256": "8be7a8986ce91cff9af10249be029aaeb6893e2fdf7a63ca99115b6ec58b9dc5"
@@ -30,30 +30,30 @@
         "normalization_requirement": "not_required",
         "future_outcome_prohibited": true,
         "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
-        "builder_version": "phase4-fixture-producer-v1",
+        "builder_version": "phase4-fixture-producer-v2",
         "allowed_categories": []
       },
       {
-        "name": "volume_change",
-        "definition": "Causal two-observation fixture volume delta divided by its explicit scale.",
+        "name": "volume_deviation_from_baseline",
+        "definition": "Current fixture volume deviation from its explicit causal baseline, divided by its explicit scale.",
         "family": "sequence",
         "value_kind": "float",
         "units": "ratio",
-        "required_prior_observations": 1,
+        "required_prior_observations": 0,
         "missing_policy": "error",
         "version": "1.0.0",
-        "leakage_class": "TRAILING_ONLY",
+        "leakage_class": "AT_CUTOFF",
         "source_fields": [
+          "fixture.baseline_volume",
           "fixture.current_volume",
-          "fixture.previous_volume",
           "fixture.volume_scale"
         ],
-        "trailing_window": "trailing_2_observations",
-        "observable_cutoff_rule": "trailing_through_information_cutoff",
+        "trailing_window": "current_observation",
+        "observable_cutoff_rule": "at_information_cutoff",
         "normalization_requirement": "not_required",
         "future_outcome_prohibited": true,
         "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
-        "builder_version": "phase4-fixture-producer-v1",
+        "builder_version": "phase4-fixture-producer-v2",
         "allowed_categories": []
       }
     ]
@@ -93,7 +93,7 @@
   },
   "feature_names": [
     "auction_location",
-    "volume_change"
+    "volume_deviation_from_baseline"
   ],
   "caps": {
     "max_rows": 32,
@@ -109,9 +109,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -10.4,
-        "previous_volume": 1000.0,
         "current_volume": 896.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -120,9 +120,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -10.2,
-        "previous_volume": 1000.0,
         "current_volume": 898.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -131,9 +131,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -10.0,
-        "previous_volume": 1000.0,
         "current_volume": 900.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -142,9 +142,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -9.8,
-        "previous_volume": 1000.0,
         "current_volume": 902.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -153,9 +153,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 9.8,
-        "previous_volume": 1000.0,
         "current_volume": 1098.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -164,9 +164,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 10.0,
-        "previous_volume": 1000.0,
         "current_volume": 1100.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -175,9 +175,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 10.2,
-        "previous_volume": 1000.0,
         "current_volume": 1102.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -186,9 +186,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 10.4,
-        "previous_volume": 1000.0,
         "current_volume": 1104.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -197,9 +197,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -10.3,
-        "previous_volume": 1000.0,
         "current_volume": 897.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -208,9 +208,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -10.1,
-        "previous_volume": 1000.0,
         "current_volume": 899.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -219,9 +219,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -9.9,
-        "previous_volume": 1000.0,
         "current_volume": 901.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -230,9 +230,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -9.7,
-        "previous_volume": 1000.0,
         "current_volume": 903.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -241,9 +241,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 9.7,
-        "previous_volume": 1000.0,
         "current_volume": 1097.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -252,9 +252,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 9.9,
-        "previous_volume": 1000.0,
         "current_volume": 1099.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -263,9 +263,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 10.1,
-        "previous_volume": 1000.0,
         "current_volume": 1101.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -274,9 +274,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 10.3,
-        "previous_volume": 1000.0,
         "current_volume": 1103.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     }
   ],
@@ -287,9 +287,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -10.1,
-        "previous_volume": 1000.0,
         "current_volume": 899.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -298,9 +298,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 10.1,
-        "previous_volume": 1000.0,
         "current_volume": 1101.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -309,9 +309,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -9.9,
-        "previous_volume": 1000.0,
         "current_volume": 901.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -320,9 +320,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 9.9,
-        "previous_volume": 1000.0,
         "current_volume": 1099.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -331,9 +331,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -10.0,
-        "previous_volume": 1000.0,
         "current_volume": 900.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -342,9 +342,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 10.0,
-        "previous_volume": 1000.0,
         "current_volume": 1100.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -353,9 +353,9 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": -9.8,
-        "previous_volume": 1000.0,
         "current_volume": 902.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     },
     {
@@ -364,29 +364,29 @@
       "segment_id": 0,
       "source": {
         "auction_location_ratio": 9.8,
-        "previous_volume": 1000.0,
         "current_volume": 1098.0,
-        "volume_scale": 100.0
+        "volume_scale": 100.0,
+        "baseline_volume": 1000.0
       }
     }
   ],
   "event_ids": [
-    "EV-P4-000",
-    "EV-P4-001",
-    "EV-P4-002",
-    "EV-P4-003",
-    "EV-P4-004",
-    "EV-P4-005",
-    "EV-P4-006",
-    "EV-P4-007",
-    "EV-P4-008",
-    "EV-P4-009",
-    "EV-P4-010",
-    "EV-P4-011",
-    "EV-P4-012",
-    "EV-P4-013",
-    "EV-P4-014",
-    "EV-P4-015"
+    "EV-7CB5A2EBE468E8687BEAFF5F44146887DF56CC4331543494C773036D9036240E",
+    "EV-15318FB08C343C226A8155DED9EDC4C526B04496E946C9A914C95BD83797BD89",
+    "EV-5310DB6E70F12AB167F90563EEC04589517A144AE97A78864024B8AA59174B20",
+    "EV-F9B1E1C7D57F8A9C5853AAD73CEAD58C54C3D7A43662CEC4C8B403C586FBDEC6",
+    "EV-E3D74F6D23509B34EC790CA809BD918ECF77F69FA20722543422AFE0A49926D4",
+    "EV-76DF202E9187C87C58EC6EFD8B416EAEF4B764D9D1E14CF98D9571B90A1EC719",
+    "EV-1905220D627B8FE9CCB2F5F2BF21CE955DF58E7ADE9CAD23AE96E65270AEC83F",
+    "EV-03121BA97F41AD9B66EE4F8A4071B6A0AC4FDF84423BB3283B21303B8AFB1B99",
+    "EV-287C459014F1DD01E0CA86152D631E77459748F514DA2D71A79C497418938307",
+    "EV-1F25077AEEB5056C842D1B4C71B0516C2AB1C6A1EFDA0AEFCB35B6CD9EA75D86",
+    "EV-6483FD15695A71532AD36D6DE96B2193B9BEDBE23601DA8EAEC78AA017D702B4",
+    "EV-DD61CBB534A104DAEBF4D9CF64667D647B3E2FE8AE20920D8FCD8AEB5CF42601",
+    "EV-D570879A277CA1750D7DF2A389D633F6F62D7825651A3BBDF776001D9D70A518",
+    "EV-68F05476154086399221CA1E236594EBA8B48F16D16B120316EF2B3BA9709FE9",
+    "EV-0C23761EE15ED434A0EFBD11EB269BD05C3586BE6A66E5DA2F9BBA461E1A28F7",
+    "EV-64CB63EB69D3D6220AD23FF2A74FFC76593D6F83A272AD455F95973DBBE3C092"
   ],
   "durations_seconds": [
     60.0,
@@ -431,25 +431,25 @@
         "minimum_cluster_event_support": 1
       },
       "expected": {
-        "status": "completed",
-        "manifest_sha256": "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b",
-        "identity_sha256": "e6ed0930ac3be8b9b3f500aad5174a2bee70286ece1ed1005ec4657a8d4c3009",
-        "config_sha256": "1dc35d4f30ee73740972906770ebfcb8b6efaf7f3c54408fcf32ead595932819",
-        "behaviour_ids": [
-          "B-95434DA32383B8D9",
-          "B-D36FD2F5998A3854"
-        ],
         "artifact_sha256": {
-          "behaviours.json": "dca6fb129b5ded4912e72a57ff9bed147dad198e58b39f75532d6c086394ecc6",
-          "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "8b38b3a328a9654915959477cc36e07c53f2b106273a8d83e15e9732f1222a0d",
-          "metrics.json": "da6525584588cc5edf9060861ec8f021bf337f2481f01fad6224ed24c9e76a1a",
-          "motifs.json": "121eb4daf299f8a7b5503287a395dfb2e9c8dd6915ed90cf0f7aa10074158368",
+          "behaviours.json": "3ce91579e00f910f3535fb4256e3d6f25ed6c7fb1b90c8b9d65a12e2966f8bc4",
+          "clustering.json": "0762ede2048070278c58835f3f8648d89938808913ce42de7002dd351d67a326",
+          "config.json": "b449b74145166a13d4ba0169399973f900538a349f87c0eb0453864879cbbdee",
+          "metrics.json": "0d5d910eccefdef06a2ff09c4bc40b2a604eb7a1eca293e6721b44c17a51f45e",
+          "missingness.json": "40e04243c8d249f8d9323ca39dbde66d36aac53275c575ad249ab60ed5e1b5c0",
+          "motifs.json": "67ea7b72c3c49652e0c2ed93f22780783cb9d9c05b0bf0e2d9f7e9f36d4db981",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "ea0e6f764b15c225b55060a59a927bd2ac1749adc6e58ade19fc521f96c04e13",
-          "summary.md": "6fcb1661a3cd686c73a4405900fc1427216ef422f11b7fb77953c09e4f212e43",
+          "summary.md": "ca822d0884bde5a560b6c89150a9083b5743ecb17bb9f49e1847f0e140ff8a32",
           "transitions.json": "0331b791fd66a1cbbdc9252d15d05ee7dd79632d5dfcbacbe4fe223c025d44e9"
         },
+        "behaviour_ids": [
+          "B-8254215A00884732",
+          "B-94E253BA77DC21DF"
+        ],
+        "config_sha256": "fc54c3f2e785bc46412c3fd2639071fa47c0282ac54d1d1ac51b9a1f5cec5889",
+        "identity_sha256": "b7d0be263d64c254257f5931d84cc48d26a4580834cdfed13fa09808c875a9d0",
+        "manifest_sha256": "404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e",
         "metrics": {
           "behaviours": 2,
           "conditional_recurrence_descriptive_only": 2,
@@ -461,12 +461,76 @@
             "development": 0,
             "discovery": 0
           },
+          "missingness": {
+            "development": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 8,
+              "partition_role": "development",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 8,
+              "selected_row_ids_sha256": "916b159b2cc15a177c736e12127559a2425e1b2024e1aa4e0ad55bd3b4fafecc"
+            },
+            "discovery": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 16,
+              "partition_role": "discovery",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 16,
+              "selected_row_ids_sha256": "8aa03ae161fd716332cbfb97ad00014e4d8b15e1fb220cd89dd45bc93a4ebe1c"
+            },
+            "policy": {
+              "maximum_evidence_groups": 32,
+              "maximum_per_feature_drop_fraction": 0.0,
+              "maximum_total_drop_fraction": 0.0,
+              "policy_id": "phase4-golden-complete-case-v1"
+            },
+            "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+            "schema_version": "discovery-missingness-evidence-v1"
+          },
           "motif_candidates": 3,
           "motifs_published": 3,
           "motifs_rejected": 0,
           "status": "completed",
-          "transitions": 2
+          "transitions": 2,
+          "work_budget": {
+            "budget_sha256": "fae49bd65c767128dbdb5fc26061c60c2c79b0693ab5ad902435ed9e3669f2d7",
+            "bundle_entries": 11,
+            "clusters": 2,
+            "feature_cells": 48,
+            "kmeans_iterations": 100,
+            "materialized_rows": 24,
+            "maximum_partition_pca_cells": 32,
+            "maximum_partition_pca_rows": 16,
+            "pca_features": 2,
+            "seeds": 2,
+            "total_stability_fits": 6
+          }
         },
+        "status": "completed",
         "transition_algorithm_version": "boundary-aware-dwell-transitions-v3"
       },
       "motif_stability_policy": {
@@ -523,6 +587,26 @@
           1
         ],
         "maximum_sensitivity_endpoint_delta": 1.0
+      },
+      "missingness_policy": {
+        "policy_id": "phase4-golden-complete-case-v1",
+        "maximum_total_drop_fraction": 0.0,
+        "maximum_per_feature_drop_fraction": 0.0,
+        "maximum_evidence_groups": 32
+      },
+      "work_budget": {
+        "budget_id": "phase4-golden-work-budget-v1",
+        "maximum_materialized_rows": 24,
+        "maximum_feature_cells": 48,
+        "maximum_pca_rows": 16,
+        "maximum_pca_features": 2,
+        "maximum_pca_cells": 32,
+        "maximum_clusters": 2,
+        "maximum_seeds": 2,
+        "maximum_kmeans_iterations": 100,
+        "maximum_total_stability_fits": 6,
+        "maximum_serialized_evidence_bytes": 1048576,
+        "maximum_bundle_entries": 12
       }
     },
     "rejected": {
@@ -549,22 +633,22 @@
         "minimum_cluster_event_support": 1
       },
       "expected": {
-        "status": "rejected_unstable",
-        "manifest_sha256": "700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0",
-        "identity_sha256": "d544e10dd8d6903114367b6bdcd1f4d814be8c1bfd9d017cbcb5b2dca7a283d9",
-        "config_sha256": "00f1080f1aba3f950e363918a74390ea2f9c9d89e9a89aa8f82d0c3942f099a4",
-        "behaviour_ids": [],
         "artifact_sha256": {
           "behaviours.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
-          "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "c0b09f5732699d1f9d386aeacc5266c668cc4a9a8af97bbbbdab33512089a8f8",
-          "metrics.json": "a5c54003d093ab0717a775fcc263d80f508f6c0679b7861ae3f1d3a58d796406",
-          "motifs.json": "bf8284138a7f11f82296c44d023c9dd970bd65226337145b60c3415dbd18ce9e",
+          "clustering.json": "0762ede2048070278c58835f3f8648d89938808913ce42de7002dd351d67a326",
+          "config.json": "7ddf4c221116cc9bbf03b90a1d1c41e26687319e548ed46a10a6ff8d55e49464",
+          "metrics.json": "b54abb725c09288d575368999510b526132b54c278f89c087a225cc109a87a84",
+          "missingness.json": "40e04243c8d249f8d9323ca39dbde66d36aac53275c575ad249ab60ed5e1b5c0",
+          "motifs.json": "77f78fc01a9a5a10178e03348d43b656d156f3c3cccb809516638ee73a1419d9",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
           "stability.json": "5c74d7229e4801a5cf237121423ef9457b46448ef9c1fbe38fcc1c7ece499f7b",
-          "summary.md": "2b88d93b715a4fd32b7f7a9218f79c599eb8ed96e62d254f739a8eb5d11388f9",
+          "summary.md": "bdf8931fce794085f9131f4249cafb51074b09477028fda7cff0dcdfc28588ad",
           "transitions.json": "0331b791fd66a1cbbdc9252d15d05ee7dd79632d5dfcbacbe4fe223c025d44e9"
         },
+        "behaviour_ids": [],
+        "config_sha256": "345747df49dabf330a2a095dd8e59e4829467d1e1ee4365625fd257f8c63631f",
+        "identity_sha256": "661c2e6cccd9ec9c29cb097d748c252a50aefa5b1b1569d3571d669668df7296",
+        "manifest_sha256": "4ca6d4b6b3ca8e89b56c853f1b4235338ee5fa92d9b536e9cb3e07057ed371e9",
         "metrics": {
           "behaviours": 0,
           "conditional_recurrence_descriptive_only": 2,
@@ -576,12 +660,76 @@
             "development": 0,
             "discovery": 0
           },
+          "missingness": {
+            "development": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 8,
+              "partition_role": "development",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 8,
+              "selected_row_ids_sha256": "916b159b2cc15a177c736e12127559a2425e1b2024e1aa4e0ad55bd3b4fafecc"
+            },
+            "discovery": {
+              "excluded_row_count": 0,
+              "excluded_row_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "groups": [],
+              "input_row_count": 16,
+              "partition_role": "discovery",
+              "per_feature_dropped": [
+                [
+                  "auction_location",
+                  0
+                ],
+                [
+                  "volume_deviation_from_baseline",
+                  0
+                ]
+              ],
+              "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+              "selected_row_count": 16,
+              "selected_row_ids_sha256": "8aa03ae161fd716332cbfb97ad00014e4d8b15e1fb220cd89dd45bc93a4ebe1c"
+            },
+            "policy": {
+              "maximum_evidence_groups": 32,
+              "maximum_per_feature_drop_fraction": 0.0,
+              "maximum_total_drop_fraction": 0.0,
+              "policy_id": "phase4-golden-complete-case-v1"
+            },
+            "policy_sha256": "724a84e667e8bfa0d9d1586929f90bd47850b7cef6cc64ea404f75d611bc733b",
+            "schema_version": "discovery-missingness-evidence-v1"
+          },
           "motif_candidates": 3,
           "motifs_published": 0,
           "motifs_rejected": 3,
           "status": "rejected_unstable",
-          "transitions": 2
+          "transitions": 2,
+          "work_budget": {
+            "budget_sha256": "fae49bd65c767128dbdb5fc26061c60c2c79b0693ab5ad902435ed9e3669f2d7",
+            "bundle_entries": 11,
+            "clusters": 2,
+            "feature_cells": 48,
+            "kmeans_iterations": 100,
+            "materialized_rows": 24,
+            "maximum_partition_pca_cells": 32,
+            "maximum_partition_pca_rows": 16,
+            "pca_features": 2,
+            "seeds": 2,
+            "total_stability_fits": 6
+          }
         },
+        "status": "rejected_unstable",
         "transition_algorithm_version": "boundary-aware-dwell-transitions-v3"
       },
       "motif_stability_policy": {
@@ -638,25 +786,45 @@
           1
         ],
         "maximum_sensitivity_endpoint_delta": 1.0
+      },
+      "missingness_policy": {
+        "policy_id": "phase4-golden-complete-case-v1",
+        "maximum_total_drop_fraction": 0.0,
+        "maximum_per_feature_drop_fraction": 0.0,
+        "maximum_evidence_groups": 32
+      },
+      "work_budget": {
+        "budget_id": "phase4-golden-work-budget-v1",
+        "maximum_materialized_rows": 24,
+        "maximum_feature_cells": 48,
+        "maximum_pca_rows": 16,
+        "maximum_pca_features": 2,
+        "maximum_pca_cells": 32,
+        "maximum_clusters": 2,
+        "maximum_seeds": 2,
+        "maximum_kmeans_iterations": 100,
+        "maximum_total_stability_fits": 6,
+        "maximum_serialized_evidence_bytes": 1048576,
+        "maximum_bundle_entries": 12
       }
     }
   },
-  "interpretation_input_sha256": "9a695a20ca0e7757de142f4c6508c2955e9d1849a36dcce331559d9f34d65cec",
-  "interpretation_response_sha256": "d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec",
+  "interpretation_input_sha256": "9f6b8bb56143b1ce6298d5e409fff41d50bbd1bb10cd5901bf0fbcf455d3aae6",
+  "interpretation_response_sha256": "ca49bc5572d22042723891f3e1047e6812f8e4595f6ce9e04fae793e32eb4577",
   "interpretation_publication": {
     "expected": {
       "schema_version": "interpretation-manifest-v2",
       "run_id": "DR-000601",
       "behaviour_ids": [
-        "B-95434DA32383B8D9",
-        "B-D36FD2F5998A3854"
+        "B-8254215A00884732",
+        "B-94E253BA77DC21DF"
       ],
-      "identity_sha256": "981951e36b7686062f51213a61c4bb7d793e6f3a89683aede6eb32d940e6cab1",
+      "identity_sha256": "997f197b433c834a52e008be978c70fdf29737eee076a39525ed6cdfe2c11f4d",
       "artifact_sha256": {
-        "evidence.json": "f34ee6acd0c8315ecc82dffed9e8c545238dacdbcc8f755bf675fcd77bbed53c",
-        "interpretations.json": "bceeb81efbc26338dbe6b4aeaa8e7fe0bd0d0a5d6cff4e62b794cdd87b03c2c9"
+        "evidence.json": "756ad62a6ef8e2f3f411be4cb1a65b43040f74d9f4cfc699f349ed9f14c0c0c4",
+        "interpretations.json": "7bcfbee14716e1a6bc875e111a95afbd3e910c856e0ff2130ff9c7582413bd06"
       },
-      "manifest_sha256": "b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119"
+      "manifest_sha256": "57959a105814d8e090f5353cb571c292cf3c8a4dc69806ba20a8a8381439937f"
     }
   },
   "motif_regime_assignments": {
@@ -771,7 +939,8 @@
   },
   "fixture_producer": {
     "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
-    "builder_version": "phase4-fixture-producer-v1",
-    "input_schema": "phase4-fixture-source-v1"
-  }
+    "builder_version": "phase4-fixture-producer-v2",
+    "input_schema": "phase4-fixture-source-v2"
+  },
+  "event_publication_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 }

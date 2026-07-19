@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -195,6 +196,39 @@ def test_policy_reset_clears_state_for_deterministic_replay() -> None:
     assert isinstance(policy, WindowPolicy)
 
 
+def test_window_plan_is_pure_and_commit_preserves_policy_identity() -> None:
+    policy = RollingBars(max_bars=2)
+    first = candle(0)
+    second = candle(1)
+    policy.transition(first)
+    active_container = policy._active
+
+    planned = policy.plan_transition(second)
+
+    assert policy.active_candles == (first,)
+    policy.commit_transition(second, planned)
+    assert policy.active_candles == (first, second)
+    assert policy._active is active_container
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: RollingBars(max_bars=10**12),
+        lambda: RollingDuration(duration=timedelta(days=10**6)),
+        lambda: FixedWindow(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(9999, 1, 1, tzinfo=UTC),
+        ),
+    ],
+)
+def test_pathological_window_ranges_fail_before_state_can_grow(
+    factory: Callable[[], object],
+) -> None:
+    with pytest.raises(ValueError, match="safe maximum"):
+        factory()
+
+
 @pytest.mark.parametrize(
     "factory",
     [
@@ -211,6 +245,6 @@ def test_policy_reset_clears_state_for_deterministic_replay() -> None:
         ),
     ],
 )
-def test_window_policies_reject_invalid_configuration(factory: object) -> None:
+def test_window_policies_reject_invalid_configuration(factory: Callable[[], object]) -> None:
     with pytest.raises((TypeError, ValueError)):
-        factory()  # type: ignore[operator]
+        factory()

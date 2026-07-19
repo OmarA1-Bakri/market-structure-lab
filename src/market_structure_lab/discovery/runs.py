@@ -24,16 +24,30 @@ from market_structure_lab.core.artifact_io import (
 )
 from market_structure_lab.data.derived import (
     DerivedPublicationManifest,
+    PublishedEventBinding,
+    verify_derived_publication,
+    verify_published_event_bindings,
     verify_published_feature_rows,
 )
 from market_structure_lab.data.export import SnapshotManifest, verify_snapshot
-from market_structure_lab.discovery.behaviours import FrozenBehaviour, freeze_behaviours
+from market_structure_lab.discovery.behaviours import (
+    BehaviourEventBinding,
+    FrozenBehaviour,
+    freeze_behaviours,
+    validate_behaviour_event_bindings,
+)
 from market_structure_lab.discovery.evidence import (
     AIInterpretation,
     BehaviourEvidencePack,
 )
 from market_structure_lab.discovery.kmeans import fit_projected_kmeans
-from market_structure_lab.discovery.matrix import FeatureMatrix, build_feature_matrix
+from market_structure_lab.discovery.matrix import (
+    FeatureMatrix,
+    MissingnessPolicy,
+    MissingnessPolicyViolation,
+    build_feature_matrix,
+    normalize_feature_matrix,
+)
 from market_structure_lab.discovery.motifs import (
     MOTIF_ALGORITHM_VERSION,
     MotifDiscoveryReport,
@@ -50,7 +64,6 @@ from market_structure_lab.discovery.splits import (
     FrozenDiscoverySplit,
     PartitionRole,
     freeze_discovery_provenance,
-    make_discovery_input,
 )
 from market_structure_lab.discovery.stability import (
     STABILITY_ALGORITHM_VERSION,
@@ -72,6 +85,7 @@ from market_structure_lab.experiments import (
     ExperimentConfig,
     ExperimentMode,
     TerminalStatus,
+    TrialArtifactBudgetExceeded,
     TrialRange,
     save_experiment_result,
     verify_trial_receipt,
@@ -80,11 +94,24 @@ from market_structure_lab.experiments import (
 _RUN_ID = re.compile(r"^DR-[0-9]{6}$")
 _DATASET_ID = re.compile(r"^DS-[0-9]{6}$")
 _FEATURE_SET_ID = re.compile(r"^FS-[0-9]{6}$")
+_EVENT_PUBLICATION_ID = re.compile(r"^EP-[0-9]{6}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _CODE_COMMIT = re.compile(r"^[A-Fa-f0-9]{7,64}$")
+_SAFE_WORK_BUDGET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$")
 _MAX_INTERPRETATIONS = 1_000
 _MAX_BUNDLE_ENTRIES = 20_000
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+_MAX_MATERIALIZED_ROWS = 2_000_000
+_MAX_FEATURE_CELLS = 20_000_000
+_MAX_PCA_ROWS = 1_000_000
+_MAX_PCA_FEATURES = 10_000
+_MAX_PCA_CELLS = 10_000_000
+_MAX_CLUSTERS = 1_000
+_MAX_SEEDS = 128
+_MAX_KMEANS_ITERATIONS = 100_000
+_MAX_TOTAL_STABILITY_FITS = 258
+_MAX_SERIALIZED_EVIDENCE_BYTES = 64 * 1024 * 1024
+_DISCOVERY_BUNDLE_ENTRY_COUNT = 12
 _SUBSAMPLE_FRACTION = 0.75
 _ROW_IDENTITY_FIELDS = (
     "dataset_version",
@@ -94,6 +121,64 @@ _ROW_IDENTITY_FIELDS = (
     "feature_set_id",
     "registry_id",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryWorkBudget:
+    """Frozen aggregate admission limits for one discovery attempt."""
+
+    budget_id: str
+    maximum_materialized_rows: int
+    maximum_feature_cells: int
+    maximum_pca_rows: int
+    maximum_pca_features: int
+    maximum_pca_cells: int
+    maximum_clusters: int
+    maximum_seeds: int
+    maximum_kmeans_iterations: int
+    maximum_total_stability_fits: int
+    maximum_serialized_evidence_bytes: int
+    maximum_bundle_entries: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.budget_id, str)
+            or _SAFE_WORK_BUDGET_ID.fullmatch(self.budget_id) is None
+        ):
+            raise ValueError("budget_id must be a safe non-empty identifier")
+        hard_limits = {
+            "maximum_materialized_rows": _MAX_MATERIALIZED_ROWS,
+            "maximum_feature_cells": _MAX_FEATURE_CELLS,
+            "maximum_pca_rows": _MAX_PCA_ROWS,
+            "maximum_pca_features": _MAX_PCA_FEATURES,
+            "maximum_pca_cells": _MAX_PCA_CELLS,
+            "maximum_clusters": _MAX_CLUSTERS,
+            "maximum_seeds": _MAX_SEEDS,
+            "maximum_kmeans_iterations": _MAX_KMEANS_ITERATIONS,
+            "maximum_total_stability_fits": _MAX_TOTAL_STABILITY_FITS,
+            "maximum_serialized_evidence_bytes": _MAX_SERIALIZED_EVIDENCE_BYTES,
+            "maximum_bundle_entries": _MAX_BUNDLE_ENTRIES,
+        }
+        for field_name, hard_limit in hard_limits.items():
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{field_name} must be a positive integer")
+            if value > hard_limit:
+                raise ValueError(f"{field_name} exceeds its conservative safety maximum")
+
+    @property
+    def sha256(self) -> str:
+        return _sha256(_canonical_json(_work_budget_payload(self, include_sha256=False)))
+
+
+class DiscoveryWorkBudgetViolation(ValueError):
+    """A deterministic work preflight rejected an oversized attempt."""
+
+    def __init__(self, message: str, *, stage: str, observed: int, limit: int) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.observed = observed
+        self.limit = limit
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +202,10 @@ class DiscoveryRunConfig:
     motif_stability_policy: MotifStabilityPolicy
     motif_regime_assignments: MotifRegimeAssignmentContract
     transition_uncertainty_policy: TransitionUncertaintyPolicy
+    missingness_policy: MissingnessPolicy
+    work_budget: DiscoveryWorkBudget
+    event_publication_id: str
+    event_publication_sha256: str
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -177,6 +266,27 @@ class DiscoveryRunConfig:
             raise TypeError("motif_regime_assignments must be a MotifRegimeAssignmentContract")
         if not isinstance(self.transition_uncertainty_policy, TransitionUncertaintyPolicy):
             raise TypeError("transition_uncertainty_policy must be a TransitionUncertaintyPolicy")
+        if not isinstance(self.missingness_policy, MissingnessPolicy):
+            raise TypeError("missingness_policy must be a MissingnessPolicy")
+        if not isinstance(self.work_budget, DiscoveryWorkBudget):
+            raise TypeError("work_budget must be a DiscoveryWorkBudget")
+        _require_pattern(self.event_publication_id, _EVENT_PUBLICATION_ID, "event_publication_id")
+        _require_sha256(self.event_publication_sha256, "event_publication_sha256")
+        if len(self.feature_names) > self.work_budget.maximum_pca_features:
+            raise ValueError("feature_names exceed the frozen PCA feature budget")
+        if self.pca_components > len(self.feature_names):
+            raise ValueError("pca_components cannot exceed selected feature dimensions")
+        if self.pca_components > self.work_budget.maximum_pca_features:
+            raise ValueError("pca_components exceed the frozen PCA feature budget")
+        if self.clusters > self.work_budget.maximum_clusters:
+            raise ValueError("clusters exceed the frozen work budget")
+        if len(self.seeds) > self.work_budget.maximum_seeds:
+            raise ValueError("seeds exceed the frozen work budget")
+        if self.max_iterations > self.work_budget.maximum_kmeans_iterations:
+            raise ValueError("max_iterations exceed the frozen work budget")
+        stability_fits = len(self.seeds) * 2 + 2
+        if stability_fits > self.work_budget.maximum_total_stability_fits:
+            raise ValueError("aggregate stability fits exceed the frozen work budget")
         _require_pattern(self.code_commit, _CODE_COMMIT, "code_commit")
         _require_sha256(self.lock_sha256, "lock_sha256")
         if not isinstance(self.provenance, DiscoveryProvenance):
@@ -269,13 +379,14 @@ def run_discovery(
     discovery: DiscoveryInput,
     development: DiscoveryInput,
     registry: FeatureRegistry,
-    event_ids: Sequence[str],
-    durations_seconds: Sequence[float],
+    event_bindings: Sequence[BehaviourEventBinding],
     output_root: Path,
     snapshot_directory: Path | None = None,
     snapshot_manifest: SnapshotManifest | None = None,
     feature_publication_directory: Path | None = None,
     feature_publication: DerivedPublicationManifest | None = None,
+    event_publication_directory: Path | None = None,
+    event_publication: DerivedPublicationManifest | None = None,
     normalizer_artifact: bytes | None = None,
     lockfile_bytes: bytes | None = None,
 ) -> DiscoveryRunManifest:
@@ -284,35 +395,75 @@ def run_discovery(
     if not isinstance(config, DiscoveryRunConfig):
         raise TypeError("config must be a DiscoveryRunConfig")
     _validate_run_inputs(config, discovery, development, registry, output_root)
-    _verify_runtime_code_identity(
-        code_commit=config.code_commit,
-        lockfile_bytes=lockfile_bytes,
-    )
-    normalizer = _verify_artifact_provenance(
-        config=config,
-        discovery=discovery,
-        development=development,
-        registry=registry,
-        snapshot_directory=snapshot_directory,
-        snapshot_manifest=snapshot_manifest,
-        feature_publication_directory=feature_publication_directory,
-        feature_publication=feature_publication,
-        normalizer_artifact=normalizer_artifact,
-        lockfile_bytes=lockfile_bytes,
-    )
     trial_config = _trial_config(config, discovery, development, registry)
     try:
+        _preflight_discovery_work(config, discovery, development)
+        _verify_runtime_code_identity(
+            code_commit=config.code_commit,
+            lockfile_bytes=lockfile_bytes,
+        )
+        normalizer = _verify_artifact_provenance(
+            config=config,
+            discovery=discovery,
+            development=development,
+            registry=registry,
+            snapshot_directory=snapshot_directory,
+            snapshot_manifest=snapshot_manifest,
+            feature_publication_directory=feature_publication_directory,
+            feature_publication=feature_publication,
+            event_publication_directory=event_publication_directory,
+            event_publication=event_publication,
+            normalizer_artifact=normalizer_artifact,
+            lockfile_bytes=lockfile_bytes,
+        )
         return _run_discovery_implementation(
             config=config,
             discovery=discovery,
             development=development,
             registry=registry,
-            event_ids=event_ids,
-            durations_seconds=durations_seconds,
+            event_bindings=event_bindings,
             output_root=output_root,
             normalizer=normalizer,
             feature_publication=feature_publication,
+            event_publication_directory=event_publication_directory,
+            event_publication=event_publication,
         )
+    except DiscoveryWorkBudgetViolation as error:
+        try:
+            save_experiment_result(
+                config=trial_config,
+                status=TerminalStatus.REJECTED,
+                metrics=_work_budget_rejection_metrics(config, error),
+                conclusion="Trial was rejected by the frozen discovery work budget.",
+                warnings=("frozen discovery work budget rejected execution",),
+                started_at=_required_timestamp(config.started_at, "started_at"),
+                completed_at=_required_timestamp(config.completed_at, "completed_at"),
+                root=output_root,
+            )
+        except Exception as publication_error:
+            error.add_note(
+                "terminal discovery receipt publication also failed: "
+                f"{type(publication_error).__name__}"
+            )
+        raise
+    except MissingnessPolicyViolation as error:
+        try:
+            save_experiment_result(
+                config=trial_config,
+                status=TerminalStatus.REJECTED,
+                metrics=_missingness_rejection_metrics(config, error),
+                conclusion="Trial was rejected by the frozen complete-case missingness policy.",
+                warnings=("frozen missingness policy rejected matrix admission",),
+                started_at=_required_timestamp(config.started_at, "started_at"),
+                completed_at=_required_timestamp(config.completed_at, "completed_at"),
+                root=output_root,
+            )
+        except Exception as publication_error:
+            error.add_note(
+                "terminal discovery receipt publication also failed: "
+                f"{type(publication_error).__name__}"
+            )
+        raise
     except Exception as error:
         try:
             save_experiment_result(
@@ -339,50 +490,63 @@ def _run_discovery_implementation(
     discovery: DiscoveryInput,
     development: DiscoveryInput,
     registry: FeatureRegistry,
-    event_ids: Sequence[str],
-    durations_seconds: Sequence[float],
+    event_bindings: Sequence[BehaviourEventBinding],
     output_root: Path,
     normalizer: RobustNormalizer | None,
     feature_publication: DerivedPublicationManifest | None,
+    event_publication_directory: Path | None,
+    event_publication: DerivedPublicationManifest | None,
 ) -> DiscoveryRunManifest:
     """Compute and publish one discovery bundle after the attempt boundary is established."""
 
     _validate_run_inputs(config, discovery, development, registry, output_root)
+    _preflight_discovery_work(config, discovery, development)
     stage_dir = output_root / f".{config.run_id}.staging"
     if stage_dir.exists():
         raise RuntimeError(f"stale discovery staging directory exists: {stage_dir}")
 
-    matrix_discovery = discovery
-    matrix_development = development
+    discovery_matrix = build_feature_matrix(
+        discovery,
+        registry,
+        config.feature_names,
+        config.max_rows,
+        missingness_policy=config.missingness_policy,
+    )
+    development_matrix = build_feature_matrix(
+        development,
+        registry,
+        config.feature_names,
+        config.max_rows,
+        missingness_policy=config.missingness_policy,
+    )
     if normalizer is not None:
         if feature_publication is None:
             raise RuntimeError("verified feature publication is required for normalization")
-        matrix_discovery = make_discovery_input(
-            partition=discovery.partition,
-            rows=(normalizer.transform_row(row) for row in discovery.rows),
-            registry=registry,
-            purpose="fit",
-            max_rows=config.max_rows,
-            publication_manifest=feature_publication,
-        )
-        matrix_development = make_discovery_input(
-            partition=development.partition,
-            rows=(normalizer.transform_row(row) for row in development.rows),
-            registry=registry,
-            purpose="stability",
-            max_rows=config.max_rows,
-            publication_manifest=feature_publication,
-        )
-    discovery_matrix = build_feature_matrix(
-        matrix_discovery, registry, config.feature_names, config.max_rows
+        discovery_matrix = normalize_feature_matrix(discovery_matrix, normalizer)
+        development_matrix = normalize_feature_matrix(development_matrix, normalizer)
+    selected_discovery = _selected_rows(discovery, discovery_matrix)
+    selected_development = _selected_rows(development, development_matrix)
+    bindings, event_bindings_sha256 = validate_behaviour_event_bindings(
+        event_bindings, discovery_matrix.row_ids
     )
-    development_matrix = build_feature_matrix(
-        matrix_development, registry, config.feature_names, config.max_rows
+    if not isinstance(event_publication_directory, Path):
+        raise TypeError("event publication directory is required for binding verification")
+    if not isinstance(event_publication, DerivedPublicationManifest):
+        raise TypeError("event publication manifest is required for binding verification")
+    verify_published_event_bindings(
+        event_publication_directory,
+        event_publication,
+        (
+            PublishedEventBinding(
+                row_id=binding.row_id,
+                event_id=binding.event_id,
+                duration_seconds=binding.duration_seconds,
+                event_publication_sha256=binding.event_publication_sha256,
+            )
+            for binding in bindings
+        ),
+        expected_row_ids=discovery_matrix.row_ids,
     )
-    selected_discovery = _selected_rows(matrix_discovery, discovery_matrix)
-    selected_development = _selected_rows(matrix_development, development_matrix)
-    events = _validated_strings(event_ids, len(discovery_matrix.values), "event_ids")
-    durations = _validated_durations(durations_seconds, len(discovery_matrix.values))
     projection = fit_pca(discovery_matrix, config.pca_components)
     clustering = fit_projected_kmeans(
         discovery_matrix,
@@ -406,6 +570,7 @@ def _run_discovery_implementation(
         subsample_fraction=_SUBSAMPLE_FRACTION,
         policy=config.stability_policy,
         adjacent_period_policy=config.adjacent_period_stability_policy,
+        max_iterations=config.max_iterations,
     )
     behaviours = freeze_behaviours(
         run_id=config.run_id,
@@ -413,8 +578,7 @@ def _run_discovery_implementation(
         projection=projection,
         clustering=clustering,
         stability=stability,
-        event_ids=events,
-        durations_seconds=durations,
+        event_bindings=bindings,
         symbols=tuple(row.symbol for row in selected_discovery),
         description="Neutral recurring outcome-blind feature configurations.",
     )
@@ -448,18 +612,27 @@ def _run_discovery_implementation(
         "registry_sha256": registry.sha256,
         "discovery_input_sha256": _input_sha256(discovery),
         "development_input_sha256": _input_sha256(development),
-        "event_ids": events,
-        "durations_seconds": durations,
+        "event_bindings_sha256": event_bindings_sha256,
+        "discovery_matrix_sha256": discovery_matrix.sha256,
+        "development_matrix_sha256": development_matrix.sha256,
     }
     identity_sha256 = _sha256(_canonical_json(identity_payload))
+    missingness_payload = {
+        "schema_version": "discovery-missingness-evidence-v1",
+        "policy": _jsonable(config.missingness_policy),
+        "discovery": _jsonable(discovery_matrix.missingness_evidence),
+        "development": _jsonable(development_matrix.missingness_evidence),
+    }
     metrics_payload = {
         "status": status,
         "discovery_rows": len(discovery_matrix.values),
         "development_rows": len(development_matrix.values),
+        "missingness": missingness_payload,
         "dropped_null_rows": {
             "discovery": discovery_matrix.dropped_null_rows,
             "development": development_matrix.dropped_null_rows,
         },
+        "work_budget": _work_preflight_evidence(config, discovery, development),
         "behaviours": len(behaviours),
         "motif_candidates": len(motif_report.candidates),
         "motifs_published": motif_report.published_count,
@@ -477,6 +650,7 @@ def _run_discovery_implementation(
         "behaviours.json": _json_file(behaviours),
         "motifs.json": _json_file(motif_report),
         "transitions.json": _json_file(transition_matrix),
+        "missingness.json": _json_file(missingness_payload),
         "metrics.json": _json_file(metrics_payload),
         "summary.md": (
             f"# {config.run_id}\n\nStatus: {status}\n\n"
@@ -486,12 +660,17 @@ def _run_discovery_implementation(
             f"published: {motif_report.published_count}; "
             f"rejected and retained: {motif_report.rejected_count}.\n"
             "Only motifs accepted by the frozen motif policy support recurring evidence.\n"
+            "Complete-case selection used no imputation: "
+            f"discovery selected {len(discovery_matrix.values)} of {len(discovery.rows)} rows; "
+            f"development selected {len(development_matrix.values)} of "
+            f"{len(development.rows)} rows. See missingness.json for bounded evidence.\n"
             f"Conditional recurrence estimates: {len(transition_estimates)}; "
             f"rejected: {rejected_transition_estimates}; descriptive-only: "
             f"{descriptive_only_transition_estimates}. These remain descriptive and "
             "carry no inferential claim.\n"
         ).encode("utf-8"),
     }
+    _preflight_serialized_bundle(payloads, config.work_budget)
     artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
     config_sha256 = _sha256(_canonical_json(config_payload))
     manifest_without_hash = {
@@ -516,23 +695,35 @@ def _run_discovery_implementation(
     )
     manifest_bytes = _json_file(manifest.to_dict())
     payloads["manifest.json"] = manifest_bytes
-    save_experiment_result(
-        config=_trial_config(config, discovery, development, registry),
-        status=(TerminalStatus.COMPLETED if status == "completed" else TerminalStatus.REJECTED),
-        metrics=metrics_payload,
-        conclusion=(
-            "Outcome-blind discovery completed; final holdout was not accessed."
-            if status == "completed"
-            else "Outcome-blind detector was rejected by the frozen stability policy."
-        ),
-        warnings=(
-            () if status == "completed" else ("frozen stability policy rejected the detector",)
-        ),
-        started_at=_required_timestamp(config.started_at, "started_at"),
-        completed_at=_required_timestamp(config.completed_at, "completed_at"),
-        artifacts={name: content for name, content in payloads.items() if name != "metrics.json"},
-        root=output_root,
-    )
+    try:
+        save_experiment_result(
+            config=_trial_config(config, discovery, development, registry),
+            status=(TerminalStatus.COMPLETED if status == "completed" else TerminalStatus.REJECTED),
+            metrics=metrics_payload,
+            conclusion=(
+                "Outcome-blind discovery completed; final holdout was not accessed."
+                if status == "completed"
+                else "Outcome-blind detector was rejected by the frozen stability policy."
+            ),
+            warnings=(
+                () if status == "completed" else ("frozen stability policy rejected the detector",)
+            ),
+            started_at=_required_timestamp(config.started_at, "started_at"),
+            completed_at=_required_timestamp(config.completed_at, "completed_at"),
+            artifacts={
+                name: content for name, content in payloads.items() if name != "metrics.json"
+            },
+            root=output_root,
+            maximum_total_bytes=config.work_budget.maximum_serialized_evidence_bytes,
+            maximum_entries=config.work_budget.maximum_bundle_entries,
+        )
+    except TrialArtifactBudgetExceeded as error:
+        raise DiscoveryWorkBudgetViolation(
+            str(error),
+            stage="publication_preflight",
+            observed=error.observed,
+            limit=error.limit,
+        ) from error
     return manifest
 
 
@@ -683,6 +874,8 @@ def _verify_artifact_provenance(
     snapshot_manifest: SnapshotManifest | None,
     feature_publication_directory: Path | None,
     feature_publication: DerivedPublicationManifest | None,
+    event_publication_directory: Path | None,
+    event_publication: DerivedPublicationManifest | None,
     normalizer_artifact: bytes | None,
     lockfile_bytes: bytes | None,
 ) -> RobustNormalizer:
@@ -696,12 +889,17 @@ def _verify_artifact_provenance(
         raise TypeError("feature publication directory is required for provenance verification")
     if not isinstance(feature_publication, DerivedPublicationManifest):
         raise TypeError("feature publication manifest is required for provenance verification")
+    if not isinstance(event_publication_directory, Path):
+        raise TypeError("event publication directory is required for provenance verification")
+    if not isinstance(event_publication, DerivedPublicationManifest):
+        raise TypeError("event publication manifest is required for provenance verification")
     if not isinstance(normalizer_artifact, bytes):
         raise TypeError("normalizer artifact bytes are required for provenance verification")
     if not isinstance(lockfile_bytes, bytes):
         raise TypeError("lockfile bytes are required for provenance verification")
     require_regular_directory(snapshot_directory)
     require_regular_directory(feature_publication_directory)
+    require_regular_directory(event_publication_directory)
     _require_manifest_bytes(
         snapshot_directory / "manifest.json",
         snapshot_manifest.to_json().encode("utf-8"),
@@ -711,6 +909,11 @@ def _verify_artifact_provenance(
         feature_publication_directory / "manifest.json",
         feature_publication.to_json().encode("utf-8"),
         "feature publication",
+    )
+    _require_manifest_bytes(
+        event_publication_directory / "manifest.json",
+        event_publication.to_json().encode("utf-8"),
+        "event publication",
     )
     verify_snapshot(snapshot_directory, snapshot_manifest)
     discovery_records = verify_published_feature_rows(
@@ -729,6 +932,35 @@ def _verify_artifact_provenance(
         development_records != development.partition_records
     ):
         raise ValueError("verified feature publication partition hashes changed")
+    verify_derived_publication(event_publication_directory, event_publication)
+    if event_publication.publication_kind != "events":
+        raise ValueError("discovery requires an event publication")
+    if event_publication.publication_sha256 != config.event_publication_sha256:
+        raise ValueError("event publication identity does not match discovery config")
+    if event_publication.identity != feature_publication.identity:
+        raise ValueError("event publication identity does not match source feature publication")
+    if event_publication.source_feature_publication_sha256 != (
+        feature_publication.publication_sha256
+    ):
+        raise ValueError("event publication is not linked to the source feature publication")
+    if event_publication.source_feature_registry_sha256 != registry.sha256:
+        raise ValueError("event publication source registry does not match discovery registry")
+    if event_publication.source_feature_dependency_contract_sha256 != (
+        feature_publication.feature_dependency_contract_sha256
+    ):
+        raise ValueError("event publication source dependency contract mismatch")
+    if event_publication.source_leakage_audit_approval_sha256 != (
+        feature_publication.identity.leakage_audit_approval_sha256
+    ):
+        raise ValueError("event publication source leakage approval mismatch")
+    if event_publication.source_leakage_audit_receipt_sha256 != (
+        feature_publication.leakage_audit_receipt_sha256
+    ):
+        raise ValueError("event publication source leakage receipt mismatch")
+    if event_publication.source_leakage_audit_artifact_sha256 != (
+        feature_publication.leakage_audit_artifact_sha256
+    ):
+        raise ValueError("event publication source leakage artifact mismatch")
     verified = freeze_discovery_provenance(
         snapshot_manifest=snapshot_manifest,
         feature_publication=feature_publication,
@@ -989,6 +1221,10 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
         "motif_stability_policy": _jsonable(config.motif_stability_policy),
         "motif_regime_assignments": _jsonable(config.motif_regime_assignments),
         "transition_uncertainty_policy": _jsonable(config.transition_uncertainty_policy),
+        "missingness_policy": _jsonable(config.missingness_policy),
+        "work_budget": _work_budget_payload(config.work_budget),
+        "event_publication_id": config.event_publication_id,
+        "event_publication_sha256": config.event_publication_sha256,
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
@@ -1010,6 +1246,193 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
         }
     )
     return payload
+
+
+def _missingness_rejection_metrics(
+    config: DiscoveryRunConfig,
+    error: MissingnessPolicyViolation,
+) -> dict[str, object]:
+    evidence = error.evidence
+    selected_rows = 0 if evidence is None else evidence.selected_row_count
+    excluded_rows = 0 if evidence is None else evidence.excluded_row_count
+    partition_role = None if evidence is None else evidence.partition_role.value
+    return {
+        "status": "rejected_missingness",
+        "discovery_rows": selected_rows if partition_role == PartitionRole.DISCOVERY.value else 0,
+        "development_rows": (
+            selected_rows if partition_role == PartitionRole.DEVELOPMENT.value else 0
+        ),
+        "dropped_null_rows": {
+            "partition_role": partition_role,
+            "count": excluded_rows,
+        },
+        "missingness": {
+            "schema_version": "discovery-missingness-rejection-v1",
+            "evidence": (
+                _jsonable(evidence)
+                if evidence is not None
+                else {"evidence_group_limit_exceeded": True}
+            ),
+        },
+        "work_budget": {
+            "budget_sha256": config.work_budget.sha256,
+            "stage": "matrix_admission",
+        },
+        "behaviours": 0,
+        "motif_candidates": 0,
+        "motifs_published": 0,
+        "motifs_rejected": 0,
+        "transitions": 0,
+        "conditional_recurrence_estimates": 0,
+        "conditional_recurrence_rejected": 0,
+        "conditional_recurrence_descriptive_only": 0,
+    }
+
+
+def _work_budget_payload(
+    budget: DiscoveryWorkBudget,
+    *,
+    include_sha256: bool = True,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "discovery-work-budget-v1",
+        "budget_id": budget.budget_id,
+        "maximum_materialized_rows": budget.maximum_materialized_rows,
+        "maximum_feature_cells": budget.maximum_feature_cells,
+        "maximum_pca_rows": budget.maximum_pca_rows,
+        "maximum_pca_features": budget.maximum_pca_features,
+        "maximum_pca_cells": budget.maximum_pca_cells,
+        "maximum_clusters": budget.maximum_clusters,
+        "maximum_seeds": budget.maximum_seeds,
+        "maximum_kmeans_iterations": budget.maximum_kmeans_iterations,
+        "maximum_total_stability_fits": budget.maximum_total_stability_fits,
+        "maximum_serialized_evidence_bytes": budget.maximum_serialized_evidence_bytes,
+        "maximum_bundle_entries": budget.maximum_bundle_entries,
+    }
+    if include_sha256:
+        payload["sha256"] = budget.sha256
+    return payload
+
+
+def _preflight_discovery_work(
+    config: DiscoveryRunConfig,
+    discovery: DiscoveryInput,
+    development: DiscoveryInput,
+) -> None:
+    budget = config.work_budget
+    row_counts = (len(discovery.rows), len(development.rows))
+    total_rows = sum(row_counts)
+    feature_count = len(config.feature_names)
+    checks = (
+        (
+            total_rows,
+            budget.maximum_materialized_rows,
+            "materialized rows exceed the frozen discovery work budget",
+        ),
+        (
+            len(_json_file(_config_payload(config))),
+            budget.maximum_serialized_evidence_bytes,
+            "serialized configuration exceeds the frozen discovery work budget",
+        ),
+        (
+            _DISCOVERY_BUNDLE_ENTRY_COUNT,
+            budget.maximum_bundle_entries,
+            "bundle entries exceed the frozen discovery work budget",
+        ),
+        (
+            total_rows * feature_count,
+            budget.maximum_feature_cells,
+            "feature cells exceed the frozen discovery work budget",
+        ),
+        (
+            max(row_counts),
+            budget.maximum_pca_rows,
+            "PCA rows exceed the frozen discovery work budget",
+        ),
+        (
+            max(row_counts) * feature_count,
+            budget.maximum_pca_cells,
+            "PCA cells exceed the frozen discovery work budget",
+        ),
+    )
+    for observed, limit, message in checks:
+        if observed > limit:
+            raise DiscoveryWorkBudgetViolation(
+                message,
+                stage="run_preflight",
+                observed=observed,
+                limit=limit,
+            )
+
+
+def _work_preflight_evidence(
+    config: DiscoveryRunConfig,
+    discovery: DiscoveryInput,
+    development: DiscoveryInput,
+) -> dict[str, object]:
+    feature_count = len(config.feature_names)
+    row_counts = (len(discovery.rows), len(development.rows))
+    return {
+        "budget_sha256": config.work_budget.sha256,
+        "materialized_rows": sum(row_counts),
+        "feature_cells": sum(row_counts) * feature_count,
+        "maximum_partition_pca_rows": max(row_counts),
+        "pca_features": feature_count,
+        "maximum_partition_pca_cells": max(row_counts) * feature_count,
+        "clusters": config.clusters,
+        "seeds": len(config.seeds),
+        "kmeans_iterations": config.max_iterations,
+        "total_stability_fits": len(config.seeds) * 2 + 2,
+    }
+
+
+def _preflight_serialized_bundle(
+    payloads: Mapping[str, bytes],
+    budget: DiscoveryWorkBudget,
+) -> None:
+    evidence_bytes = sum(len(content) for content in payloads.values())
+    if evidence_bytes > budget.maximum_serialized_evidence_bytes:
+        raise DiscoveryWorkBudgetViolation(
+            "serialized evidence exceeds the frozen discovery work budget",
+            stage="publication_preflight",
+            observed=evidence_bytes,
+            limit=budget.maximum_serialized_evidence_bytes,
+        )
+    bundle_entries = len(payloads) + 2  # manifest and terminal receipt
+    if bundle_entries > budget.maximum_bundle_entries:
+        raise DiscoveryWorkBudgetViolation(
+            "bundle entries exceed the frozen discovery work budget",
+            stage="publication_preflight",
+            observed=bundle_entries,
+            limit=budget.maximum_bundle_entries,
+        )
+
+
+def _work_budget_rejection_metrics(
+    config: DiscoveryRunConfig,
+    error: DiscoveryWorkBudgetViolation,
+) -> dict[str, object]:
+    return {
+        "status": "rejected_work_budget",
+        "discovery_rows": 0,
+        "development_rows": 0,
+        "dropped_null_rows": {},
+        "missingness": {},
+        "work_budget": {
+            "budget_sha256": config.work_budget.sha256,
+            "stage": error.stage,
+            "observed": error.observed,
+            "limit": error.limit,
+        },
+        "behaviours": 0,
+        "motif_candidates": 0,
+        "motifs_published": 0,
+        "motifs_rejected": 0,
+        "transitions": 0,
+        "conditional_recurrence_estimates": 0,
+        "conditional_recurrence_rejected": 0,
+        "conditional_recurrence_descriptive_only": 0,
+    }
 
 
 def _trial_config(
@@ -1077,6 +1500,8 @@ def _trial_config(
             "discovery_rows": "integer",
             "development_rows": "integer",
             "dropped_null_rows": "object",
+            "missingness": "object",
+            "work_budget": "object",
             "motif_candidates": "integer",
             "motifs_published": "integer",
             "motifs_rejected": "integer",
@@ -1181,33 +1606,6 @@ def _publish_bundle(stage_dir: Path, final_dir: Path, payloads: Mapping[str, byt
         if stage_dir.exists():
             shutil.rmtree(stage_dir)
         raise
-
-
-def _validated_strings(values: Sequence[str], expected: int, label: str) -> tuple[str, ...]:
-    if isinstance(values, (str, bytes)) or len(values) != expected:
-        raise ValueError(f"{label} length must match discovery matrix rows")
-    result = tuple(values)
-    if any(not isinstance(value, str) or not value.strip() for value in result):
-        raise ValueError(f"{label} must contain non-empty strings")
-    if len(set(result)) != len(result):
-        raise ValueError(f"{label} must be unique")
-    return result
-
-
-def _validated_durations(values: Sequence[float], expected: int) -> tuple[float, ...]:
-    if isinstance(values, (str, bytes)) or len(values) != expected:
-        raise ValueError("durations_seconds length must match discovery matrix rows")
-    result: list[float] = []
-    for value in values:
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (float, int))
-            or not math.isfinite(float(value))
-            or value < 0.0
-        ):
-            raise ValueError("durations_seconds must be finite and non-negative")
-        result.append(float(value))
-    return tuple(result)
 
 
 def _row_id(row: FeatureRow) -> str:

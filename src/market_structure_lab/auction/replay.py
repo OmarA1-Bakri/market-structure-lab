@@ -78,6 +78,7 @@ def snapshot_to_dict(snapshot: AuctionSnapshot) -> dict[str, Any]:
             "value_area_high_index": profile.value_area_high_index,
             "value_area_low_index": profile.value_area_low_index,
             "vwap": profile.vwap,
+            "work_budget_id": profile.work_budget_id,
         },
         "profile_definition_id": snapshot.profile_definition_id,
         "segment_id": snapshot.segment_id,

@@ -83,6 +83,26 @@ def test_earlier_snapshot_does_not_change_after_later_updates() -> None:
     assert earlier.total_volume == 10.0
 
 
+def test_rollback_attempts_every_undo_and_always_detaches_transaction() -> None:
+    accumulator = ProfileAccumulator(
+        binning=FixedStepBins(step=1.0), allocation=UniformAllocation()
+    )
+    transaction = accumulator.begin_transaction()
+    completed: list[str] = []
+    transaction.record(lambda: completed.append("completed"))
+
+    def fail() -> None:
+        raise RuntimeError("undo fault")
+
+    transaction.record(fail)
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        transaction.rollback()
+
+    assert completed == ["completed"]
+    assert accumulator._transaction is None
+
+
 @pytest.mark.parametrize("fraction", [0.0, -0.1, 1.1, float("nan")])
 def test_accumulator_rejects_invalid_value_area_fraction_at_construction(
     fraction: float,

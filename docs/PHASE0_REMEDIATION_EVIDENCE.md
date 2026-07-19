@@ -141,8 +141,9 @@ the checksum-verified promotion receipt and reports:
 - reconciliation provenance established, while snapshot eligibility remains blocked until a new
   immutable research snapshot is explicitly frozen;
 - zero real trials and accuracy `not_estimable`; and
-- Phase 0 plus deterministic Phase 4 hardening complete, awaiting explicit approval before Phase C
-  real outcome-blind discovery.
+- Phase 0 plus original deterministic Phase 4 Task 12 hardening complete; Task 13 residual-risk
+  verification is authorized, while Task 14 real outcome-blind discovery awaits the final Task 13
+  gate and separate approval.
 
 The dashboard does not convert software completeness into market evidence or an edge claim.
 
@@ -202,8 +203,8 @@ coverage rows, and left the receipt byte-identical.
 
 Phase 0 is closed at the promoted reconciliation boundary. Deterministic Phase 4 hardening is also
 complete through its original Task 12 remote checkpoint. The next permitted non-empirical
-operation is the separately authorized independent residual-risk audit; any real outcome-blind
-discovery or market experiment remains separately approval-gated.
+operation is the separately authorized Task 13 independent residual-risk audit; Task 14 real
+outcome-blind discovery and every market experiment remain separately approval-gated.
 
 Independent of promotion, `841,509` minutes remain explicitly unavailable, nine venue-conflict
 symbols remain quarantined by the earlier compatibility review, and there are still zero real

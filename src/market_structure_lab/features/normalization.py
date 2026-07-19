@@ -220,26 +220,6 @@ class RobustNormalizer:
         if count != self.fit_row_count or digest.hexdigest() != self.training_rows_sha256:
             raise ValueError("normalizer training row identity mismatch")
 
-    def transform_row(self, row: FeatureRow) -> FeatureRow:
-        """Return the same stable row identity with selected numeric values normalized."""
-
-        values = dict(row.values)
-        values.update(self.transform_values(row))
-        return FeatureRow(
-            timestamp=row.timestamp,
-            information_cutoff=row.information_cutoff,
-            symbol=row.symbol,
-            timeframe=row.timeframe,
-            segment_id=row.segment_id,
-            dataset_version=row.dataset_version,
-            config_version=row.config_version,
-            profile_version=row.profile_version,
-            window_policy_id=row.window_policy_id,
-            feature_set_id=row.feature_set_id,
-            registry_id=row.registry_id,
-            values=values,
-        )
-
     @property
     def artifact_sha256(self) -> str:
         return hashlib.sha256(_canonical_json(self._payload_without_hash())).hexdigest()

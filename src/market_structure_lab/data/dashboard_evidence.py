@@ -23,16 +23,17 @@ from market_structure_lab.features import builtin_feature_registry
 from market_structure_lab.experiments import ExperimentMode, TerminalStatus, read_trial_ledger
 
 LAB_EVIDENCE_SCHEMA_VERSION = 1
-_PHASE4_FIXTURE_SCHEMA_VERSION = "phase4-discovery-fixture-v3"
+MAX_LAB_EVIDENCE_BYTES = 8 * 1024 * 1024
+_PHASE4_FIXTURE_SCHEMA_VERSION = "phase4-discovery-fixture-v4"
 _PHASE4_FIXTURE_PRODUCER = {
     "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
-    "builder_version": "phase4-fixture-producer-v1",
-    "input_schema": "phase4-fixture-source-v1",
+    "builder_version": "phase4-fixture-producer-v2",
+    "input_schema": "phase4-fixture-source-v2",
 }
 _PHASE4_ROW_KEYS = {"timestamp", "symbol", "segment_id", "source"}
 _PHASE4_SOURCE_KEYS = {
     "auction_location_ratio",
-    "previous_volume",
+    "baseline_volume",
     "current_volume",
     "volume_scale",
 }
@@ -178,16 +179,14 @@ def generate_lab_evidence(
             ),
         },
         "phase_gate": {
-            "active_phase": "Phase 0 + Phase 4 deterministic hardening: complete"
+            "active_phase": "Phase B Task 13 deterministic hardening: complete"
             if history_promoted
             else "Phase 0: trustworthy foundation",
             "status": (
-                "complete_awaiting_phase_approval"
-                if history_promoted
-                else "remediation_in_progress"
+                "complete_task14_authorized" if history_promoted else "remediation_in_progress"
             ),
             "next_required_evidence": (
-                "obtain explicit approval before Phase C real outcome-blind discovery"
+                "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint"
                 if history_promoted
                 else "obtain explicit promotion approval and publish an immutable promotion receipt"
                 if history_complete
@@ -205,9 +204,12 @@ def write_lab_evidence(
 ) -> dict[str, Any]:
     """Generate and atomically write the public dashboard evidence contract."""
     evidence = generate_lab_evidence(repository_root, generated_at=generated_at)
+    content = (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if len(content) > MAX_LAB_EVIDENCE_BYTES:
+        raise ValueError("dashboard evidence exceeds the serialized byte budget")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
-    temporary.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.write_bytes(content)
     temporary.replace(output_path)
     return evidence
 
@@ -314,6 +316,7 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
         "discovery_rows",
         "development_rows",
         "event_ids",
+        "event_publication_sha256",
         "durations_seconds",
         "motif_regime_assignments",
         "runs",
@@ -426,6 +429,7 @@ def _fixture_run(value: object, *, expected_status: str) -> dict[str, Any]:
         "clustering.json",
         "config.json",
         "metrics.json",
+        "missingness.json",
         "motifs.json",
         "projection.json",
         "stability.json",
@@ -476,15 +480,15 @@ def _validate_phase4_registry(value: object) -> str:
             "observable_cutoff_rule": "at_information_cutoff",
             "normalization_requirement": "not_required",
         },
-        "volume_change": {
+        "volume_deviation_from_baseline": {
             "value_kind": "float",
             "source_fields": [
+                "fixture.baseline_volume",
                 "fixture.current_volume",
-                "fixture.previous_volume",
                 "fixture.volume_scale",
             ],
-            "trailing_window": "trailing_2_observations",
-            "observable_cutoff_rule": "trailing_through_information_cutoff",
+            "trailing_window": "current_observation",
+            "observable_cutoff_rule": "at_information_cutoff",
             "normalization_requirement": "not_required",
         },
     }
@@ -523,7 +527,7 @@ def _validate_phase4_source_rows(value: object, *, label: str) -> None:
                 for item in source.values()
             )
             or not math.isfinite(float(source["auction_location_ratio"]))
-            or not math.isfinite(float(source["previous_volume"]))
+            or not math.isfinite(float(source["baseline_volume"]))
             or not math.isfinite(float(source["current_volume"]))
             or not math.isfinite(float(source["volume_scale"]))
             or float(source["volume_scale"]) <= 0
@@ -593,4 +597,9 @@ def _canonical_publication_timestamp(value: str) -> str:
     return canonical
 
 
-__all__ = ["LAB_EVIDENCE_SCHEMA_VERSION", "generate_lab_evidence", "write_lab_evidence"]
+__all__ = [
+    "LAB_EVIDENCE_SCHEMA_VERSION",
+    "MAX_LAB_EVIDENCE_BYTES",
+    "generate_lab_evidence",
+    "write_lab_evidence",
+]

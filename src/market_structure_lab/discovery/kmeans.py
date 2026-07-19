@@ -13,6 +13,8 @@ from market_structure_lab.discovery.pca import PCAProjection, pca_projection_sha
 _MAX_ROWS = 1_000_000
 _MAX_FEATURES = 10_000
 _MAX_CELLS = 10_000_000
+_MAX_CLUSTERS = 1_000
+_MAX_ITERATIONS = 100_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,8 @@ def fit_kmeans(
         raise ValueError("clusters must be a positive integer")
     if clusters > len(rows):
         raise ValueError("clusters cannot exceed the number of rows")
+    if clusters > _MAX_CLUSTERS:
+        raise ValueError("clusters exceed the safety bound")
     if len(set(rows)) < clusters:
         raise ValueError("clusters cannot exceed the number of distinct rows")
     if isinstance(seed, bool) or not isinstance(seed, int):
@@ -54,6 +58,8 @@ def fit_kmeans(
         or max_iterations < 1
     ):
         raise ValueError("max_iterations must be a positive integer")
+    if max_iterations > _MAX_ITERATIONS:
+        raise ValueError("max_iterations exceeds the iteration safety bound")
     if isinstance(tolerance, bool) or not isinstance(tolerance, (float, int)):
         raise TypeError("tolerance must be a finite non-negative number")
     tolerance_value = float(tolerance)

@@ -212,8 +212,11 @@ Do not publish a single “accuracy” percentage for the laboratory. Publish th
 > **Synthetic Phase 4 hardening verified; source data conditionally viable; full-history reconciliation promoted and receipt-bound; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
 
 The explicit RR-000008 promotion approval has been consumed, Phase 0 is closed, and deterministic
-Phase 4 software hardening is complete. This review does not authorize a real discovery run or
-Phase 5 validation. Phase C and all later empirical work remain separately approval-gated.
+Phase 4 software hardening is complete through the original Task 12 checkpoint. The authorized
+Task 13 residual-risk audit may challenge software evidence but does not itself authorize a real
+discovery run or Phase 5 validation. The latest instruction authorizes Phase C Task 14 only after
+Task 13 is committed, pushed, and verified against the remote branch; later empirical work remains
+sequentially gated.
 
 ## Terse review findings
 

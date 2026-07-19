@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_FLOOR, localcontext
 from math import isfinite, nextafter, ulp
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 
 @runtime_checkable
 class BinDefinition(Protocol):
-    """Public contract for deterministic integer price bins."""
+    """Caller-owned bins with rollback and an immutable historical definition."""
 
     @property
     def version(self) -> str: ...
@@ -21,6 +21,28 @@ class BinDefinition(Protocol):
     def bin_index(self, price: float) -> int: ...
 
     def price_for_index(self, index: int) -> float: ...
+
+    def transaction_checkpoint(self) -> object: ...
+
+    def restore_transaction(self, checkpoint: object) -> None: ...
+
+    def snapshot_definition(self) -> BinDefinition: ...
+
+
+class _StatelessBinTransaction:
+    """No-op transaction contract for immutable built-in bin definitions."""
+
+    def transaction_checkpoint(self) -> None:
+        return None
+
+    def restore_transaction(self, checkpoint: object) -> None:
+        if checkpoint is not None:
+            raise ValueError("stateless bin checkpoint must be None")
+
+    def snapshot_definition(self) -> BinDefinition:
+        """Return this immutable built-in definition for historical snapshots."""
+
+        return cast(BinDefinition, self)
 
 
 def _positive_finite(value: float, *, name: str) -> None:
@@ -53,7 +75,7 @@ def _decimal_lower_boundary_float(value: Decimal) -> float:
 
 
 @dataclass(frozen=True)
-class FixedStepBins:
+class FixedStepBins(_StatelessBinTransaction):
     """Linear bins anchored at ``origin`` with deterministic decimal flooring."""
 
     step: float
@@ -90,7 +112,7 @@ class FixedStepBins:
 
 
 @dataclass(frozen=True)
-class TickSizeBins:
+class TickSizeBins(_StatelessBinTransaction):
     """Exchange-tick bin definition with explicit provenance."""
 
     tick_size: float
@@ -128,7 +150,7 @@ class TickSizeBins:
 
 
 @dataclass(frozen=True)
-class LogPriceBins:
+class LogPriceBins(_StatelessBinTransaction):
     """Constant-percentage bins represented by their lower price boundary."""
 
     percentage: float
@@ -170,7 +192,7 @@ class LogPriceBins:
 
 
 @dataclass(frozen=True)
-class TargetCountBins:
+class TargetCountBins(_StatelessBinTransaction):
     """Linear bins whose declared low/high bounds map to the first/last index."""
 
     low: float

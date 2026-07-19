@@ -220,12 +220,12 @@ if (
   typeof replay.claim !== "string" ||
   replay.verification_receipt_available !== false ||
   !sha(replay.fixture_sha256) ||
-  replay.fixture_schema_version !== "phase4-discovery-fixture-v3" ||
+  replay.fixture_schema_version !== "phase4-discovery-fixture-v4" ||
   !exactKeys(fixtureProducer, ["builder_id", "builder_version", "input_schema"]) ||
   fixtureProducer.builder_id !==
     "phase4_fixture_producer.Phase4FixtureFeatureProducer" ||
-  fixtureProducer.builder_version !== "phase4-fixture-producer-v1" ||
-  fixtureProducer.input_schema !== "phase4-fixture-source-v1" ||
+  fixtureProducer.builder_version !== "phase4-fixture-producer-v2" ||
+  fixtureProducer.input_schema !== "phase4-fixture-source-v2" ||
   !sha(replay.fixture_registry_sha256) ||
   !sha(replay.interpretation_input_sha256) ||
   !sha(replay.interpretation_response_sha256) ||
@@ -281,6 +281,7 @@ for (const [key, status] of [
       "clustering.json",
       "config.json",
       "metrics.json",
+      "missingness.json",
       "motifs.json",
       "projection.json",
       "stability.json",
@@ -362,11 +363,11 @@ if (
   !(
     (phase.status === "remediation_in_progress" &&
       phase.active_phase === "Phase 0: trustworthy foundation") ||
-    (phase.status === "complete_awaiting_phase_approval" &&
+    (phase.status === "complete_task14_authorized" &&
       phase.active_phase ===
-        "Phase 0 + Phase 4 deterministic hardening: complete" &&
+        "Phase B Task 13 deterministic hardening: complete" &&
       phase.next_required_evidence ===
-        "obtain explicit approval before Phase C real outcome-blind discovery")
+        "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint")
   ) ||
   typeof phase.next_required_evidence !== "string" ||
   phase.next_required_evidence.length === 0

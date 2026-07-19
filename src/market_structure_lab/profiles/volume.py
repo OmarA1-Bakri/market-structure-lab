@@ -8,9 +8,18 @@ from dataclasses import dataclass
 from math import fsum, isfinite
 from types import MappingProxyType
 
-from market_structure_lab.profiles.allocation import BinContribution, UniformAllocation
+from market_structure_lab.profiles.allocation import (
+    BinContribution,
+    UniformAllocation,
+    touched_bin_count,
+)
 from market_structure_lab.profiles.binning import BinDefinition, FixedStepBins
-from market_structure_lab.profiles.models import Candle, ProfileSnapshot
+from market_structure_lab.profiles.models import (
+    DEFAULT_PROFILE_WORK_BUDGET,
+    Candle,
+    ProfileSnapshot,
+    ProfileWorkBudget,
+)
 
 
 def point_of_control_index(bin_volumes: Mapping[int, float]) -> int:
@@ -54,18 +63,23 @@ def calculate_profile(
     binning: BinDefinition,
     allocation_id: str,
     value_area_fraction: float = 0.70,
+    work_budget: ProfileWorkBudget = DEFAULT_PROFILE_WORK_BUDGET,
 ) -> ProfileSnapshot:
     """Calculate one immutable profile from additive cached contributions."""
     if not 0 < value_area_fraction <= 1 or not isfinite(value_area_fraction):
         raise ValueError("value_area_fraction must be greater than 0 and less than or equal to 1")
     if not allocation_id:
         raise ValueError("allocation_id must not be empty")
+    if not isinstance(work_budget, ProfileWorkBudget):
+        raise TypeError("work_budget must be a ProfileWorkBudget")
 
     materialized = tuple(contributions)
     grouped: dict[int, list[float]] = {}
     for contribution in materialized:
         for index, volume in contribution.bin_volumes.items():
             if volume > 0:
+                if index not in grouped and len(grouped) >= work_budget.maximum_active_profile_bins:
+                    raise ValueError("active profile-bin budget exceeded during calculation")
                 grouped.setdefault(index, []).append(volume)
     bin_volumes = {index: fsum(parts) for index, parts in sorted(grouped.items())}
     total_volume = fsum(contribution.total_volume for contribution in materialized)
@@ -82,6 +96,7 @@ def calculate_profile(
             binning=binning,
             allocation_id=allocation_id,
             value_area_fraction=value_area_fraction,
+            work_budget=work_budget,
         )
 
     poc = point_of_control_index(bin_volumes)
@@ -100,6 +115,7 @@ def calculate_profile(
         binning=binning,
         allocation_id=allocation_id,
         value_area_fraction=value_area_fraction,
+        work_budget=work_budget,
     )
 
 
@@ -124,18 +140,30 @@ def build_volume_profile(
     *,
     tick_size: float,
     value_area_fraction: float = 0.70,
+    work_budget: ProfileWorkBudget = DEFAULT_PROFILE_WORK_BUDGET,
 ) -> VolumeProfile:
     """Build the original uniform OHLCV profile through the integer-bin engine."""
     if not isfinite(tick_size) or tick_size <= 0:
         raise ValueError("tick_size must be a positive finite number")
+    if not isinstance(work_budget, ProfileWorkBudget):
+        raise TypeError("work_budget must be a ProfileWorkBudget")
     binning = FixedStepBins(step=tick_size)
     allocation = UniformAllocation()
-    contributions = [allocation.allocate(candle, binning) for candle in candles]
+    contributions = []
+    for candle in candles:
+        count = touched_bin_count(candle, binning)
+        if count > work_budget.maximum_touched_bins_per_candle:
+            raise ValueError(
+                "candle touched-bin budget exceeded: "
+                f"{count} > {work_budget.maximum_touched_bins_per_candle}"
+            )
+        contributions.append(allocation.allocate(candle, binning))
     snapshot = calculate_profile(
         contributions,
         binning=binning,
         allocation_id=allocation.model_id,
         value_area_fraction=value_area_fraction,
+        work_budget=work_budget,
     )
     return VolumeProfile(
         price_volumes=snapshot.price_volumes,

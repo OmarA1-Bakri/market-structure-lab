@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from market_structure_lab.profiles import Candle, build_volume_profile
+from market_structure_lab.profiles import Candle, ProfileWorkBudget, build_volume_profile
 
 
 def test_build_volume_profile_allocates_candle_volume_across_touched_price_bins() -> None:
@@ -49,3 +49,17 @@ def test_empty_volume_profile_has_no_auction_references() -> None:
     assert profile.point_of_control is None
     assert profile.value_area_low is None
     assert profile.value_area_high is None
+
+
+def test_build_volume_profile_rejects_pathological_range_before_bin_materialization() -> None:
+    budget = ProfileWorkBudget(
+        maximum_touched_bins_per_candle=8,
+        maximum_active_profile_bins=8,
+    )
+
+    with pytest.raises(ValueError, match="touched-bin budget"):
+        build_volume_profile(
+            [Candle(open=0.0, high=10**12, low=0.0, close=10**12, volume=1.0)],
+            tick_size=0.000_001,
+            work_budget=budget,
+        )

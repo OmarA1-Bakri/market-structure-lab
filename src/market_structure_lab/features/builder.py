@@ -14,6 +14,7 @@ from math import fsum, log, sqrt
 from pathlib import Path
 from statistics import median
 from threading import RLock
+from typing import Protocol
 from weakref import WeakKeyDictionary
 
 from market_structure_lab.core.artifact_io import (
@@ -26,6 +27,7 @@ from market_structure_lab.auction.engine import (
     AuctionSnapshot,
     StructuralEventKind,
 )
+from market_structure_lab.auction.replay import canonical_snapshot_json, snapshot_stream_sha256
 from market_structure_lab.features.builtin import builtin_feature_registry
 from market_structure_lab.features.models import FeatureRow, FeatureValue, timeframe_duration
 from market_structure_lab.features.registry import (
@@ -38,6 +40,7 @@ from market_structure_lab.structure.nodes import NodeKind, ProfileNode
 _HISTORY_LIMIT = 21
 MAX_FEATURE_BUILD_ROWS = 10_000_000
 MAX_FEATURE_BUILD_ROW_BYTES = 1024 * 1024
+MAX_FEATURE_BUILD_BATCH_BYTES = 512 * 1024 * 1024
 _RESET_EVENTS = frozenset(
     {
         StructuralEventKind.WINDOW_RESET,
@@ -61,6 +64,8 @@ class FeatureBuildBatch:
     artifact_path: Path
     artifact_sha256: str
     content_sha256: str
+    input_snapshot_stream_sha256: str
+    starting_context_sha256: str
     row_count: int
     builder_id: str
     builder_version: str
@@ -68,15 +73,20 @@ class FeatureBuildBatch:
     dependency_contract_sha256: str
     registry_id: str
     maximum_row_bytes: int
+    maximum_total_bytes: int
 
     def __post_init__(self) -> None:
         if self.row_count < 0 or self.row_count > MAX_FEATURE_BUILD_ROWS:
             raise ValueError("feature build batch row count exceeds the bounded limit")
         if not 1 <= self.maximum_row_bytes <= MAX_FEATURE_BUILD_ROW_BYTES:
             raise ValueError("feature build batch row-byte limit is invalid")
+        if not 1 <= self.maximum_total_bytes <= MAX_FEATURE_BUILD_BATCH_BYTES:
+            raise ValueError("feature build batch aggregate byte limit is invalid")
         for value, label in (
             (self.artifact_sha256, "artifact_sha256"),
             (self.content_sha256, "content_sha256"),
+            (self.input_snapshot_stream_sha256, "input_snapshot_stream_sha256"),
+            (self.starting_context_sha256, "starting_context_sha256"),
             (self.feature_registry_sha256, "feature_registry_sha256"),
             (self.dependency_contract_sha256, "dependency_contract_sha256"),
         ):
@@ -93,6 +103,7 @@ class FeatureBuildBatch:
         authenticated = _resolve_feature_build_batch_lease(self, active_lease)
         digest = hashlib.sha256()
         count = 0
+        total_bytes = 0
         for record in iter_bounded_regular_lines(
             authenticated.artifact_path,
             maximum_lines=authenticated.row_count,
@@ -105,6 +116,9 @@ class FeatureBuildBatch:
             digest.update(record)
             digest.update(b"\n")
             count += 1
+            total_bytes += len(record) + 1
+            if total_bytes > authenticated.maximum_total_bytes:
+                raise ValueError("feature build batch exceeds its aggregate byte budget")
             yield row
         output_sha256 = digest.hexdigest()
         if output_sha256 != authenticated.artifact_sha256:
@@ -138,6 +152,8 @@ class FeatureBuildBatchMetadata:
     artifact_path: Path
     artifact_sha256: str
     content_sha256: str
+    input_snapshot_stream_sha256: str
+    starting_context_sha256: str
     row_count: int
     builder_id: str
     builder_version: str
@@ -145,6 +161,7 @@ class FeatureBuildBatchMetadata:
     dependency_contract_sha256: str
     registry_id: str
     maximum_row_bytes: int
+    maximum_total_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +175,8 @@ class _IssuedFeatureBuildBatch:
     artifact_path: Path
     artifact_sha256: str
     content_sha256: str
+    input_snapshot_stream_sha256: str
+    starting_context_sha256: str
     row_count: int
     builder_id: str
     builder_version: str
@@ -165,6 +184,7 @@ class _IssuedFeatureBuildBatch:
     dependency_contract_sha256: str
     registry_id: str
     maximum_row_bytes: int
+    maximum_total_bytes: int
 
 
 _ISSUED_FEATURE_BUILD_BATCHES: WeakKeyDictionary[
@@ -174,12 +194,26 @@ _ISSUED_FEATURE_BUILD_BATCHES: WeakKeyDictionary[
 _ISSUED_FEATURE_BUILD_BATCHES_LOCK = RLock()
 
 
+@dataclass(frozen=True, slots=True)
+class _FeatureBuilderState:
+    history: tuple[AuctionSnapshot, ...]
+    latest: AuctionSnapshot | None
+    last_location: AuctionLocation | None
+    location_dwell: int
+
+
+class _Digest(Protocol):
+    def update(self, data: bytes, /) -> object: ...
+
+
 def _feature_build_batch_record(batch: FeatureBuildBatch) -> _IssuedFeatureBuildBatch:
     return _IssuedFeatureBuildBatch(
         lease_id=secrets.token_hex(32),
         artifact_path=batch.artifact_path,
         artifact_sha256=batch.artifact_sha256,
         content_sha256=batch.content_sha256,
+        input_snapshot_stream_sha256=batch.input_snapshot_stream_sha256,
+        starting_context_sha256=batch.starting_context_sha256,
         row_count=batch.row_count,
         builder_id=batch.builder_id,
         builder_version=batch.builder_version,
@@ -187,6 +221,7 @@ def _feature_build_batch_record(batch: FeatureBuildBatch) -> _IssuedFeatureBuild
         dependency_contract_sha256=batch.dependency_contract_sha256,
         registry_id=batch.registry_id,
         maximum_row_bytes=batch.maximum_row_bytes,
+        maximum_total_bytes=batch.maximum_total_bytes,
     )
 
 
@@ -195,6 +230,8 @@ def _record_metadata(record: _IssuedFeatureBuildBatch) -> FeatureBuildBatchMetad
         artifact_path=record.artifact_path,
         artifact_sha256=record.artifact_sha256,
         content_sha256=record.content_sha256,
+        input_snapshot_stream_sha256=record.input_snapshot_stream_sha256,
+        starting_context_sha256=record.starting_context_sha256,
         row_count=record.row_count,
         builder_id=record.builder_id,
         builder_version=record.builder_version,
@@ -202,6 +239,7 @@ def _record_metadata(record: _IssuedFeatureBuildBatch) -> FeatureBuildBatchMetad
         dependency_contract_sha256=record.dependency_contract_sha256,
         registry_id=record.registry_id,
         maximum_row_bytes=record.maximum_row_bytes,
+        maximum_total_bytes=record.maximum_total_bytes,
     )
 
 
@@ -210,6 +248,8 @@ def _batch_matches_record(batch: FeatureBuildBatch, record: _IssuedFeatureBuildB
         artifact_path=batch.artifact_path,
         artifact_sha256=batch.artifact_sha256,
         content_sha256=batch.content_sha256,
+        input_snapshot_stream_sha256=batch.input_snapshot_stream_sha256,
+        starting_context_sha256=batch.starting_context_sha256,
         row_count=batch.row_count,
         builder_id=batch.builder_id,
         builder_version=batch.builder_version,
@@ -217,6 +257,7 @@ def _batch_matches_record(batch: FeatureBuildBatch, record: _IssuedFeatureBuildB
         dependency_contract_sha256=batch.dependency_contract_sha256,
         registry_id=batch.registry_id,
         maximum_row_bytes=batch.maximum_row_bytes,
+        maximum_total_bytes=batch.maximum_total_bytes,
     ) == _record_metadata(record)
 
 
@@ -310,6 +351,7 @@ class FeatureBuilder:
         *,
         artifact_path: str | Path,
         maximum_rows: int,
+        maximum_total_bytes: int = MAX_FEATURE_BUILD_BATCH_BYTES,
     ) -> FeatureBuildBatch:
         """Calculate and spool an immutable bounded output batch for publication."""
 
@@ -319,6 +361,14 @@ class FeatureBuilder:
             or not 0 <= maximum_rows <= MAX_FEATURE_BUILD_ROWS
         ):
             raise ValueError("maximum_rows must be within the bounded feature batch limit")
+        if (
+            isinstance(maximum_total_bytes, bool)
+            or not isinstance(maximum_total_bytes, int)
+            or not 1 <= maximum_total_bytes <= MAX_FEATURE_BUILD_BATCH_BYTES
+        ):
+            raise ValueError(
+                "maximum_total_bytes must be within the bounded feature batch byte limit"
+            )
         destination = Path(artifact_path)
         if ".." in destination.parts:
             raise ValueError("feature batch artifact path cannot traverse parents")
@@ -326,21 +376,33 @@ class FeatureBuilder:
             raise ValueError("feature batch artifact path cannot be drive-relative")
         if not destination.is_absolute():
             destination = Path.cwd() / destination
+        starting_state = _capture_feature_builder_state(self)
+        if not _is_empty_feature_builder_state(starting_state):
+            raise ValueError(
+                "feature batch construction requires an empty continuation context; "
+                "reset the builder or declare a supported continuation context"
+            )
+        starting_context_sha256 = _feature_builder_state_sha256(starting_state)
         require_regular_directory(destination.parent)
         temporary = destination.with_name(f".{destination.name}.tmp")
         if path_exists_no_follow(destination) or path_exists_no_follow(temporary):
             raise FileExistsError("feature batch artifact already exists")
 
         digest = hashlib.sha256()
+        input_digest = hashlib.sha256()
         count = 0
+        written_bytes = 0
         active_stream: tuple[str, str] | None = None
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
         descriptor = os.open(temporary, flags, 0o600)
+        batch: FeatureBuildBatch | None = None
+        destination_installed = False
         try:
             with os.fdopen(descriptor, "wb") as handle:
                 for snapshot in snapshots:
                     if not isinstance(snapshot, AuctionSnapshot):
                         raise TypeError("snapshot must be an AuctionSnapshot")
+                    _update_snapshot_stream_digest(input_digest, snapshot)
                     stream = (snapshot.symbol, snapshot.timeframe)
                     if active_stream is not None and stream != active_stream:
                         _reset_feature_builder(self)
@@ -351,22 +413,22 @@ class FeatureBuilder:
                     record = row.canonical_json().encode("utf-8")
                     if len(record) > MAX_FEATURE_BUILD_ROW_BYTES:
                         raise ValueError("feature build row exceeds the byte limit")
+                    record_bytes = len(record) + 1
+                    if written_bytes + record_bytes > maximum_total_bytes:
+                        raise ValueError("feature build batch exceeds aggregate byte budget")
                     handle.write(record)
                     handle.write(b"\n")
                     digest.update(record)
                     digest.update(b"\n")
                     count += 1
-            os.replace(temporary, destination)
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
-
-        content_sha256 = digest.hexdigest()
-        return _issue_feature_build_batch(
-            FeatureBuildBatch(
+                    written_bytes += record_bytes
+            content_sha256 = digest.hexdigest()
+            batch = FeatureBuildBatch(
                 artifact_path=destination,
                 artifact_sha256=content_sha256,
                 content_sha256=content_sha256,
+                input_snapshot_stream_sha256=input_digest.hexdigest(),
+                starting_context_sha256=starting_context_sha256,
                 row_count=count,
                 builder_id=BUILTIN_FEATURE_BUILDER_ID,
                 builder_version=BUILTIN_FEATURE_BUILDER_VERSION,
@@ -374,11 +436,83 @@ class FeatureBuilder:
                 dependency_contract_sha256=self._registry.dependency_contract_sha256,
                 registry_id=self._registry.registry_id,
                 maximum_row_bytes=MAX_FEATURE_BUILD_ROW_BYTES,
+                maximum_total_bytes=maximum_total_bytes,
             )
-        )
+            os.replace(temporary, destination)
+            destination_installed = True
+            return _issue_feature_build_batch(batch)
+        except BaseException:
+            try:
+                if batch is not None:
+                    _revoke_feature_build_batch(batch)
+                temporary.unlink(missing_ok=True)
+                if destination_installed:
+                    destination.unlink(missing_ok=True)
+            finally:
+                _restore_feature_builder_state(self, starting_state)
+            raise
 
     def reset(self) -> None:
         _reset_feature_builder(self)
+
+
+def _capture_feature_builder_state(builder: FeatureBuilder) -> _FeatureBuilderState:
+    return _FeatureBuilderState(
+        history=tuple(builder._history),
+        latest=builder._latest,
+        last_location=builder._last_location,
+        location_dwell=builder._location_dwell,
+    )
+
+
+def _restore_feature_builder_state(
+    builder: FeatureBuilder,
+    state: _FeatureBuilderState,
+) -> None:
+    builder._history.clear()
+    builder._history.extend(state.history)
+    builder._latest = state.latest
+    builder._last_location = state.last_location
+    builder._location_dwell = state.location_dwell
+
+
+def _is_empty_feature_builder_state(state: _FeatureBuilderState) -> bool:
+    return (
+        not state.history
+        and state.latest is None
+        and state.last_location is None
+        and state.location_dwell == 0
+    )
+
+
+def _feature_builder_state_sha256(state: _FeatureBuilderState) -> str:
+    latest_sha256 = None if state.latest is None else snapshot_stream_sha256((state.latest,))
+    payload = {
+        "history_count": len(state.history),
+        "history_stream_sha256": snapshot_stream_sha256(state.history),
+        "last_location": (None if state.last_location is None else state.last_location.value),
+        "latest_snapshot_sha256": latest_sha256,
+        "location_dwell": state.location_dwell,
+        "schema_version": 1,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _update_snapshot_stream_digest(
+    digest: _Digest,
+    snapshot: AuctionSnapshot,
+) -> None:
+    payload = canonical_snapshot_json(snapshot).encode("utf-8")
+    digest.update(len(payload).to_bytes(8, byteorder="big", signed=False))
+    digest.update(payload)
 
 
 def _reset_feature_builder(builder: FeatureBuilder) -> None:

@@ -9,6 +9,12 @@ from types import MappingProxyType
 
 import pytest
 
+from market_structure_lab.discovery.matrix import (
+    FeatureMatrix,
+    NormalizedFeatureMatrix,
+    normalize_feature_matrix,
+)
+from market_structure_lab.discovery.splits import PartitionRole as DiscoveryPartitionRole
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.normalization import (
     PartitionRole,
@@ -114,6 +120,46 @@ def _row(
             "constant": constant,
             "count": count,
             "regime": regime,
+            "signal": signal,
+        },
+    )
+
+
+def _integer_registry() -> FeatureRegistry:
+    return FeatureRegistry(
+        "FS-000002",
+        (
+            _definition("location_dwell_bars", FeatureValueKind.INTEGER),
+            _definition("max_node_persistence_bars", FeatureValueKind.INTEGER),
+            _definition("signal", FeatureValueKind.FLOAT),
+        ),
+    )
+
+
+def _integer_row(
+    registry: FeatureRegistry,
+    minute: int,
+    *,
+    location_dwell_bars: int,
+    max_node_persistence_bars: int,
+    signal: float,
+) -> FeatureRow:
+    timestamp = START + timedelta(minutes=minute)
+    return FeatureRow(
+        timestamp=timestamp,
+        information_cutoff=timestamp + timedelta(minutes=1),
+        symbol="BTCUSDT",
+        timeframe="1m",
+        segment_id=1,
+        dataset_version="dataset-v1",
+        config_version="config-v1",
+        profile_version="profile-v1",
+        window_policy_id="rolling-60-v1",
+        feature_set_id=registry.feature_set_id,
+        registry_id=registry.registry_id,
+        values={
+            "location_dwell_bars": location_dwell_bars,
+            "max_node_persistence_bars": max_node_persistence_bars,
             "signal": signal,
         },
     )
@@ -253,22 +299,95 @@ def test_constant_scale_is_one_and_null_remains_null(registry: FeatureRegistry) 
     }
 
 
-def test_transform_row_preserves_narrow_stable_identity(registry: FeatureRegistry) -> None:
+def test_numeric_defaults_normalize_integer_features_into_a_typed_matrix() -> None:
+    integer_registry = _integer_registry()
+    rows = (
+        _integer_row(
+            integer_registry,
+            0,
+            location_dwell_bars=1,
+            max_node_persistence_bars=2,
+            signal=10.0,
+        ),
+        _integer_row(
+            integer_registry,
+            1,
+            location_dwell_bars=3,
+            max_node_persistence_bars=6,
+            signal=14.0,
+        ),
+    )
     normalizer = fit_robust_normalizer(
-        [_row(registry, 0, signal=1.0), _row(registry, 1, signal=3.0)],
-        registry,
+        rows,
+        integer_registry,
         _partition(),
         "dataset-v1",
-        selected_features=("signal",),
     )
-    source = _row(registry, 2, signal=5.0)
+    raw_matrix = FeatureMatrix(
+        row_ids=(
+            "BTCUSDT|1m|2025-01-01T00:00:00Z",
+            "BTCUSDT|1m|2025-01-01T00:01:00Z",
+        ),
+        feature_names=normalizer.selected_features,
+        values=tuple(
+            tuple(float(row.values[name]) for name in normalizer.selected_features) for row in rows
+        ),
+        dropped_null_rows=0,
+        partition_role=DiscoveryPartitionRole.DISCOVERY,
+    )
 
-    transformed = normalizer.transform_row(source)
+    normalized = normalize_feature_matrix(raw_matrix, normalizer)
 
-    assert transformed.metadata_dict() == source.metadata_dict()
-    assert transformed.values["signal"] == pytest.approx(3.0)
-    assert "publication_sha256" not in transformed.to_dict()
-    assert "provenance" not in transformed.to_dict()
+    assert normalizer.selected_features == (
+        "location_dwell_bars",
+        "max_node_persistence_bars",
+        "signal",
+    )
+    assert type(normalized) is NormalizedFeatureMatrix
+    assert not isinstance(normalized, FeatureRow)
+    assert normalized.row_ids == raw_matrix.row_ids
+    assert normalized.feature_names == raw_matrix.feature_names
+    assert normalized.partition_role is raw_matrix.partition_role
+    assert normalized.source_matrix_sha256 == raw_matrix.sha256
+    assert normalized.normalizer_artifact_sha256 == normalizer.artifact_sha256
+    assert normalized.normalization_algorithm_version == normalizer.algorithm_version
+    assert normalized.values[0][:2] == pytest.approx((-1.0, -1.0))
+    assert normalized.values[1][:2] == pytest.approx((1.0, 1.0))
+    assert all(type(value) is float for row in normalized.values for value in row)
+
+
+def test_transformed_values_cannot_impersonate_a_raw_integer_feature_row() -> None:
+    integer_registry = _integer_registry()
+    rows = (
+        _integer_row(
+            integer_registry,
+            0,
+            location_dwell_bars=1,
+            max_node_persistence_bars=2,
+            signal=10.0,
+        ),
+        _integer_row(
+            integer_registry,
+            1,
+            location_dwell_bars=3,
+            max_node_persistence_bars=6,
+            signal=14.0,
+        ),
+    )
+    normalizer = fit_robust_normalizer(
+        rows,
+        integer_registry,
+        _partition(),
+        "dataset-v1",
+    )
+
+    assert not hasattr(normalizer, "transform_row")
+    transformed_values = normalizer.transform_values(rows[0])
+    assert type(transformed_values["location_dwell_bars"]) is float
+    assert type(transformed_values["max_node_persistence_bars"]) is float
+    impersonating_row = replace(rows[0], values={**rows[0].values, **transformed_values})
+    with pytest.raises(TypeError, match="integer"):
+        integer_registry.validate_row(impersonating_row)
 
 
 @pytest.mark.parametrize("role", [PartitionRole.VALIDATION, PartitionRole.HOLDOUT])

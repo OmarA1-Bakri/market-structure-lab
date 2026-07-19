@@ -281,15 +281,15 @@ Delivered contracts include:
 The committed golden fixture uses two symbols, 16 discovery rows, eight development rows, and
 separately frozen holdout metadata with no holdout rows or outcomes. Stable `DR-000601` replays
 byte-identically with two behaviours and manifest SHA-256
-`eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b`. Unstable
+`404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e`. Unstable
 `DR-000602` replays byte-identically with no behaviours and manifest SHA-256
-`700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0`.
+`4ca6d4b6b3ca8e89b56c853f1b4235338ee5fa92d9b536e9cb3e07057ed371e9`.
 
 The exact frozen interpretation prompt input SHA-256 is
-`9a695a20ca0e7757de142f4c6508c2955e9d1849a36dcce331559d9f34d65cec`; the parent session-model
-response SHA-256 is `d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec`.
+`9f6b8bb56143b1ce6298d5e409fff41d50bbd1bb10cd5901bf0fbcf455d3aae6`; the parent session-model
+response SHA-256 is `ca49bc5572d22042723891f3e1047e6812f8e4595f6ce9e04fae793e32eb4577`.
 Real publication produced interpretation manifest SHA-256
-`b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119`. The response proposes
+`57959a105814d8e090f5353cb571c292cf3c8a4dc69806ba20a8a8381439937f`. The response proposes
 falsifiable Phase 5 tests and explicitly records fixture/transition/asset/OHLCV limitations. It does
 not claim a validated edge.
 
@@ -330,8 +330,11 @@ snapshot-to-discovery provenance, reject cluster structural drift, make motifs m
 boundary-safe with separate stability evidence, freeze dependence-aware transition uncertainty,
 and publish checksum-bound semantic-leakage receipts with an explicit manual-review limitation.
 Task 12 verified those contracts without running market discovery or opening the final holdout.
-This is not a real-market experiment-readiness, prediction, validation, strategy, or edge gate.
-Phase C requires separate explicit approval, and Phase 5 remains unstarted and separately gated.
+The separately authorized Task 13 residual-risk audit now challenges that completed snapshot before
+the final Phase B gate. This is not a real-market experiment-readiness, prediction, validation,
+strategy, or edge gate. Task 14 real discovery is authorized only after the Task 13 evidence
+checkpoint is pushed and its remote SHA matches local `HEAD`; Phase 5 remains unstarted and
+separately gated.
 
 ## RR-000008 full-history reconciliation: complete and promoted
 
@@ -449,7 +452,7 @@ Exact operator commands, paths, status meanings, resumption procedure, compatibi
 deliberate snapshot policy are documented in
 [`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md).
 
-## Phase 4 hardening: software gate accepted, empirical work stopped
+## Phase 4 hardening: Task 13 residual audit authorized, empirical work stopped
 
 The Phase 4 implementation remains synthetic software-fixture evidence only and is **not authorized
 for a real experiment**. The hardening work is complete at the software boundary:
@@ -473,7 +476,13 @@ of stable, rejected, and interpretation publications. Exact commands, log hashes
 limitations, and the stop decision are in
 [`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md).
 
+Task 13 uses completed and remotely verified baseline
+`3cf3721f1ec694b61ec1da78d0b7be24fea93caf`. It is limited to independent software residual-risk
+reproduction and evidence-backed correction. It may not run discovery, inspect holdout rows or
+outcomes, attach outcomes, estimate accuracy, or begin Task 14 before the verified Task 13 remote
+checkpoint.
+
 The committed golden data remain software-verification fixtures, not market evidence, a validated
 signal, or an edge. The repository still contains zero verified real trials. A new research
-snapshot, empirical thresholds, and any real outcome-blind discovery remain Phase C work and must
-wait for explicit user approval.
+snapshot, empirical thresholds, and any real outcome-blind discovery remain Phase C Task 14 work
+and must wait for the committed, pushed, remotely verified Task 13 checkpoint.

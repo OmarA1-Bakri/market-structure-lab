@@ -65,6 +65,19 @@ def test_pca_exposes_means_canonical_signs_variance_and_scores() -> None:
     assert projection.scores[0][0] < projection.scores[-1][0]
 
 
+def test_pca_rejects_cell_budget_before_svd(monkeypatch: pytest.MonkeyPatch) -> None:
+    matrix = _matrix(((1.0, 2.0), (3.0, 4.0)))
+    monkeypatch.setattr(pca_module, "_MAX_CELLS", 3)
+    monkeypatch.setattr(
+        pca_module,
+        "svd",
+        lambda *args, **kwargs: pytest.fail("SVD ran before deterministic preflight"),
+    )
+
+    with pytest.raises(ValueError, match="safety bound"):
+        fit_pca(matrix, 1)
+
+
 def test_pca_canonicalizes_last_bit_svd_backend_variation(monkeypatch) -> None:
     matrix = _matrix(((-10.0, -1.0), (-9.0, -0.9), (9.0, 0.9), (10.0, 1.0)))
     baseline = fit_pca(matrix, 1)
@@ -318,6 +331,26 @@ def test_kmeans_fails_loudly_when_iteration_cap_prevents_consistent_result() -> 
             clusters=2,
             seed=0,
             max_iterations=1,
+            tolerance=0.0,
+        )
+
+
+def test_kmeans_rejects_aggregate_fit_budget_before_initialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(kmeans_module, "_MAX_ITERATIONS", 2)
+    monkeypatch.setattr(
+        kmeans_module,
+        "_initial_centroids",
+        lambda *args, **kwargs: pytest.fail("initialization ran before deterministic preflight"),
+    )
+
+    with pytest.raises(ValueError, match="iteration safety bound"):
+        fit_kmeans(
+            ((0.0,), (1.0,)),
+            clusters=2,
+            seed=0,
+            max_iterations=3,
             tolerance=0.0,
         )
 

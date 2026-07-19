@@ -21,7 +21,7 @@ from market_structure_lab.features.registry import (
 )
 
 PHASE4_FIXTURE_BUILDER_ID = "phase4_fixture_producer.Phase4FixtureFeatureProducer"
-PHASE4_FIXTURE_BUILDER_VERSION = "phase4-fixture-producer-v1"
+PHASE4_FIXTURE_BUILDER_VERSION = "phase4-fixture-producer-v2"
 PHASE4_FIXTURE_FEATURE_SET_ID = "FS-000601"
 
 
@@ -33,7 +33,7 @@ class Phase4FixtureSource:
     symbol: str
     segment_id: int
     auction_location_ratio: Decimal
-    previous_volume: Decimal
+    baseline_volume: Decimal
     current_volume: Decimal
     volume_scale: Decimal
 
@@ -50,7 +50,7 @@ class Phase4FixtureSource:
             symbol=str(payload["symbol"]),
             segment_id=int(payload["segment_id"]),
             auction_location_ratio=Decimal(str(source["auction_location_ratio"])),
-            previous_volume=Decimal(str(source["previous_volume"])),
+            baseline_volume=Decimal(str(source["baseline_volume"])),
             current_volume=Decimal(str(source["current_volume"])),
             volume_scale=Decimal(str(source["volume_scale"])),
         )
@@ -68,7 +68,7 @@ class Phase4FixtureSource:
             not value.is_finite()
             for value in (
                 self.auction_location_ratio,
-                self.previous_volume,
+                self.baseline_volume,
                 self.current_volume,
                 self.volume_scale,
             )
@@ -92,7 +92,7 @@ class Phase4FixtureFeatureProducer:
 
     builder_id = PHASE4_FIXTURE_BUILDER_ID
     builder_version = PHASE4_FIXTURE_BUILDER_VERSION
-    feature_names = ("auction_location", "volume_change")
+    feature_names = ("auction_location", "volume_deviation_from_baseline")
 
     @classmethod
     def definitions(cls) -> tuple[FeatureDefinition, ...]:
@@ -116,24 +116,25 @@ class Phase4FixtureFeatureProducer:
                 builder_version=cls.builder_version,
             ),
             FeatureDefinition(
-                name="volume_change",
+                name="volume_deviation_from_baseline",
                 definition=(
-                    "Causal two-observation fixture volume delta divided by its explicit scale."
+                    "Current fixture volume deviation from its explicit causal baseline, "
+                    "divided by its explicit scale."
                 ),
                 family=FeatureFamily.SEQUENCE,
                 value_kind=FeatureValueKind.FLOAT,
                 units="ratio",
-                required_prior_observations=1,
+                required_prior_observations=0,
                 missing_policy=MissingPolicy.ERROR,
                 version="1.0.0",
-                leakage_class=LeakageClass.TRAILING_ONLY,
+                leakage_class=LeakageClass.AT_CUTOFF,
                 source_fields=(
+                    "fixture.baseline_volume",
                     "fixture.current_volume",
-                    "fixture.previous_volume",
                     "fixture.volume_scale",
                 ),
-                trailing_window="trailing_2_observations",
-                observable_cutoff_rule=(ObservableCutoffRule.TRAILING_THROUGH_INFORMATION_CUTOFF),
+                trailing_window="current_observation",
+                observable_cutoff_rule=ObservableCutoffRule.AT_INFORMATION_CUTOFF,
                 normalization_requirement=NormalizationRequirement.NOT_REQUIRED,
                 future_outcome_prohibited=True,
                 builder_id=cls.builder_id,
@@ -168,8 +169,8 @@ class Phase4FixtureFeatureProducer:
         self.validate_registry(registry)
         values = {
             "auction_location": float(source.auction_location_ratio),
-            "volume_change": float(
-                (source.current_volume - source.previous_volume) / source.volume_scale
+            "volume_deviation_from_baseline": float(
+                (source.current_volume - source.baseline_volume) / source.volume_scale
             ),
         }
         if tuple(values) != self.feature_names or any(

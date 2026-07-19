@@ -20,6 +20,7 @@ from market_structure_lab.auction.windows import (
     UTCMonthWindow,
     UTCWeekWindow,
     WindowPolicy,
+    WindowPolicyCheckpoint,
     WindowTransition,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "UTCMonthWindow",
     "UTCWeekWindow",
     "WindowPolicy",
+    "WindowPolicyCheckpoint",
     "WindowTransition",
     "canonical_snapshot_json",
     "snapshot_stream_sha256",

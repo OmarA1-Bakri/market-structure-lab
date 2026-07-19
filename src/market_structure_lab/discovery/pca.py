@@ -17,6 +17,9 @@ _CANONICAL_SIGNIFICANT_DIGITS = 14
 _COMPONENT_ZERO_RELATIVE_TOLERANCE = 64 * math.ulp(1.0)
 _PCA_ALGORITHM_VERSION = "deterministic-pca-v2"
 _SINGULAR_SUBSPACE_RELATIVE_GAP = 1e-12
+_MAX_ROWS = 1_000_000
+_MAX_FEATURES = 10_000
+_MAX_CELLS = 10_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +169,12 @@ def _validated_values(matrix: FeatureMatrix) -> tuple[tuple[tuple[float, ...], .
     width = len(matrix.values[0])
     if width < 1:
         raise ValueError("PCA requires at least one feature")
+    if (
+        len(matrix.values) > _MAX_ROWS
+        or width > _MAX_FEATURES
+        or len(matrix.values) * width > _MAX_CELLS
+    ):
+        raise ValueError("PCA matrix exceeds its safety bound")
     if len(matrix.row_ids) != len(matrix.values) or len(matrix.feature_names) != width:
         raise ValueError("FeatureMatrix identity dimensions do not match its values")
     rows: list[tuple[float, ...]] = []

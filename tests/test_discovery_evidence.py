@@ -8,6 +8,7 @@ import pytest
 
 from market_structure_lab.discovery import (
     AIInterpretation,
+    BehaviourEventBinding,
     BehaviourEvidencePack,
     ClusterObservation,
     ClusterTransitionMatrix,
@@ -54,8 +55,17 @@ def _behaviour():
         projection=projection,
         clustering=clustering,
         stability=report,
-        event_ids=("EV-1", "EV-2", "EV-3", "EV-4"),
-        durations_seconds=(60.0, 60.0, 60.0, 60.0),
+        event_bindings=tuple(
+            BehaviourEventBinding(
+                row_id=row_id,
+                event_id=(
+                    "EV-" + hashlib.sha256(f"event-{index + 1}".encode()).hexdigest().upper()
+                ),
+                duration_seconds=60.0,
+                event_publication_sha256="e" * 64,
+            )
+            for index, row_id in enumerate(matrix.row_ids)
+        ),
         symbols=("BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"),
         description="Neutral recurring feature configurations.",
     )[0]

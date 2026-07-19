@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import replace
 
 import pytest
 
 from market_structure_lab.discovery import (
+    BehaviourEventBinding,
     FeatureMatrix,
     PartitionRole,
     StabilityPolicy,
@@ -14,6 +16,25 @@ from market_structure_lab.discovery import (
     fit_projected_kmeans,
     freeze_behaviours,
 )
+
+
+_EVENT_PUBLICATION_SHA256 = "e" * 64
+
+
+def _event_id(index: int) -> str:
+    return f"EV-{hashlib.sha256(f'event-{index}'.encode()).hexdigest().upper()}"
+
+
+def _bindings(row_ids: tuple[str, ...]) -> tuple[BehaviourEventBinding, ...]:
+    return tuple(
+        BehaviourEventBinding(
+            row_id=row_id,
+            event_id=_event_id(index + 1),
+            duration_seconds=float((index + 1) * 60),
+            event_publication_sha256=_EVENT_PUBLICATION_SHA256,
+        )
+        for index, row_id in enumerate(row_ids)
+    )
 
 
 def _matrix(values: tuple[tuple[float, float], ...]) -> FeatureMatrix:
@@ -61,8 +82,7 @@ def _catalogue(
         projection=selected_projection,
         clustering=selected_clustering,
         stability=stability or _accepted_report(),
-        event_ids=("EV-1", "EV-2", "EV-3", "EV-4"),
-        durations_seconds=(60.0, 120.0, 180.0, 240.0),
+        event_bindings=_bindings(selected_matrix.row_ids),
         symbols=("BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"),
         description=description,
     )
@@ -134,9 +154,21 @@ def test_cluster_definition_hash_changes_with_consistent_centroid_definition() -
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"event_ids": ("EV-1",)}, "event_ids"),
-        ({"event_ids": ("EV-1", "EV-1", "EV-3", "EV-4")}, "unique"),
-        ({"durations_seconds": (60.0, 120.0, math.inf, 240.0)}, "duration"),
+        ({"event_bindings": _bindings(("row-0",))}, "coverage"),
+        (
+            {
+                "event_bindings": (
+                    *_bindings(("row-0", "row-1", "row-2")),
+                    BehaviourEventBinding(
+                        row_id="row-3",
+                        event_id=_event_id(1),
+                        duration_seconds=240.0,
+                        event_publication_sha256=_EVENT_PUBLICATION_SHA256,
+                    ),
+                )
+            },
+            "duplicate event",
+        ),
         ({"symbols": ("BTCUSDT",)}, "symbols"),
         ({"description": "Future returns are profitable."}, "outcome"),
         ({"description": "MFE and MAE imply a target hit."}, "outcome"),
@@ -198,8 +230,7 @@ def test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes
         "matrix": _matrix(((-2.0, 1.0), (-1.0, 3.0), (9.0, 5.0), (11.0, 7.0))),
         "projection": fit_pca(_matrix(((-2.0, 1.0), (-1.0, 3.0), (9.0, 5.0), (11.0, 7.0))), 1),
         "stability": _accepted_report(),
-        "event_ids": ("EV-1", "EV-2", "EV-3", "EV-4"),
-        "durations_seconds": (60.0, 120.0, 180.0, 240.0),
+        "event_bindings": _bindings(("row-0", "row-1", "row-2", "row-3")),
         "symbols": ("BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"),
         "description": "Neutral grouping description.",
     }
@@ -215,6 +246,34 @@ def test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes
 
     with pytest.raises((TypeError, ValueError), match=message):
         freeze_behaviours(**arguments)  # type: ignore[arg-type]
+
+
+def test_event_binding_rejects_nonfinite_duration() -> None:
+    with pytest.raises(ValueError, match="duration"):
+        BehaviourEventBinding(
+            row_id="row-0",
+            event_id=_event_id(1),
+            duration_seconds=math.inf,
+            event_publication_sha256=_EVENT_PUBLICATION_SHA256,
+        )
+
+
+@pytest.mark.parametrize(
+    ("event_id", "duration", "message"),
+    (("EV-1", 60.0, "canonical"), (_event_id(1), 0.0, "positive")),
+)
+def test_event_binding_requires_canonical_event_id_and_positive_duration(
+    event_id: str,
+    duration: float,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        BehaviourEventBinding(
+            row_id="row-0",
+            event_id=event_id,
+            duration_seconds=duration,
+            event_publication_sha256=_EVENT_PUBLICATION_SHA256,
+        )
 
 
 def test_freeze_behaviours_rejects_inconsistent_cluster_identity() -> None:
@@ -239,6 +298,90 @@ def test_catalogue_accepts_two_raw_features_clustered_in_one_projected_component
 
     assert all(len(item.feature_centroid) == 2 for item in behaviours)
     assert all(len(item.feature_distributions) == 2 for item in behaviours)
+
+
+def test_event_bindings_are_keyed_by_row_id_not_parallel_position() -> None:
+    matrix = _matrix(((-2.0, 1.0), (-1.0, 3.0), (9.0, 5.0), (11.0, 7.0)))
+    projection = fit_pca(matrix, 1)
+    clustering = fit_projected_kmeans(
+        matrix, projection, clusters=2, seed=7, max_iterations=50, tolerance=1e-12
+    )
+    arguments = {
+        "run_id": "DR-000401",
+        "matrix": matrix,
+        "projection": projection,
+        "clustering": clustering,
+        "stability": _accepted_report(),
+        "symbols": ("BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"),
+        "description": "Neutral grouping description.",
+    }
+    bindings = _bindings(matrix.row_ids)
+
+    canonical = freeze_behaviours(event_bindings=bindings, **arguments)
+    reordered = freeze_behaviours(event_bindings=tuple(reversed(bindings)), **arguments)
+
+    assert reordered == canonical
+    assert {item.event_bindings_sha256 for item in canonical} == {
+        canonical[0].event_bindings_sha256
+    }
+
+
+@pytest.mark.parametrize(
+    ("bindings", "message"),
+    [
+        (_bindings(("row-0", "row-1", "row-2")), "coverage"),
+        (_bindings(("row-0", "row-1", "row-2", "row-extra")), "coverage"),
+        (_bindings(("row-0", "row-0", "row-2", "row-3")), "duplicate row"),
+        (
+            (
+                *_bindings(("row-0", "row-1", "row-2")),
+                BehaviourEventBinding(
+                    row_id="row-3",
+                    event_id=_event_id(1),
+                    duration_seconds=240.0,
+                    event_publication_sha256=_EVENT_PUBLICATION_SHA256,
+                ),
+            ),
+            "duplicate event",
+        ),
+        (
+            (
+                *_bindings(("row-0", "row-1", "row-2")),
+                BehaviourEventBinding(
+                    row_id="row-3",
+                    event_id=_event_id(4),
+                    duration_seconds=240.0,
+                    event_publication_sha256="f" * 64,
+                ),
+            ),
+            "publication",
+        ),
+    ],
+)
+def test_event_bindings_require_exact_unique_row_and_publication_identity(
+    bindings: tuple[BehaviourEventBinding, ...], message: str
+) -> None:
+    matrix = _matrix(((-2.0, 1.0), (-1.0, 3.0), (9.0, 5.0), (11.0, 7.0)))
+    projection = fit_pca(matrix, 1)
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        freeze_behaviours(
+            run_id="DR-000401",
+            matrix=matrix,
+            projection=projection,
+            clustering=fit_projected_kmeans(
+                matrix,
+                projection,
+                clusters=2,
+                seed=7,
+                max_iterations=50,
+                tolerance=1e-12,
+            ),
+            stability=_accepted_report(),
+            event_bindings=bindings,
+            symbols=("BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"),
+            description="Neutral grouping description.",
+        )
 
 
 def test_catalogue_allows_neutral_observable_large_volume_language() -> None:

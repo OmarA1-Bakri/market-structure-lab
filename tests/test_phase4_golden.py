@@ -9,16 +9,21 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from market_structure_lab.discovery import (
     AIInterpretation,
     AdjacentPeriodStabilityPolicy,
+    BehaviourEventBinding,
     BehaviourEvidencePack,
     ClusterObservation,
+    DiscoveryWorkBudget,
     DiscoveryRunManifest,
     MOTIF_ALGORITHM_VERSION,
     MotifObservation,
     MotifRegimeAssignmentContract,
     MotifStabilityPolicy,
+    MissingnessPolicy,
     PartitionRole,
     StabilityPolicy,
     TimePartition,
@@ -34,6 +39,7 @@ from market_structure_lab.discovery import (
     freeze_split,
     make_discovery_input,
     publish_ai_interpretations,
+    validate_behaviour_event_bindings,
 )
 from market_structure_lab.discovery.stability import STABILITY_ALGORITHM_VERSION
 from market_structure_lab.features.models import FeatureRow
@@ -84,6 +90,8 @@ class FrozenFixtureRunConfig:
     motif_stability_policy: MotifStabilityPolicy
     motif_regime_assignments: MotifRegimeAssignmentContract
     transition_uncertainty_policy: TransitionUncertaintyPolicy
+    missingness_policy: MissingnessPolicy
+    work_budget: DiscoveryWorkBudget
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
@@ -91,6 +99,56 @@ class FrozenFixtureRunConfig:
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_phase4_fixture_volume_feature_truthfully_declares_baseline_deviation() -> None:
+    fixture = _load_json(FIXTURE_PATH)
+    definition = Phase4FixtureFeatureProducer.definitions()[1]
+    sources = [item["source"] for item in fixture["discovery_rows"]]
+
+    assert definition.name == "volume_deviation_from_baseline"
+    assert definition.trailing_window == "current_observation"
+    assert definition.required_prior_observations == 0
+    assert "fixture.baseline_volume" in definition.source_fields
+    assert all("previous_volume" not in source for source in sources)
+    assert all("baseline_volume" in source for source in sources)
+
+
+def test_phase4_fixture_freezes_task13_missingness_and_work_budget() -> None:
+    fixture = _load_json(FIXTURE_PATH)
+
+    for run_name in ("stable", "rejected"):
+        run = fixture["runs"][run_name]
+        assert run["missingness_policy"] == {
+            "policy_id": "phase4-golden-complete-case-v1",
+            "maximum_total_drop_fraction": 0.0,
+            "maximum_per_feature_drop_fraction": 0.0,
+            "maximum_evidence_groups": 32,
+        }
+        assert run["work_budget"] == {
+            "budget_id": "phase4-golden-work-budget-v1",
+            "maximum_materialized_rows": 24,
+            "maximum_feature_cells": 48,
+            "maximum_pca_rows": 16,
+            "maximum_pca_features": 2,
+            "maximum_pca_cells": 32,
+            "maximum_clusters": 2,
+            "maximum_seeds": 2,
+            "maximum_kmeans_iterations": 100,
+            "maximum_total_stability_fits": 6,
+            "maximum_serialized_evidence_bytes": 1_048_576,
+            "maximum_bundle_entries": 12,
+        }
+
+
+def test_phase4_fixture_serialized_budget_rejects_before_publication() -> None:
+    fixture = _load_json(FIXTURE_PATH)
+    values = dict(fixture["runs"]["stable"]["work_budget"])
+    values["maximum_serialized_evidence_bytes"] = 4
+    budget = DiscoveryWorkBudget(**values)
+
+    with pytest.raises(ValueError, match="serialized evidence"):
+        _preflight_fixture_serialized_payloads({"oversized.json": b"12345"}, budget)
 
 
 def _timestamp(value: str) -> datetime:
@@ -214,6 +272,8 @@ def _run_arguments(
         transition_policy_payload["sensitivity_offsets"]
     )
     transition_uncertainty_policy = TransitionUncertaintyPolicy(**transition_policy_payload)
+    missingness_policy = MissingnessPolicy(**run["missingness_policy"])
+    work_budget = DiscoveryWorkBudget(**run["work_budget"])
     config = FrozenFixtureRunConfig(
         run_id=run["run_id"],
         dataset_snapshot_id=fixture["dataset_snapshot"]["dataset_version"],
@@ -234,6 +294,8 @@ def _run_arguments(
         motif_stability_policy=motif_stability_policy,
         motif_regime_assignments=motif_regime_assignments,
         transition_uncertainty_policy=transition_uncertainty_policy,
+        missingness_policy=missingness_policy,
+        work_budget=work_budget,
         code_commit=fixture["code_commit"],
         lock_sha256=fixture["lock_sha256"],
     )
@@ -242,8 +304,23 @@ def _run_arguments(
         "discovery": discovery,
         "development": development,
         "registry": registry,
-        "event_ids": tuple(fixture["event_ids"]),
-        "durations_seconds": tuple(fixture["durations_seconds"]),
+        "event_bindings": tuple(
+            BehaviourEventBinding(
+                row_id=(
+                    f"{row.symbol}|{row.timeframe}|"
+                    f"{row.timestamp.astimezone(UTC).isoformat().replace('+00:00', 'Z')}"
+                ),
+                event_id=event_id,
+                duration_seconds=float(duration),
+                event_publication_sha256=fixture["event_publication_sha256"],
+            )
+            for row, event_id, duration in zip(
+                discovery.rows,
+                fixture["event_ids"],
+                fixture["durations_seconds"],
+                strict=True,
+            )
+        ),
         "output_root": output_root,
     }
 
@@ -256,23 +333,28 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
     output_root = arguments["output_root"]
     assert isinstance(config, FrozenFixtureRunConfig)
     assert isinstance(output_root, Path)
+    _preflight_fixture_work(config, discovery, development)
 
     discovery_matrix = build_feature_matrix(
         discovery,
         registry,
         config.feature_names,
         config.max_rows,  # type: ignore[arg-type]
+        config.missingness_policy,
     )
     development_matrix = build_feature_matrix(
         development,
         registry,
         config.feature_names,
         config.max_rows,  # type: ignore[arg-type]
+        config.missingness_policy,
     )
     selected_discovery = _selected_rows(discovery, discovery_matrix)  # type: ignore[arg-type]
     selected_development = _selected_rows(development, development_matrix)  # type: ignore[arg-type]
-    event_ids = tuple(arguments["event_ids"])  # type: ignore[arg-type]
-    durations = tuple(float(value) for value in arguments["durations_seconds"])  # type: ignore[union-attr]
+    event_bindings, event_bindings_sha256 = validate_behaviour_event_bindings(
+        arguments["event_bindings"],  # type: ignore[arg-type]
+        discovery_matrix.row_ids,
+    )
     projection = fit_pca(discovery_matrix, config.pca_components)
     clustering = fit_projected_kmeans(
         discovery_matrix,
@@ -296,6 +378,7 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         subsample_fraction=0.75,
         policy=config.stability_policy,
         adjacent_period_policy=config.adjacent_period_stability_policy,
+        max_iterations=config.max_iterations,
     )
     behaviours = freeze_behaviours(
         run_id=config.run_id,
@@ -303,8 +386,7 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         projection=projection,
         clustering=clustering,
         stability=stability,
-        event_ids=event_ids,
-        durations_seconds=durations,
+        event_bindings=event_bindings,
         symbols=tuple(row.symbol for row in selected_discovery),
         description="Neutral recurring outcome-blind feature configurations.",
     )
@@ -336,10 +418,17 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         "registry_sha256": registry.sha256,  # type: ignore[union-attr]
         "discovery_input_sha256": _input_sha256(discovery),  # type: ignore[arg-type]
         "development_input_sha256": _input_sha256(development),  # type: ignore[arg-type]
-        "event_ids": event_ids,
-        "durations_seconds": durations,
+        "event_bindings_sha256": event_bindings_sha256,
     }
     identity_sha256 = _sha256(_canonical_json(identity_payload))
+    missingness_payload = {
+        "schema_version": "discovery-missingness-evidence-v1",
+        "policy": _jsonable(config.missingness_policy),
+        "policy_sha256": config.missingness_policy.sha256,
+        "discovery": _jsonable(discovery_matrix.missingness_evidence),
+        "development": _jsonable(development_matrix.missingness_evidence),
+    }
+    work_budget_evidence = _fixture_work_evidence(config, discovery, development)
     metrics_payload = {
         "status": status,
         "discovery_rows": len(discovery_matrix.values),
@@ -348,6 +437,8 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
             "discovery": discovery_matrix.dropped_null_rows,
             "development": development_matrix.dropped_null_rows,
         },
+        "missingness": missingness_payload,
+        "work_budget": work_budget_evidence,
         "behaviours": len(behaviours),
         "motif_candidates": len(motif_report.candidates),
         "motifs_published": motif_report.published_count,
@@ -365,11 +456,14 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         "behaviours.json": _json_file(behaviours),
         "motifs.json": _json_file(motif_report),
         "transitions.json": _json_file(transition_matrix),
+        "missingness.json": _json_file(missingness_payload),
         "metrics.json": _json_file(metrics_payload),
         "summary.md": (
             f"# {config.run_id}\n\nStatus: {status}\n\n"
             "Outcome-blind discovery; final holdout was not accessed.\n\n"
             f"Cluster behaviours: {len(behaviours)} (independent stability path).\n"
+            "Complete-case selection is governed by the frozen missingness policy; "
+            "see missingness.json for bounded evidence.\n"
             f"Motif candidates: {len(motif_report.candidates)}; "
             f"published: {motif_report.published_count}; "
             f"rejected and retained: {motif_report.rejected_count}.\n"
@@ -403,6 +497,7 @@ def _replay(arguments: dict[str, object]) -> DiscoveryRunManifest:
         manifest_sha256=_sha256(_canonical_json(manifest_without_hash)),
     )
     payloads["manifest.json"] = _json_file(manifest.to_dict())
+    _preflight_fixture_serialized_payloads(payloads, config.work_budget)
     destination = output_root / config.run_id
     destination.mkdir(parents=True)
     for name, content in payloads.items():
@@ -534,6 +629,14 @@ def _config_payload(config: FrozenFixtureRunConfig) -> dict[str, object]:
         "motif_stability_policy": _jsonable(config.motif_stability_policy),
         "motif_regime_assignments": _jsonable(config.motif_regime_assignments),
         "transition_uncertainty_policy": _jsonable(config.transition_uncertainty_policy),
+        "missingness_policy": {
+            **asdict(config.missingness_policy),
+            "sha256": config.missingness_policy.sha256,
+        },
+        "work_budget": {
+            **asdict(config.work_budget),
+            "sha256": config.work_budget.sha256,
+        },
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
@@ -543,6 +646,56 @@ def _config_payload(config: FrozenFixtureRunConfig) -> dict[str, object]:
             "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
         },
     }
+
+
+def _preflight_fixture_work(config, discovery, development) -> None:
+    budget = config.work_budget
+    row_counts = (len(discovery.rows), len(development.rows))
+    total_rows = sum(row_counts)
+    feature_count = len(config.feature_names)
+    checks = (
+        (total_rows, budget.maximum_materialized_rows),
+        (total_rows * feature_count, budget.maximum_feature_cells),
+        (max(row_counts), budget.maximum_pca_rows),
+        (feature_count, budget.maximum_pca_features),
+        (max(row_counts) * feature_count, budget.maximum_pca_cells),
+        (config.clusters, budget.maximum_clusters),
+        (len(config.seeds), budget.maximum_seeds),
+        (config.max_iterations, budget.maximum_kmeans_iterations),
+        (len(config.seeds) * 2 + 2, budget.maximum_total_stability_fits),
+        (11, budget.maximum_bundle_entries),
+    )
+    if any(observed > limit for observed, limit in checks):
+        raise ValueError("Phase 4 fixture exceeds its frozen discovery work budget")
+
+
+def _fixture_work_evidence(config, discovery, development) -> dict[str, object]:
+    row_counts = (len(discovery.rows), len(development.rows))
+    feature_count = len(config.feature_names)
+    return {
+        "budget_sha256": config.work_budget.sha256,
+        "materialized_rows": sum(row_counts),
+        "feature_cells": sum(row_counts) * feature_count,
+        "maximum_partition_pca_rows": max(row_counts),
+        "pca_features": feature_count,
+        "maximum_partition_pca_cells": max(row_counts) * feature_count,
+        "clusters": config.clusters,
+        "seeds": len(config.seeds),
+        "kmeans_iterations": config.max_iterations,
+        "total_stability_fits": len(config.seeds) * 2 + 2,
+        "bundle_entries": 11,
+    }
+
+
+def _preflight_fixture_serialized_payloads(
+    payloads: Mapping[str, bytes],
+    budget: DiscoveryWorkBudget,
+) -> None:
+    total_bytes = sum(len(content) for content in payloads.values())
+    if total_bytes > budget.maximum_serialized_evidence_bytes:
+        raise ValueError("Phase 4 fixture serialized evidence exceeds its frozen work budget")
+    if len(payloads) > budget.maximum_bundle_entries:
+        raise ValueError("Phase 4 fixture bundle entries exceed its frozen work budget")
 
 
 def _input_sha256(input_value) -> str:
@@ -747,11 +900,11 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     fixture = _load_json(FIXTURE_PATH)
     assert STABILITY_ALGORITHM_VERSION == "cluster-stability-v2"
     assert MOTIF_ALGORITHM_VERSION == "boundary-safe-multivariate-motifs-v3"
-    assert fixture["schema_version"] == "phase4-discovery-fixture-v3"
+    assert fixture["schema_version"] == "phase4-discovery-fixture-v4"
     assert fixture["fixture_producer"] == {
         "builder_id": PHASE4_FIXTURE_BUILDER_ID,
         "builder_version": PHASE4_FIXTURE_BUILDER_VERSION,
-        "input_schema": "phase4-fixture-source-v1",
+        "input_schema": "phase4-fixture-source-v2",
     }
     assert "holdout_rows" not in fixture
     assert all(
@@ -779,6 +932,8 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
         "deterministic-pca-v2"
     )
     published_config = _load_json(stable_first_dir / "config.json")
+    published_missingness = _load_json(stable_first_dir / "missingness.json")
+    published_metrics = _load_json(stable_first_dir / "metrics.json")
     assert (
         published_config["transition_uncertainty_policy"]
         == fixture["runs"]["stable"]["transition_uncertainty_policy"]
@@ -786,6 +941,24 @@ def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path
     assert (
         published_transitions["uncertainty_policy"]
         == published_config["transition_uncertainty_policy"]
+    )
+    assert {
+        key: value
+        for key, value in published_config["missingness_policy"].items()
+        if key != "sha256"
+    } == fixture["runs"]["stable"]["missingness_policy"]
+    assert (
+        published_config["missingness_policy"]["sha256"] == (published_missingness["policy_sha256"])
+    )
+    assert published_missingness["discovery"]["excluded_row_count"] == 0
+    assert published_missingness["development"]["excluded_row_count"] == 0
+    assert published_metrics["missingness"] == published_missingness
+    assert {
+        key: value for key, value in published_config["work_budget"].items() if key != "sha256"
+    } == fixture["runs"]["stable"]["work_budget"]
+    assert (
+        published_metrics["work_budget"]["budget_sha256"]
+        == (published_config["work_budget"]["sha256"])
     )
     assert published_transitions["dependence_diagnostics"]["selected_block_length"] >= 1
     assert published_transitions["estimate_semantics"] == ("conditional_recurrence_estimate")

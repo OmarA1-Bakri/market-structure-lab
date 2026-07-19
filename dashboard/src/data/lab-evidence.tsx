@@ -93,11 +93,11 @@ export interface LabEvidence {
     fixture_kind: "synthetic_golden";
     fixture_path: string;
     fixture_sha256: string;
-    fixture_schema_version: "phase4-discovery-fixture-v3";
+    fixture_schema_version: "phase4-discovery-fixture-v4";
     fixture_producer: {
       builder_id: "phase4_fixture_producer.Phase4FixtureFeatureProducer";
-      builder_version: "phase4-fixture-producer-v1";
-      input_schema: "phase4-fixture-source-v1";
+      builder_version: "phase4-fixture-producer-v2";
+      input_schema: "phase4-fixture-source-v2";
     };
     fixture_registry_sha256: string;
     verification_receipt_available: false;
@@ -171,7 +171,7 @@ export interface LabEvidence {
   };
   phase_gate: {
     active_phase: string;
-    status: "remediation_in_progress" | "complete_awaiting_phase_approval";
+    status: "remediation_in_progress" | "complete_task14_authorized";
     next_required_evidence: string;
   };
 }
@@ -395,6 +395,7 @@ function isReplay(value: unknown): value is LabEvidence["software_replay"] {
       "clustering.json",
       "config.json",
       "metrics.json",
+      "missingness.json",
       "motifs.json",
       "projection.json",
       "stability.json",
@@ -434,7 +435,7 @@ function isReplay(value: unknown): value is LabEvidence["software_replay"] {
   return (
     value.status === "fixture_contract_present" &&
     value.fixture_kind === "synthetic_golden" &&
-    value.fixture_schema_version === "phase4-discovery-fixture-v3" &&
+    value.fixture_schema_version === "phase4-discovery-fixture-v4" &&
     isObject(value.fixture_producer) &&
     hasExactKeys(value.fixture_producer, [
       "builder_id",
@@ -443,8 +444,8 @@ function isReplay(value: unknown): value is LabEvidence["software_replay"] {
     ]) &&
     value.fixture_producer.builder_id ===
       "phase4_fixture_producer.Phase4FixtureFeatureProducer" &&
-    value.fixture_producer.builder_version === "phase4-fixture-producer-v1" &&
-    value.fixture_producer.input_schema === "phase4-fixture-source-v1" &&
+    value.fixture_producer.builder_version === "phase4-fixture-producer-v2" &&
+    value.fixture_producer.input_schema === "phase4-fixture-source-v2" &&
     typeof value.fixture_path === "string" &&
     typeof value.claim === "string" &&
     isSha256(value.fixture_sha256) &&
@@ -542,11 +543,11 @@ export function isLabEvidence(value: unknown): value is LabEvidence {
     isObject(phase) &&
     ((phase.status === "remediation_in_progress" &&
       phase.active_phase === "Phase 0: trustworthy foundation") ||
-      (phase.status === "complete_awaiting_phase_approval" &&
+      (phase.status === "complete_task14_authorized" &&
         phase.active_phase ===
-          "Phase 0 + Phase 4 deterministic hardening: complete" &&
+          "Phase B Task 13 deterministic hardening: complete" &&
         phase.next_required_evidence ===
-          "obtain explicit approval before Phase C real outcome-blind discovery")) &&
+          "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint")) &&
     typeof phase.next_required_evidence === "string" &&
     phase.next_required_evidence.length > 0
   );

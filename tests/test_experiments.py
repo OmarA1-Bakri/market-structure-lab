@@ -14,6 +14,7 @@ from market_structure_lab.experiments import (
     ExperimentMode,
     TerminalStatus,
     TrialAbandoned,
+    TrialArtifactBudgetExceeded,
     TrialOutput,
     TrialRange,
     execute_trial_attempt,
@@ -138,6 +139,22 @@ def test_identical_trial_replay_is_byte_idempotent(tmp_path) -> None:
     assert first.manifest.schema_version == "trial-receipt-v2"
     assert first.manifest.status is TerminalStatus.COMPLETED
     assert verify_trial_receipt(first.path) == first.manifest
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit"),
+    (("maximum_total_bytes", 1), ("maximum_entries", 1)),
+)
+def test_trial_bundle_budget_rejects_before_filesystem_publication(
+    tmp_path,
+    limit_name: str,
+    limit: int,
+) -> None:
+    with pytest.raises(TrialArtifactBudgetExceeded, match="bundle"):
+        _save(tmp_path, **{limit_name: limit})
+
+    assert not (tmp_path / "TR-000001").exists()
+    assert not (tmp_path / ".TR-000001.staging").exists()
 
 
 def test_conflicting_run_id_reuse_fails_without_overwriting_bytes(tmp_path) -> None:

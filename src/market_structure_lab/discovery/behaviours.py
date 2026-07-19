@@ -110,12 +110,32 @@ class FeatureDistribution:
 
 
 @dataclass(frozen=True, slots=True)
+class BehaviourEventBinding:
+    """A source-publication-backed event binding keyed to one matrix row."""
+
+    row_id: str
+    event_id: str
+    duration_seconds: float
+    event_publication_sha256: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.row_id, "row_id")
+        if re.fullmatch(r"EV-[A-F0-9]{64}", self.event_id) is None:
+            raise ValueError("event_id must be a canonical EV-prefixed uppercase SHA-256")
+        if _require_non_negative(self.duration_seconds, "duration_seconds") == 0.0:
+            raise ValueError("duration_seconds must be positive")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.event_publication_sha256):
+            raise ValueError("event_publication_sha256 must be a lowercase SHA-256")
+
+
+@dataclass(frozen=True, slots=True)
 class FrozenBehaviour:
     """A stable cluster frozen before any future outcome is attached."""
 
     behaviour_id: str
     discovery_run_id: str
     cluster_definition_sha256: str
+    event_bindings_sha256: str
     representative_event_ids: tuple[str, ...]
     feature_centroid: tuple[float, ...]
     feature_distributions: tuple[FeatureDistribution, ...]
@@ -133,6 +153,8 @@ class FrozenBehaviour:
         _require_text(self.discovery_run_id, "discovery_run_id")
         if not re.fullmatch(r"[0-9a-f]{64}", self.cluster_definition_sha256):
             raise ValueError("cluster_definition_sha256 must be a lowercase SHA-256")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.event_bindings_sha256):
+            raise ValueError("event_bindings_sha256 must be a lowercase SHA-256")
         if not self.representative_event_ids:
             raise ValueError("representative_event_ids must be non-empty")
         if not self.feature_centroid or len(self.feature_centroid) != len(
@@ -165,8 +187,7 @@ def freeze_behaviours(
     projection: PCAProjection,
     clustering: KMeansResult,
     stability: StabilityReport,
-    event_ids: Sequence[str],
-    durations_seconds: Sequence[float],
+    event_bindings: Sequence[BehaviourEventBinding],
     symbols: Sequence[str],
     description: str,
 ) -> tuple[FrozenBehaviour, ...]:
@@ -180,8 +201,9 @@ def freeze_behaviours(
     )
     if not isinstance(stability, StabilityReport):
         raise TypeError("stability must be a StabilityReport")
-    events = _validated_identifiers(event_ids, len(rows), "event_ids")
-    durations = _validated_durations(durations_seconds, len(rows))
+    bindings, bindings_sha256 = validate_behaviour_event_bindings(event_bindings, matrix.row_ids)
+    events = tuple(binding.event_id for binding in bindings)
+    durations = tuple(binding.duration_seconds for binding in bindings)
     symbol_values = _validated_symbols(symbols, len(rows))
     _validate_description(description)
     if not stability.accepted:
@@ -223,6 +245,7 @@ def freeze_behaviours(
         behaviour_payload = {
             "discovery_run_id": run_id,
             "cluster_definition_sha256": definition_sha256,
+            "event_bindings_sha256": bindings_sha256,
             "representative_event_ids": representatives,
             "feature_centroid": raw_centroid,
             "feature_distributions": tuple(asdict(item) for item in distributions),
@@ -240,6 +263,7 @@ def freeze_behaviours(
                 behaviour_id=behaviour_id,
                 discovery_run_id=run_id,
                 cluster_definition_sha256=definition_sha256,
+                event_bindings_sha256=bindings_sha256,
                 representative_event_ids=representatives,
                 feature_centroid=raw_centroid,
                 feature_distributions=distributions,
@@ -349,6 +373,38 @@ def _validated_identifiers(values: Sequence[str], expected: int, label: str) -> 
     if len(set(identifiers)) != len(identifiers):
         raise ValueError(f"{label} must be unique")
     return identifiers
+
+
+def validate_behaviour_event_bindings(
+    values: Sequence[BehaviourEventBinding],
+    row_ids: tuple[str, ...],
+) -> tuple[tuple[BehaviourEventBinding, ...], str]:
+    """Canonicalize an exact row-keyed event binding and return its identity."""
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise TypeError("event_bindings must be a sequence")
+    bindings = tuple(values)
+    if any(not isinstance(binding, BehaviourEventBinding) for binding in bindings):
+        raise TypeError("event_bindings must contain BehaviourEventBinding values")
+    bound_row_ids = tuple(binding.row_id for binding in bindings)
+    if len(set(bound_row_ids)) != len(bound_row_ids):
+        raise ValueError("event_bindings contain a duplicate row_id")
+    if set(bound_row_ids) != set(row_ids):
+        raise ValueError("event_bindings row coverage must exactly match matrix row_ids")
+    event_ids = tuple(binding.event_id for binding in bindings)
+    if len(set(event_ids)) != len(event_ids):
+        raise ValueError("event_bindings contain a duplicate event_id")
+    publication_ids = {binding.event_publication_sha256 for binding in bindings}
+    if len(publication_ids) != 1:
+        raise ValueError("event_bindings must use one event publication identity")
+    by_row_id = {binding.row_id: binding for binding in bindings}
+    canonical = tuple(by_row_id[row_id] for row_id in row_ids)
+    return canonical, _event_bindings_sha256(canonical)
+
+
+def _event_bindings_sha256(bindings: tuple[BehaviourEventBinding, ...]) -> str:
+    return hashlib.sha256(
+        _canonical_json(tuple(asdict(binding) for binding in bindings))
+    ).hexdigest()
 
 
 def _validated_symbols(values: Sequence[str], expected: int) -> tuple[str, ...]:
@@ -490,6 +546,7 @@ def _behaviour_payload(behaviour: FrozenBehaviour) -> dict[str, object]:
     return {
         "discovery_run_id": behaviour.discovery_run_id,
         "cluster_definition_sha256": behaviour.cluster_definition_sha256,
+        "event_bindings_sha256": behaviour.event_bindings_sha256,
         "representative_event_ids": behaviour.representative_event_ids,
         "feature_centroid": behaviour.feature_centroid,
         "feature_distributions": tuple(asdict(item) for item in behaviour.feature_distributions),

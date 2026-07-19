@@ -3,6 +3,11 @@
 Phase 4 freezes recurring market-structure behaviours before any future outcome is attached. It is
 an inspectable discovery baseline, not an edge validator, strategy engine, or trading system.
 
+The original Task 12 software gate is remotely complete at baseline
+`3cf3721f1ec694b61ec1da78d0b7be24fea93caf`. Task 13 is an authorized independent residual-risk
+audit of this synthetic software boundary only. No real discovery is authorized; the first real
+outcome-blind run is now Task 14 and remains behind the verified Task 13 remote-checkpoint gate.
+
 ## Pipeline and access boundary
 
 The implemented path is:
@@ -128,21 +133,21 @@ uv run pytest -q tests/test_phase4_golden.py
 ```
 
 The stable `DR-000601` fixture freezes two behaviours and has manifest SHA-256
-`eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b`. The unstable
+`404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e`. The unstable
 `DR-000602` fixture is deterministically retained with no behaviours and manifest SHA-256
-`700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0`.
+`4ca6d4b6b3ca8e89b56c853f1b4235338ee5fa92d9b536e9cb3e07057ed371e9`.
 
 The parent-model interpretation prompt input is frozen at
 `tests/fixtures/phase4/discovery_interpretation_input_v1.json`, SHA-256
-`9a695a20ca0e7757de142f4c6508c2955e9d1849a36dcce331559d9f34d65cec`. It is derived through the
+`9f6b8bb56143b1ce6298d5e409fff41d50bbd1bb10cd5901bf0fbcf455d3aae6`. It is derived through the
 real evidence-pack API.
 
 The session model's exact response and supplied provenance are stored separately at
 `tests/fixtures/phase4/discovery_interpretation_response_v1.json`, SHA-256
-`d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec`. The test constructs real
+`ca49bc5572d22042723891f3e1047e6812f8e4595f6ce9e04fae793e32eb4577`. The test constructs real
 `AIInterpretation` records from those bytes and publishes them through
 `publish_ai_interpretations`. The interpretation manifest SHA-256 is
-`b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119`. These are candidate
+`57959a105814d8e090f5353cb571c292cf3c8a4dc69806ba20a8a8381439937f`. These are candidate
 interpretations and proposed Phase 5 tests, not validation results.
 
 ## Interpretation of transitions
@@ -178,10 +183,11 @@ Behaviour, interpretation, and hypothesis remain distinct from a validated edge.
 
 ## Phase 4 hardening stop gate
 
-The Task 7–12 software-hardening gate is recorded in
-[`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md). It verifies deterministic
-provenance, structural stability, motif boundaries, frozen transition uncertainty, semantic
-leakage receipts, bounded work, holdout non-access, trial accounting, and byte-identical golden
-publication. The result remains synthetic software evidence only. No real discovery run, empirical
-calibration, outcome attachment, predictive validation, or strategy work is authorized without a
-separate explicit approval.
+The original Task 7–12 software-hardening gate and the authorized Task 13 adversarial closure are
+recorded in [`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md). Together they verify and
+independently challenge deterministic provenance, structural stability, motif boundaries, frozen
+transition uncertainty, semantic leakage receipts, bounded work, holdout non-access, trial
+accounting, and byte-identical golden publication. The result remains synthetic software evidence
+only. Task 14 real discovery is authorized only after the final Task 13 evidence checkpoint is
+pushed and verified remotely. Outcome attachment, predictive validation, and strategy work remain
+blocked behind their later gates.

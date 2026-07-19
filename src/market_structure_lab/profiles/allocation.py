@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import fsum, isclose, isfinite
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from market_structure_lab.profiles.binning import BinDefinition
 from market_structure_lab.profiles.models import Candle
@@ -36,7 +36,10 @@ class BinContribution:
         object.__setattr__(self, "bin_volumes", MappingProxyType(dict(self.bin_volumes)))
 
 
+@runtime_checkable
 class AllocationModel(Protocol):
+    """Allocation contract with a bounded, non-mutating rollback checkpoint."""
+
     @property
     def model_id(self) -> str: ...
 
@@ -47,6 +50,21 @@ class AllocationModel(Protocol):
         *,
         lower_timeframe_candles: Sequence[Candle] | None = None,
     ) -> BinContribution: ...
+
+    def transaction_checkpoint(self) -> object: ...
+
+    def restore_transaction(self, checkpoint: object) -> None: ...
+
+
+class _StatelessAllocationTransaction:
+    """No-op transaction contract for immutable built-in allocation models."""
+
+    def transaction_checkpoint(self) -> object:
+        return None
+
+    def restore_transaction(self, checkpoint: object) -> None:
+        if checkpoint is not None:
+            raise ValueError("stateless allocation checkpoint must be None")
 
 
 def validate_candle(candle: Candle) -> None:
@@ -63,6 +81,14 @@ def validate_candle(candle: Candle) -> None:
         raise ValueError("close must lie between low and high")
     if candle.volume < 0:
         raise ValueError("volume must be non-negative")
+
+
+def touched_bin_count(candle: Candle, binning: BinDefinition) -> int:
+    """Return a candle's price-span bin count without materializing its bins."""
+    validate_candle(candle)
+    low_index = binning.bin_index(candle.low)
+    high_index = binning.bin_index(candle.high)
+    return high_index - low_index + 1
 
 
 def _touched_indices(candle: Candle, binning: BinDefinition) -> range:
@@ -83,7 +109,7 @@ def _contribution(
 
 
 @dataclass(frozen=True)
-class UniformAllocation:
+class UniformAllocation(_StatelessAllocationTransaction):
     """Distribute candle volume equally across every touched bin."""
 
     model_id: str = "uniform-touched-v1"
@@ -105,7 +131,7 @@ class UniformAllocation:
 
 
 @dataclass(frozen=True)
-class TypicalPriceAllocation:
+class TypicalPriceAllocation(_StatelessAllocationTransaction):
     """Assign all candle volume to its typical-price bin."""
 
     model_id: str = "typical-price-v1"
@@ -129,7 +155,7 @@ class TypicalPriceAllocation:
 
 
 @dataclass(frozen=True)
-class TriangularCloseAllocation:
+class TriangularCloseAllocation(_StatelessAllocationTransaction):
     """Weight touched bins linearly toward the candle close bin."""
 
     model_id: str = "triangular-close-v1"
@@ -155,7 +181,7 @@ class TriangularCloseAllocation:
 
 
 @dataclass(frozen=True)
-class LowerTimeframeReconstruction:
+class LowerTimeframeReconstruction(_StatelessAllocationTransaction):
     """Reconstruct a parent profile only from supplied real constituent candles."""
 
     base_model: AllocationModel = UniformAllocation()
@@ -164,6 +190,12 @@ class LowerTimeframeReconstruction:
     @property
     def model_id(self) -> str:
         return f"{self.version}:{self.base_model.model_id}"
+
+    def transaction_checkpoint(self) -> object:
+        return self.base_model.transaction_checkpoint()
+
+    def restore_transaction(self, checkpoint: object) -> None:
+        self.base_model.restore_transaction(checkpoint)
 
     def allocate(
         self,

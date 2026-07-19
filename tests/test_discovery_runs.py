@@ -25,6 +25,7 @@ from market_structure_lab.data.derived import (
     LeakageAuditApproval,
     LeakageNegativePattern,
     publish_feature_rows as publish_feature_batch,
+    publish_market_events,
 )
 from market_structure_lab.data.export import (
     SnapshotIdentity,
@@ -33,8 +34,13 @@ from market_structure_lab.data.export import (
 from market_structure_lab.discovery import (
     AIInterpretation,
     AdjacentPeriodStabilityPolicy,
+    BehaviourEventBinding,
     BehaviourEvidencePack,
     DiscoveryRunConfig,
+    DiscoveryWorkBudget,
+    DiscoveryWorkBudgetViolation,
+    MissingnessPolicy,
+    MissingnessPolicyViolation,
     MotifStabilityPolicy,
     PartitionRole,
     StabilityPolicy,
@@ -65,6 +71,7 @@ from market_structure_lab.experiments import (
     read_trial_ledger,
     verify_trial_receipt,
 )
+from market_structure_lab.events.models import EventKind, make_event
 
 
 def _registry() -> FeatureRegistry:
@@ -262,6 +269,9 @@ def _fixture(
     split_symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT"),
     minimum_asset_coverage: float = 0.0,
     regime_assignment_mode: str = "complete",
+    feature_names: tuple[str, ...] = ("poc_distance_close", "vwap_distance_close"),
+    missingness_policy: MissingnessPolicy | None = None,
+    work_budget: DiscoveryWorkBudget | None = None,
 ):
     registry = _registry()
     discovery_partition = TimePartition(
@@ -372,31 +382,32 @@ def _fixture(
             symbols=normalizer_symbols or discovery_partition.symbols,
         ),
         "DS-000501",
-        selected_features=("poc_distance_close", "vwap_distance_close"),
+        selected_features=feature_names,
     )
     normalizer_artifact = normalizer.canonical_json()
     feature_publication_root = input_root / "features"
     leakage_audit = _leakage_approval(registry)
+    publication_identity = DerivedPublicationIdentity(
+        dataset_version="DS-000501",
+        dataset_snapshot_sha256=snapshot_manifest.snapshot_sha256,
+        feature_set_id=registry.feature_set_id,
+        feature_registry_sha256=registry.sha256,
+        config_version="cfg-1",
+        profile_version="profile-1",
+        window_policy_id="window-1",
+        event_version="events-v1",
+        normalizer_artifact_sha256=normalizer.artifact_sha256,
+        leakage_audit_approval_sha256=leakage_audit.sha256,
+        code_commit=code_commit,
+        uv_lock_sha256=lock_sha256,
+    )
     feature_publication = publish_feature_rows(
         sorted(
             discovery_snapshots + development_snapshots,
             key=lambda snapshot: (snapshot.symbol, snapshot.timeframe, snapshot.timestamp),
         ),
         output_root=feature_publication_root,
-        identity=DerivedPublicationIdentity(
-            dataset_version="DS-000501",
-            dataset_snapshot_sha256=snapshot_manifest.snapshot_sha256,
-            feature_set_id=registry.feature_set_id,
-            feature_registry_sha256=registry.sha256,
-            config_version="cfg-1",
-            profile_version="profile-1",
-            window_policy_id="window-1",
-            event_version="events-v1",
-            normalizer_artifact_sha256=normalizer.artifact_sha256,
-            leakage_audit_approval_sha256=leakage_audit.sha256,
-            code_commit=code_commit,
-            uv_lock_sha256=lock_sha256,
-        ),
+        identity=publication_identity,
         registry=registry,
         leakage_audit=leakage_audit,
         max_rows_per_part=4,
@@ -422,6 +433,33 @@ def _fixture(
         purpose="stability",
         max_rows=20,
         publication_manifest=feature_publication,
+    )
+    events = tuple(
+        make_event(
+            EventKind.FIXED_WINDOW,
+            row.timestamp,
+            row.information_cutoff,
+            row,
+            "discovery-fixture-v1",
+            registry=registry,
+        )
+        for row in discovery.rows
+    )
+    event_publication_root = input_root / "events"
+    event_publication = publish_market_events(
+        events,
+        output_root=event_publication_root,
+        identity=publication_identity,
+        registry=registry,
+        source_feature_directory=feature_publication_directory,
+        source_feature_manifest=feature_publication,
+        max_rows_per_part=4,
+    )
+    event_publication_directory = (
+        event_publication_root
+        / "dataset_version=DS-000501"
+        / f"feature_set={registry.feature_set_id}"
+        / "events"
     )
     regime_pairs = [
         (
@@ -455,7 +493,7 @@ def _fixture(
         registry=registry,
         normalizer_artifact=normalizer_artifact,
         split=split,
-        feature_names=("poc_distance_close", "vwap_distance_close"),
+        feature_names=feature_names,
         discovery=discovery,
         development=development,
         code_commit=code_commit,
@@ -470,7 +508,7 @@ def _fixture(
         registry_sha256=registry.sha256,
         config_version="cfg-1",
         split=split,
-        feature_names=("poc_distance_close", "vwap_distance_close"),
+        feature_names=feature_names,
         pca_components=1,
         clusters=2,
         seeds=(7, 11),
@@ -508,10 +546,38 @@ def _fixture(
         ),
         motif_regime_assignments=regime_assignments,
         transition_uncertainty_policy=_transition_uncertainty_policy(),
+        missingness_policy=(
+            missingness_policy
+            or MissingnessPolicy(
+                policy_id="software-test-run-missingness-v1",
+                maximum_total_drop_fraction=0.25,
+                maximum_per_feature_drop_fraction=0.25,
+                maximum_evidence_groups=100,
+            )
+        ),
+        work_budget=(
+            work_budget
+            or DiscoveryWorkBudget(
+                budget_id="software-test-run-work-v1",
+                maximum_materialized_rows=40,
+                maximum_feature_cells=80,
+                maximum_pca_rows=20,
+                maximum_pca_features=2,
+                maximum_pca_cells=40,
+                maximum_clusters=2,
+                maximum_seeds=2,
+                maximum_kmeans_iterations=100,
+                maximum_total_stability_fits=6,
+                maximum_serialized_evidence_bytes=8 * 1024 * 1024,
+                maximum_bundle_entries=100,
+            )
+        ),
         code_commit=code_commit,
         lock_sha256=lock_sha256,
         feature_publication_id="FP-000501",
         feature_publication_sha256=feature_publication.publication_sha256,
+        event_publication_id="EP-000501",
+        event_publication_sha256=event_publication.publication_sha256,
         normalizer_id="NZ-000501",
         normalizer_sha256=normalizer.artifact_sha256,
         provenance=provenance,
@@ -527,11 +593,22 @@ def _fixture(
         "snapshot_manifest": snapshot_manifest,
         "feature_publication_directory": feature_publication_directory,
         "feature_publication": feature_publication,
+        "event_publication_directory": event_publication_directory,
+        "event_publication": event_publication,
         "normalizer_artifact": normalizer_artifact,
         "lockfile_bytes": lockfile_bytes,
         "repository_root": repository_root,
-        "event_ids": tuple(f"EV-{index:02d}" for index in range(12)),
-        "durations_seconds": (60.0,) * 12,
+        "event_bindings": tuple(
+            BehaviourEventBinding(
+                row_id=binding.row_id,
+                event_id=binding.event_id,
+                duration_seconds=binding.duration_seconds,
+                event_publication_sha256=binding.event_publication_sha256,
+            )
+            for binding in derived_data.iter_published_event_bindings(
+                event_publication_directory, event_publication
+            )
+        ),
         "output_root": tmp_path,
     }
 
@@ -646,6 +723,18 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
         for candidate in published_motifs["candidates"]
     )
     assert published_metrics["motif_candidates"] == len(published_motifs["candidates"])
+    published_missingness = json.loads(
+        (tmp_path / first.run_id / "missingness.json").read_text(encoding="utf-8")
+    )
+    assert published_metrics["missingness"] == published_missingness
+    assert published_missingness["discovery"]["excluded_row_count"] == 0
+    assert published_missingness["development"]["excluded_row_count"] == 0
+    assert published_config["work_budget"]["sha256"] == arguments["config"].work_budget.sha256
+    assert published_metrics["work_budget"]["budget_sha256"] == (
+        arguments["config"].work_budget.sha256
+    )
+    assert published_metrics["work_budget"]["materialized_rows"] == 20
+    assert published_metrics["work_budget"]["feature_cells"] == 40
     assert (
         published_metrics["motifs_published"] + published_metrics["motifs_rejected"]
         == (published_metrics["motif_candidates"])
@@ -750,6 +839,239 @@ def test_every_transition_uncertainty_field_changes_frozen_config_identity(tmp_p
             discovery_runs._canonical_json(discovery_runs._config_payload(changed_config))
         ).hexdigest()
         assert changed_hash != base_hash, field_name
+
+
+def test_every_missingness_policy_field_changes_frozen_config_identity(tmp_path) -> None:
+    config = _fixture(tmp_path)["config"]
+    policy = config.missingness_policy
+    changes = {
+        "policy_id": "software-test-run-missingness-v2",
+        "maximum_total_drop_fraction": 0.2,
+        "maximum_per_feature_drop_fraction": 0.2,
+        "maximum_evidence_groups": 99,
+    }
+    assert set(changes) == {item.name for item in fields(MissingnessPolicy)}
+    base_hash = hashlib.sha256(
+        discovery_runs._canonical_json(discovery_runs._config_payload(config))
+    ).hexdigest()
+
+    for field_name, value in changes.items():
+        changed_config = replace(
+            config,
+            missingness_policy=replace(policy, **{field_name: value}),
+        )
+        changed_hash = hashlib.sha256(
+            discovery_runs._canonical_json(discovery_runs._config_payload(changed_config))
+        ).hexdigest()
+        assert changed_hash != base_hash, field_name
+
+
+def test_every_discovery_work_budget_field_changes_frozen_config_identity(tmp_path) -> None:
+    config = _fixture(tmp_path)["config"]
+    budget = config.work_budget
+    changes = {
+        "budget_id": "software-test-run-work-v2",
+        "maximum_materialized_rows": 39,
+        "maximum_feature_cells": 79,
+        "maximum_pca_rows": 19,
+        "maximum_pca_features": 3,
+        "maximum_pca_cells": 39,
+        "maximum_clusters": 3,
+        "maximum_seeds": 3,
+        "maximum_kmeans_iterations": 101,
+        "maximum_total_stability_fits": 7,
+        "maximum_serialized_evidence_bytes": 8 * 1024 * 1024 - 1,
+        "maximum_bundle_entries": 99,
+    }
+    assert set(changes) == {item.name for item in fields(DiscoveryWorkBudget)}
+    base_hash = hashlib.sha256(
+        discovery_runs._canonical_json(discovery_runs._config_payload(config))
+    ).hexdigest()
+
+    for field_name, value in changes.items():
+        changed_config = replace(
+            config,
+            work_budget=replace(budget, **{field_name: value}),
+        )
+        changed_hash = hashlib.sha256(
+            discovery_runs._canonical_json(discovery_runs._config_payload(changed_config))
+        ).hexdigest()
+        assert changed_hash != base_hash, field_name
+
+
+@pytest.mark.parametrize(
+    ("field_name", "limit", "message"),
+    [
+        ("maximum_materialized_rows", 19, "materialized rows"),
+        ("maximum_feature_cells", 39, "feature cells"),
+        ("maximum_pca_rows", 11, "PCA rows"),
+        ("maximum_pca_cells", 23, "PCA cells"),
+    ],
+)
+def test_discovery_work_budget_rejects_before_matrix_construction(
+    tmp_path,
+    monkeypatch,
+    field_name: str,
+    limit: int,
+    message: str,
+) -> None:
+    arguments = _fixture(tmp_path)
+    arguments["config"] = replace(
+        arguments["config"],
+        work_budget=replace(arguments["config"].work_budget, **{field_name: limit}),
+    )
+
+    def matrix_work_was_reached(*args, **kwargs):
+        raise AssertionError("work-budget rejection reached matrix construction")
+
+    def provenance_work_was_reached(*args, **kwargs):
+        raise AssertionError("work-budget rejection reached provenance scans")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_work_was_reached)
+    monkeypatch.setattr(
+        discovery_runs,
+        "_verify_artifact_provenance",
+        provenance_work_was_reached,
+    )
+    with pytest.raises(DiscoveryWorkBudgetViolation, match=message):
+        _run(arguments)
+
+    receipt = verify_trial_receipt(tmp_path / "DR-000501")
+    assert receipt.status is TerminalStatus.REJECTED
+    metrics = json.loads((tmp_path / "DR-000501" / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["status"] == "rejected_work_budget"
+    assert metrics["work_budget"]["stage"] == "run_preflight"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("maximum_materialized_rows", 0),
+        ("maximum_feature_cells", True),
+        ("maximum_pca_rows", 10**12),
+        ("maximum_pca_features", 10**12),
+        ("maximum_pca_cells", 10**12),
+        ("maximum_clusters", 10**12),
+        ("maximum_seeds", 10**12),
+        ("maximum_kmeans_iterations", 10**12),
+        ("maximum_total_stability_fits", 10**12),
+        ("maximum_serialized_evidence_bytes", 10**12),
+        ("maximum_bundle_entries", 10**12),
+    ],
+)
+def test_discovery_work_budget_rejects_invalid_or_unsafe_limits(
+    field_name: str,
+    value: object,
+) -> None:
+    values = {
+        "budget_id": "software-test-run-work-validation-v1",
+        "maximum_materialized_rows": 40,
+        "maximum_feature_cells": 80,
+        "maximum_pca_rows": 20,
+        "maximum_pca_features": 2,
+        "maximum_pca_cells": 40,
+        "maximum_clusters": 2,
+        "maximum_seeds": 2,
+        "maximum_kmeans_iterations": 100,
+        "maximum_total_stability_fits": 6,
+        "maximum_serialized_evidence_bytes": 8 * 1024 * 1024,
+        "maximum_bundle_entries": 100,
+    }
+    values[field_name] = value
+
+    with pytest.raises(ValueError, match="positive|safety"):
+        DiscoveryWorkBudget(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("budget_field", "limit", "message"),
+    [
+        ("maximum_pca_features", 1, "feature_names"),
+        ("maximum_clusters", 1, "clusters"),
+        ("maximum_seeds", 1, "seeds"),
+        ("maximum_kmeans_iterations", 99, "max_iterations"),
+        ("maximum_total_stability_fits", 5, "stability fits"),
+    ],
+)
+def test_run_config_rejects_work_axes_that_exceed_frozen_budget(
+    tmp_path,
+    budget_field: str,
+    limit: int,
+    message: str,
+) -> None:
+    config = _fixture(tmp_path)["config"]
+
+    with pytest.raises(ValueError, match=message):
+        replace(
+            config,
+            work_budget=replace(config.work_budget, **{budget_field: limit}),
+        )
+
+
+@pytest.mark.parametrize(
+    ("budget_kind", "message", "expected_stage"),
+    [
+        ("serialized", "serialized evidence", "publication_preflight"),
+        ("entries", "bundle entries", "run_preflight"),
+    ],
+)
+def test_serialized_bundle_budget_rejects_before_normal_publication(
+    tmp_path,
+    budget_kind: str,
+    message: str,
+    expected_stage: str,
+) -> None:
+    arguments = _fixture(tmp_path)
+    if budget_kind == "serialized":
+        config_bytes = len(
+            discovery_runs._canonical_json(discovery_runs._config_payload(arguments["config"]))
+        )
+        changes = {"maximum_serialized_evidence_bytes": config_bytes + 256}
+    else:
+        changes = {"maximum_bundle_entries": 11}
+    arguments["config"] = replace(
+        arguments["config"],
+        work_budget=replace(arguments["config"].work_budget, **changes),
+    )
+
+    with pytest.raises(DiscoveryWorkBudgetViolation, match=message):
+        _run(arguments)
+
+    receipt = verify_trial_receipt(tmp_path / "DR-000501")
+    assert receipt.status is TerminalStatus.REJECTED
+    metrics = json.loads((tmp_path / "DR-000501" / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["work_budget"]["stage"] == expected_stage
+    assert not (tmp_path / "DR-000501" / "manifest.json").exists()
+    assert not (tmp_path / ".DR-000501.staging").exists()
+
+
+def test_missingness_policy_rejects_before_model_work_and_is_receipted(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(
+        tmp_path,
+        feature_names=("poc_velocity_close_1", "vwap_slope_close_1"),
+        missingness_policy=MissingnessPolicy(
+            policy_id="software-test-run-missingness-reject-v1",
+            maximum_total_drop_fraction=0.1,
+            maximum_per_feature_drop_fraction=0.1,
+            maximum_evidence_groups=100,
+        ),
+    )
+
+    def model_work_was_reached(*args, **kwargs):
+        raise AssertionError("missingness rejection reached model work")
+
+    monkeypatch.setattr(discovery_runs, "fit_pca", model_work_was_reached)
+    with pytest.raises(MissingnessPolicyViolation, match="drop fraction"):
+        _run(arguments)
+
+    receipt = verify_trial_receipt(tmp_path / "DR-000501")
+    assert receipt.status is TerminalStatus.REJECTED
+    metrics = json.loads((tmp_path / "DR-000501" / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["status"] == "rejected_missingness"
+    assert metrics["missingness"]["evidence"]["partition_role"] == "discovery"
 
 
 def test_regime_assignment_policy_and_hash_are_bound_to_verified_provenance(tmp_path) -> None:
@@ -905,18 +1227,18 @@ def test_production_discovery_module_exposes_no_legacy_replay_entrypoint() -> No
     assert "legacy_fixture_schema" not in {field.name for field in fields(DiscoveryRunConfig)}
 
 
-@pytest.mark.parametrize("artifact", ("snapshot", "feature publication"))
+@pytest.mark.parametrize("artifact", ("snapshot", "feature publication", "event publication"))
 def test_on_disk_manifest_byte_tamper_is_rejected_before_matrix_construction(
     tmp_path,
     monkeypatch,
     artifact: str,
 ) -> None:
     arguments = _fixture(tmp_path)
-    directory = (
-        arguments["snapshot_directory"]
-        if artifact == "snapshot"
-        else arguments["feature_publication_directory"]
-    )
+    directory = {
+        "snapshot": arguments["snapshot_directory"],
+        "feature publication": arguments["feature_publication_directory"],
+        "event publication": arguments["event_publication_directory"],
+    }[artifact]
     manifest_path = directory / "manifest.json"
     manifest_path.write_bytes(manifest_path.read_bytes() + b" ")
 
@@ -926,6 +1248,34 @@ def test_on_disk_manifest_byte_tamper_is_rejected_before_matrix_construction(
     monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
     with pytest.raises(ValueError, match=f"{artifact} manifest bytes"):
         _run(arguments)
+
+
+def test_discovery_binds_exact_published_events_before_model_work(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path)
+    bindings = list(arguments["event_bindings"])
+    first, second = bindings[:2]
+    bindings[0] = replace(first, event_id=second.event_id)
+    bindings[1] = replace(second, event_id=first.event_id)
+    arguments["event_bindings"] = tuple(bindings)
+
+    def model_work_was_reached(*args, **kwargs):
+        raise AssertionError("invalid event binding reached model work")
+
+    monkeypatch.setattr(discovery_runs, "fit_pca", model_work_was_reached)
+    with pytest.raises(ValueError, match="semantic content mismatch"):
+        _run(arguments)
+
+
+def test_discovery_event_bindings_are_keyed_not_positionally_bound(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+    arguments["event_bindings"] = tuple(reversed(arguments["event_bindings"]))
+
+    manifest = _run(arguments)
+
+    assert manifest.status == "completed"
 
 
 def test_internally_consistent_false_commit_is_rejected_against_runtime_head(

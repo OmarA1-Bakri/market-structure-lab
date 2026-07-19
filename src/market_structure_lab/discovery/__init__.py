@@ -1,16 +1,27 @@
 """Outcome-blind discovery boundaries."""
 
 from market_structure_lab.discovery.behaviours import (
+    BehaviourEventBinding,
     FeatureDistribution,
     FrozenBehaviour,
     freeze_behaviours,
+    validate_behaviour_event_bindings,
 )
 from market_structure_lab.discovery.evidence import (
     AIInterpretation,
     BehaviourEvidencePack,
 )
 from market_structure_lab.discovery.kmeans import KMeansResult, fit_kmeans, fit_projected_kmeans
-from market_structure_lab.discovery.matrix import FeatureMatrix, build_feature_matrix
+from market_structure_lab.discovery.matrix import (
+    FeatureMatrix,
+    MissingnessEvidence,
+    MissingnessEvidenceGroup,
+    MissingnessPolicy,
+    MissingnessPolicyViolation,
+    NormalizedFeatureMatrix,
+    build_feature_matrix,
+    normalize_feature_matrix,
+)
 from market_structure_lab.discovery.motifs import (
     MOTIF_ALGORITHM_VERSION,
     MOTIF_REGIME_ASSIGNMENT_VERSION,
@@ -37,6 +48,8 @@ from market_structure_lab.discovery.pca import PCAProjection, fit_pca, pca_proje
 from market_structure_lab.discovery.runs import (
     DiscoveryRunConfig,
     DiscoveryRunManifest,
+    DiscoveryWorkBudget,
+    DiscoveryWorkBudgetViolation,
     InterpretationManifest,
     publish_ai_interpretations,
     run_discovery,
@@ -83,6 +96,7 @@ __all__ = [
     "DiscoveryProvenance",
     "AIInterpretation",
     "BehaviourEvidencePack",
+    "BehaviourEventBinding",
     "ClusterObservation",
     "ClusterTransitionEstimate",
     "ClusterTransitionMatrix",
@@ -93,10 +107,17 @@ __all__ = [
     "TransitionUncertaintyPolicy",
     "FeatureDistribution",
     "FeatureMatrix",
+    "MissingnessEvidence",
+    "MissingnessEvidenceGroup",
+    "MissingnessPolicy",
+    "MissingnessPolicyViolation",
+    "NormalizedFeatureMatrix",
     "FrozenBehaviour",
     "FrozenDiscoverySplit",
     "DiscoveryRunConfig",
     "DiscoveryRunManifest",
+    "DiscoveryWorkBudget",
+    "DiscoveryWorkBudgetViolation",
     "InterpretationManifest",
     "KMeansResult",
     "MotifMatch",
@@ -127,6 +148,7 @@ __all__ = [
     "TimePartition",
     "adjusted_rand_index",
     "build_feature_matrix",
+    "normalize_feature_matrix",
     "build_contiguous_motif_sequences",
     "compress_dwell_runs",
     "discover_motifs",
@@ -139,6 +161,7 @@ __all__ = [
     "fit_pca",
     "fit_projected_kmeans",
     "freeze_behaviours",
+    "validate_behaviour_event_bindings",
     "freeze_discovery_provenance",
     "freeze_split",
     "make_discovery_input",

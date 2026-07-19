@@ -110,14 +110,14 @@ must not enter frozen experiment policy without independent justification.
 4. `llm-evaluation` only for the non-authoritative interpretation layer.
 5. Independent `validate-data` review of every published reliability-vector claim.
 
-### First real discovery
+### Task 14 first real discovery
 
 1. Freeze the mission, search space, negative controls, trial budget, and validator.
-2. Use `autoresearch-goal` only after that freeze and Phase 4 approval.
+2. Use `autoresearch-goal` only after that freeze, Task 13 completion, and final Phase B approval.
 3. Record every attempted configuration in `trial-receipt-v2`.
 4. Stop after outcome-blind behaviour publication; do not attach forward outcomes.
 
-### Phase 5 validation and later backtesting
+### Task 15 Phase 5 validation planning and later backtesting
 
 1. Create a separate consensus plan before outcomes are read.
 2. Review that plan with `quantitative-research` and, if separately approved and installed,
@@ -139,5 +139,5 @@ must not enter frozen experiment policy without independent justification.
    decide status.
 6. No skill may inspect the final holdout early, suppress failed trials, infer participant identity
    from OHLCV, or promote an edge.
-7. Re-run this sweep before Phase 5 planning because external skill quality and installed versions
-   can change.
+7. Re-run this sweep before Task 15 Phase 5 planning because external skill quality and installed
+   versions can change.

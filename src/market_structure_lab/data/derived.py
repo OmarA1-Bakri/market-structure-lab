@@ -11,7 +11,7 @@ import re
 import secrets
 import shutil
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -28,7 +28,7 @@ from market_structure_lab.core.artifact_io import (
     require_regular_directory,
     sha256_regular,
 )
-from market_structure_lab.features.models import FeatureRow
+from market_structure_lab.features.models import FeatureRow, FeatureValue
 from market_structure_lab.features.builder import (
     FeatureBuildBatch,
     FeatureBuildBatchLease,
@@ -52,13 +52,21 @@ _DATASET_ID = re.compile(r"^DS-[0-9]{6}$")
 _FEATURE_SET_ID = re.compile(r"^FS-[0-9]{6}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_EVENT_ID = re.compile(r"^EV-[0-9A-F]{64}$")
 PublicationKind = Literal["features", "events"]
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_LEAKAGE_AUDIT_BYTES = 4 * 1024 * 1024
 _MAX_PUBLICATION_ENTRIES = 1_000_000
+_MAX_PUBLICATION_ROWS = 1_000_000
+_MAX_PUBLICATION_PARTITIONS = 100_000
+_MAX_ROWS_PER_PART = 100_000
+_MAX_PUBLICATION_BUFFER_BYTES = 64 * 1024 * 1024
 _MAX_AUDITED_FEATURES = 10_000
 _MAX_REVIEWER_ID_LENGTH = 127
 _MAX_PUBLICATION_LOCK_BYTES = 4096
+_MAX_EVENT_BINDING_BATCH_ROWS = 100_000
+_MAX_EVENT_BINDING_INPUT_BYTES = 64 * 1024 * 1024
+_MAX_EVENT_SOURCE_INDEX_BATCH_ROWS = 10_000
 
 
 class PublicationBusyError(RuntimeError):
@@ -215,6 +223,9 @@ class LeakageAuditReceipt:
     approval_sha256: str
     publication_identity_sha256: str
     builder_output_sha256: str
+    input_snapshot_stream_sha256: str
+    starting_context_sha256: str
+    feature_build_budget_sha256: str
     published_content_sha256: str
     builder_output_row_count: int
     reviewer_id: str
@@ -234,6 +245,9 @@ class LeakageAuditReceipt:
         approval_sha256: str,
         publication_identity_sha256: str,
         builder_output_sha256: str,
+        input_snapshot_stream_sha256: str,
+        starting_context_sha256: str,
+        feature_build_budget_sha256: str,
         published_content_sha256: str,
         builder_output_row_count: int,
         reviewer_id: str,
@@ -242,12 +256,15 @@ class LeakageAuditReceipt:
         fields: tuple[FeatureLeakageFieldEvidence, ...],
     ) -> LeakageAuditReceipt:
         values: dict[str, object] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "feature_registry_sha256": feature_registry_sha256,
             "dependency_contract_sha256": dependency_contract_sha256,
             "approval_sha256": approval_sha256,
             "publication_identity_sha256": publication_identity_sha256,
             "builder_output_sha256": builder_output_sha256,
+            "input_snapshot_stream_sha256": input_snapshot_stream_sha256,
+            "starting_context_sha256": starting_context_sha256,
+            "feature_build_budget_sha256": feature_build_budget_sha256,
             "published_content_sha256": published_content_sha256,
             "builder_output_row_count": builder_output_row_count,
             "reviewer_id": reviewer_id,
@@ -270,7 +287,7 @@ class LeakageAuditReceipt:
         )
 
     def __post_init__(self) -> None:
-        if self.schema_version != 2:
+        if self.schema_version != 3:
             raise ValueError("unsupported leakage audit receipt schema")
         for value, label in (
             (self.feature_registry_sha256, "feature_registry_sha256"),
@@ -278,6 +295,9 @@ class LeakageAuditReceipt:
             (self.approval_sha256, "approval_sha256"),
             (self.publication_identity_sha256, "publication_identity_sha256"),
             (self.builder_output_sha256, "builder_output_sha256"),
+            (self.input_snapshot_stream_sha256, "input_snapshot_stream_sha256"),
+            (self.starting_context_sha256, "starting_context_sha256"),
+            (self.feature_build_budget_sha256, "feature_build_budget_sha256"),
             (self.published_content_sha256, "published_content_sha256"),
             (self.review_artifact_sha256, "review_artifact_sha256"),
             (self.receipt_sha256, "receipt_sha256"),
@@ -315,6 +335,18 @@ class LeakageAuditReceipt:
         ).hexdigest()
         if self.dependency_contract_sha256 != aggregate:
             raise ValueError("leakage receipt aggregate dependency checksum mismatch")
+        reconstructed_approval = LeakageAuditApproval(
+            schema_version=1,
+            feature_registry_sha256=self.feature_registry_sha256,
+            reviewer_id=self.reviewer_id,
+            review_artifact_sha256=self.review_artifact_sha256,
+            field_test_evidence=tuple(
+                (item.feature_name, item.tested_contract_sha256) for item in self.fields
+            ),
+            negative_test_evidence=self.negative_test_evidence,
+        )
+        if self.approval_sha256 != reconstructed_approval.sha256:
+            raise ValueError("leakage receipt approval identity mismatch")
         expected = hashlib.sha256(_canonical_json(self.logical_dict())).hexdigest()
         if self.receipt_sha256 != expected:
             raise ValueError("leakage audit receipt checksum mismatch")
@@ -327,6 +359,9 @@ class LeakageAuditReceipt:
             "approval_sha256": self.approval_sha256,
             "publication_identity_sha256": self.publication_identity_sha256,
             "builder_output_sha256": self.builder_output_sha256,
+            "input_snapshot_stream_sha256": self.input_snapshot_stream_sha256,
+            "starting_context_sha256": self.starting_context_sha256,
+            "feature_build_budget_sha256": self.feature_build_budget_sha256,
             "published_content_sha256": self.published_content_sha256,
             "builder_output_row_count": self.builder_output_row_count,
             "reviewer_id": self.reviewer_id,
@@ -398,6 +433,42 @@ class DerivedPublicationIdentity:
     @property
     def sha256(self) -> str:
         return hashlib.sha256(_canonical_json(asdict(self))).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedEventBinding:
+    """One event bound to its causal discovery row and publication identity.
+
+    ``row_id`` uses the discovery-matrix contract
+    ``symbol|timeframe|feature_timestamp``. The feature timestamp is the event
+    information cutoff minus exactly one canonical timeframe duration.
+    """
+
+    row_id: str
+    event_id: str
+    duration_seconds: float
+    event_publication_sha256: str
+
+    def __post_init__(self) -> None:
+        parts = self.row_id.split("|")
+        if len(parts) != 3:
+            raise ValueError("row_id must use symbol|timeframe|timestamp")
+        _safe_component(parts[0], "row_id symbol")
+        _safe_component(parts[1], "row_id timeframe")
+        if _iso_utc(_parse_utc(parts[2])) != parts[2]:
+            raise ValueError("row_id timestamp must use canonical UTC Z notation")
+        if _EVENT_ID.fullmatch(self.event_id) is None:
+            raise ValueError("event_id must be an EV-prefixed uppercase SHA-256")
+        if (
+            isinstance(self.duration_seconds, bool)
+            or not isinstance(self.duration_seconds, (float, int))
+            or not math.isfinite(float(self.duration_seconds))
+            or float(self.duration_seconds) <= 0.0
+        ):
+            raise ValueError("duration_seconds must be a positive finite number")
+        if re.fullmatch(r"[0-9a-f]{64}", self.event_publication_sha256) is None:
+            raise ValueError("event_publication_sha256 must be a lowercase SHA-256")
+        object.__setattr__(self, "duration_seconds", float(self.duration_seconds))
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,19 +548,33 @@ class DerivedPublicationManifest:
     parquet_schema: tuple[tuple[str, str], ...]
     evidence: DerivedEvidence
     feature_builder_output_sha256: str | None
+    feature_input_snapshot_stream_sha256: str | None
+    feature_starting_context_sha256: str | None
+    feature_build_budget_sha256: str | None
     feature_dependency_contract_sha256: str | None
     leakage_audit_receipt_sha256: str | None
     leakage_audit_artifact_sha256: str | None
+    source_feature_publication_sha256: str | None
+    source_feature_registry_sha256: str | None
+    source_feature_dependency_contract_sha256: str | None
+    source_leakage_audit_approval_sha256: str | None
+    source_leakage_audit_receipt_sha256: str | None
+    source_leakage_audit_artifact_sha256: str | None
+    source_feature_binding_count: int | None
+    source_feature_binding_sha256: str | None
+    source_feature_partitions: tuple[DerivedPartitionRecord, ...]
     partitions: tuple[DerivedPartitionRecord, ...]
     content_sha256: str
     publication_sha256: str
 
     def __post_init__(self) -> None:
-        if self.schema_version != 3:
+        if self.schema_version != 4:
             raise ValueError("unsupported derived publication manifest schema")
         if self.publication_kind not in ("features", "events"):
             raise ValueError("unsupported publication kind")
-        if self.row_count < 0 or self.max_rows_per_part < 1:
+        if self.row_count < 0 or self.row_count > _MAX_PUBLICATION_ROWS:
+            raise ValueError("invalid publication row limits")
+        if not 1 <= self.max_rows_per_part <= _MAX_ROWS_PER_PART:
             raise ValueError("invalid publication row limits")
         if not 0 <= self.max_buffered_rows <= self.max_rows_per_part:
             raise ValueError("max_buffered_rows exceeds the configured bound")
@@ -498,6 +583,8 @@ class DerivedPublicationManifest:
             raise ValueError("publication partitions must have unique deterministic ordering")
         if sum(item.row_count for item in self.partitions) != self.row_count:
             raise ValueError("partition row counts do not match publication row count")
+        if len(self.partitions) > _MAX_PUBLICATION_PARTITIONS:
+            raise ValueError("publication partition budget exceeded")
         for value, label in (
             (self.content_sha256, "content_sha256"),
             (self.publication_sha256, "publication_sha256"),
@@ -507,27 +594,100 @@ class DerivedPublicationManifest:
         if self.publication_kind == "features":
             if self.feature_builder_output_sha256 is None:
                 raise ValueError("feature publication requires a builder output checksum")
+            if self.feature_input_snapshot_stream_sha256 is None:
+                raise ValueError("feature publication requires an input snapshot stream checksum")
+            if self.feature_starting_context_sha256 is None:
+                raise ValueError("feature publication requires a starting context checksum")
+            if self.feature_build_budget_sha256 is None:
+                raise ValueError("feature publication requires a build budget checksum")
             if self.feature_dependency_contract_sha256 is None:
                 raise ValueError("feature publication requires a dependency contract checksum")
             if self.leakage_audit_receipt_sha256 is None:
                 raise ValueError("feature publication requires a leakage receipt checksum")
             if self.leakage_audit_artifact_sha256 is None:
                 raise ValueError("feature publication requires a leakage artifact checksum")
-        elif (
-            self.leakage_audit_receipt_sha256 is not None
-            or self.leakage_audit_artifact_sha256 is not None
-            or self.feature_builder_output_sha256 is not None
-            or self.feature_dependency_contract_sha256 is not None
-        ):
-            raise ValueError("event publication cannot carry a feature leakage receipt")
+            if (
+                any(
+                    value is not None
+                    for value in (
+                        self.source_feature_publication_sha256,
+                        self.source_feature_registry_sha256,
+                        self.source_feature_dependency_contract_sha256,
+                        self.source_leakage_audit_approval_sha256,
+                        self.source_leakage_audit_receipt_sha256,
+                        self.source_leakage_audit_artifact_sha256,
+                        self.source_feature_binding_count,
+                        self.source_feature_binding_sha256,
+                    )
+                )
+                or self.source_feature_partitions
+            ):
+                raise ValueError("feature publication cannot carry event source linkage")
+        else:
+            if any(
+                value is not None
+                for value in (
+                    self.feature_builder_output_sha256,
+                    self.feature_input_snapshot_stream_sha256,
+                    self.feature_starting_context_sha256,
+                    self.feature_build_budget_sha256,
+                    self.feature_dependency_contract_sha256,
+                    self.leakage_audit_receipt_sha256,
+                    self.leakage_audit_artifact_sha256,
+                )
+            ):
+                raise ValueError("event publication cannot carry a feature leakage receipt")
+            required_source = (
+                self.source_feature_publication_sha256,
+                self.source_feature_registry_sha256,
+                self.source_feature_dependency_contract_sha256,
+                self.source_leakage_audit_approval_sha256,
+                self.source_leakage_audit_receipt_sha256,
+                self.source_leakage_audit_artifact_sha256,
+                self.source_feature_binding_sha256,
+            )
+            if any(value is None for value in required_source):
+                raise ValueError("event publication requires complete source feature linkage")
+            if self.source_feature_binding_count != self.row_count:
+                raise ValueError("event source feature binding count must match event row count")
+            source_paths = tuple(item.path for item in self.source_feature_partitions)
+            if source_paths != tuple(sorted(source_paths)) or len(source_paths) != len(
+                set(source_paths)
+            ):
+                raise ValueError("source feature partitions must be unique and sorted")
         for optional_value, label in (
             (self.feature_builder_output_sha256, "feature_builder_output_sha256"),
+            (
+                self.feature_input_snapshot_stream_sha256,
+                "feature_input_snapshot_stream_sha256",
+            ),
+            (self.feature_starting_context_sha256, "feature_starting_context_sha256"),
+            (self.feature_build_budget_sha256, "feature_build_budget_sha256"),
             (
                 self.feature_dependency_contract_sha256,
                 "feature_dependency_contract_sha256",
             ),
             (self.leakage_audit_receipt_sha256, "leakage_audit_receipt_sha256"),
             (self.leakage_audit_artifact_sha256, "leakage_audit_artifact_sha256"),
+            (self.source_feature_publication_sha256, "source_feature_publication_sha256"),
+            (self.source_feature_registry_sha256, "source_feature_registry_sha256"),
+            (
+                self.source_feature_dependency_contract_sha256,
+                "source_feature_dependency_contract_sha256",
+            ),
+            (
+                self.source_leakage_audit_approval_sha256,
+                "source_leakage_audit_approval_sha256",
+            ),
+            (
+                self.source_leakage_audit_receipt_sha256,
+                "source_leakage_audit_receipt_sha256",
+            ),
+            (
+                self.source_leakage_audit_artifact_sha256,
+                "source_leakage_audit_artifact_sha256",
+            ),
+            (self.source_feature_binding_sha256, "source_feature_binding_sha256"),
         ):
             if optional_value is not None and _SHA256.fullmatch(optional_value) is None:
                 raise ValueError(f"{label} must be a SHA-256 hex digest or None")
@@ -545,9 +705,23 @@ class DerivedPublicationManifest:
             "parquet_schema": dict(self.parquet_schema),
             "evidence": self.evidence.to_dict(),
             "feature_builder_output_sha256": self.feature_builder_output_sha256,
+            "feature_input_snapshot_stream_sha256": self.feature_input_snapshot_stream_sha256,
+            "feature_starting_context_sha256": self.feature_starting_context_sha256,
+            "feature_build_budget_sha256": self.feature_build_budget_sha256,
             "feature_dependency_contract_sha256": self.feature_dependency_contract_sha256,
             "leakage_audit_receipt_sha256": self.leakage_audit_receipt_sha256,
             "leakage_audit_artifact_sha256": self.leakage_audit_artifact_sha256,
+            "source_feature_publication_sha256": self.source_feature_publication_sha256,
+            "source_feature_registry_sha256": self.source_feature_registry_sha256,
+            "source_feature_dependency_contract_sha256": (
+                self.source_feature_dependency_contract_sha256
+            ),
+            "source_leakage_audit_approval_sha256": (self.source_leakage_audit_approval_sha256),
+            "source_leakage_audit_receipt_sha256": (self.source_leakage_audit_receipt_sha256),
+            "source_leakage_audit_artifact_sha256": (self.source_leakage_audit_artifact_sha256),
+            "source_feature_binding_count": self.source_feature_binding_count,
+            "source_feature_binding_sha256": self.source_feature_binding_sha256,
+            "source_feature_partitions": [asdict(item) for item in self.source_feature_partitions],
             "partitions": [asdict(item) for item in self.partitions],
             "content_sha256": self.content_sha256,
         }
@@ -622,6 +796,114 @@ class _EventEvidenceCounter:
         self._finish_stream()
 
 
+class _EventSourceBinding:
+    """Bounded verifier and digest for event-to-feature-row provenance."""
+
+    def __init__(
+        self,
+        *,
+        directory: Path,
+        manifest: DerivedPublicationManifest,
+        registry: FeatureRegistrySnapshot,
+    ) -> None:
+        self.directory = directory
+        self.manifest = manifest
+        self.registry = registry
+        self._digest = hashlib.sha256()
+        self._partitions: dict[str, DerivedPartitionRecord] = {}
+        self._partition_indexes: dict[
+            str,
+            dict[tuple[str, str, int, datetime], str],
+        ] = {}
+        self._indexed_row_count = 0
+        self._records_by_stream: dict[tuple[str, str], tuple[DerivedPartitionRecord, ...]] = {
+            stream: tuple(sorted(records, key=lambda item: item.path))
+            for stream, records in _partition_records_by_stream(manifest.partitions).items()
+        }
+        self.count = 0
+
+    @property
+    def sha256(self) -> str:
+        return self._digest.hexdigest()
+
+    @property
+    def partitions(self) -> tuple[DerivedPartitionRecord, ...]:
+        return tuple(self._partitions[path] for path in sorted(self._partitions))
+
+    def add(self, event: Any) -> None:
+        row = _event_feature_row(event)
+        matches = tuple(
+            record
+            for record in self._records_by_stream.get((row.symbol, row.timeframe), ())
+            if _parse_utc(record.min_timestamp) <= row.timestamp <= _parse_utc(record.max_timestamp)
+        )
+        if len(matches) != 1:
+            raise ValueError("event feature row is not backed by the source feature publication")
+        record = matches[0]
+        row_sha256 = hashlib.sha256(row.canonical_json().encode("utf-8")).hexdigest()
+        index = self._partition_index(record)
+        key = (row.symbol, row.timeframe, row.segment_id, row.timestamp)
+        if index.get(key) != row_sha256:
+            raise ValueError("event feature row is not backed by the source feature publication")
+        self._digest.update(
+            _canonical_json(
+                {
+                    "event_id": event.event_id,
+                    "source_feature_row_sha256": row_sha256,
+                    "source_partition_path": record.path,
+                    "source_partition_sha256": record.sha256,
+                }
+            )
+        )
+        self._digest.update(b"\n")
+        self._partitions[record.path] = record
+        if len(self._partitions) > _MAX_PUBLICATION_ENTRIES:
+            raise ValueError("event source partition evidence exceeds the bounded entry limit")
+        self.count += 1
+
+    def _partition_index(
+        self,
+        record: DerivedPartitionRecord,
+    ) -> dict[tuple[str, str, int, datetime], str]:
+        cached = self._partition_indexes.get(record.path)
+        if cached is not None:
+            return cached
+        path = self.directory / _validated_partition_path(record.path)
+        if sha256_regular(path) != record.sha256:
+            raise ValueError("source feature partition changed during event publication")
+        index: dict[tuple[str, str, int, datetime], str] = {}
+        columns = tuple(_feature_schema(self.registry))
+        batches = (
+            pl.scan_parquet(path)
+            .select(columns)
+            .collect_batches(
+                chunk_size=_MAX_EVENT_SOURCE_INDEX_BATCH_ROWS,
+                maintain_order=True,
+            )
+        )
+        for batch in batches:
+            if batch.height > _MAX_EVENT_SOURCE_INDEX_BATCH_ROWS:
+                raise RuntimeError("event source index exceeded its bounded batch size")
+            for payload in batch.iter_rows(named=True):
+                actual = _feature_row_from_payload(payload, self.registry)
+                key = (
+                    actual.symbol,
+                    actual.timeframe,
+                    actual.segment_id,
+                    actual.timestamp,
+                )
+                if key in index:
+                    raise ValueError("source feature partition contains a duplicate row identity")
+                index[key] = hashlib.sha256(actual.canonical_json().encode("utf-8")).hexdigest()
+                self._indexed_row_count += 1
+                if self._indexed_row_count > _MAX_PUBLICATION_ROWS:
+                    raise ValueError("event source index exceeds the publication row budget")
+        if len(index) != record.row_count:
+            raise ValueError("source feature partition row count changed during event publication")
+        self._partition_indexes[record.path] = index
+        return index
+
+
 def publish_feature_rows(
     batch: FeatureBuildBatch,
     *,
@@ -633,12 +915,15 @@ def publish_feature_rows(
 ) -> DerivedPublicationManifest:
     """Publish registered feature rows with a fixed bounded Parquet row buffer."""
 
+    _validate_max_rows_per_part(max_rows_per_part)
     if not isinstance(batch, FeatureBuildBatch):
         raise TypeError("feature publication requires a producer-bound FeatureBuildBatch")
     registry_snapshot = registry.snapshot()
     _validate_registry_identity(identity, registry_snapshot)
     _validate_leakage_audit_approval(identity, registry_snapshot, leakage_audit)
     batch_lease, batch_metadata = _validate_feature_build_batch(batch, registry_snapshot)
+    _require_publication_row_budget(batch_metadata.row_count)
+    _require_publication_partition_budget(batch_metadata.row_count, max_rows_per_part)
     _preflight_leakage_receipt(identity, registry_snapshot, leakage_audit, batch_metadata)
     if identity.normalizer_artifact_sha256 is None:
         raise ValueError("feature publication requires a normalizer artifact SHA-256")
@@ -686,26 +971,43 @@ def publish_market_events(
     output_root: str | Path,
     identity: DerivedPublicationIdentity,
     registry: FeatureRegistry,
+    source_feature_directory: str | Path,
+    source_feature_manifest: DerivedPublicationManifest,
     max_rows_per_part: int = 100_000,
 ) -> DerivedPublicationManifest:
     """Publish exact ``MarketEvent`` rows without widening their Parquet schema."""
 
     from market_structure_lab.events.models import MarketEvent
 
+    _validate_max_rows_per_part(max_rows_per_part)
+    if isinstance(events, Sized):
+        _require_publication_row_budget(len(events))
+        _require_publication_partition_budget(len(events), max_rows_per_part)
     registry_snapshot = registry.snapshot()
     _validate_registry_identity(identity, registry_snapshot)
+    source_binding = _preflight_event_source(
+        directory=Path(source_feature_directory),
+        manifest=source_feature_manifest,
+        identity=identity,
+        registry=registry_snapshot,
+    )
     schema = _event_schema(registry_snapshot)
     expected_fields = {item.name for item in fields(MarketEvent)}
     counter = _EventEvidenceCounter()
 
     def converted() -> Iterable[tuple[dict[str, object], datetime, tuple[object, ...]]]:
         previous_start: tuple[str, str, int, datetime] | None = None
+        event_count = 0
         for event in events:
+            if event_count >= _MAX_PUBLICATION_ROWS:
+                raise ValueError("publication row budget exceeded")
+            event_count += 1
             if not isinstance(event, MarketEvent):
                 raise TypeError("events must contain only MarketEvent values")
             if {item.name for item in fields(event)} != expected_fields:
                 raise ValueError("MarketEvent schema does not match the frozen publication schema")
             _validate_event_identity(event, identity, registry_snapshot)
+            source_binding.add(event)
             _audit_names(event.feature_values)
             _audit_names(event.metadata)
             event_type = event.kind.value
@@ -764,6 +1066,7 @@ def publish_market_events(
         max_rows_per_part=max_rows_per_part,
         feature_names=registry_snapshot.names,
         event_counter=counter,
+        event_source_binding=source_binding,
     )
 
 
@@ -787,9 +1090,25 @@ def read_derived_manifest(path: str | Path) -> DerivedPublicationManifest:
             parquet_schema=tuple(payload["parquet_schema"].items()),
             evidence=DerivedEvidence(**raw_evidence),
             feature_builder_output_sha256=payload["feature_builder_output_sha256"],
+            feature_input_snapshot_stream_sha256=payload["feature_input_snapshot_stream_sha256"],
+            feature_starting_context_sha256=payload["feature_starting_context_sha256"],
+            feature_build_budget_sha256=payload["feature_build_budget_sha256"],
             feature_dependency_contract_sha256=payload["feature_dependency_contract_sha256"],
             leakage_audit_receipt_sha256=payload["leakage_audit_receipt_sha256"],
             leakage_audit_artifact_sha256=payload["leakage_audit_artifact_sha256"],
+            source_feature_publication_sha256=payload["source_feature_publication_sha256"],
+            source_feature_registry_sha256=payload["source_feature_registry_sha256"],
+            source_feature_dependency_contract_sha256=payload[
+                "source_feature_dependency_contract_sha256"
+            ],
+            source_leakage_audit_approval_sha256=payload["source_leakage_audit_approval_sha256"],
+            source_leakage_audit_receipt_sha256=payload["source_leakage_audit_receipt_sha256"],
+            source_leakage_audit_artifact_sha256=payload["source_leakage_audit_artifact_sha256"],
+            source_feature_binding_count=payload["source_feature_binding_count"],
+            source_feature_binding_sha256=payload["source_feature_binding_sha256"],
+            source_feature_partitions=tuple(
+                DerivedPartitionRecord(**item) for item in payload["source_feature_partitions"]
+            ),
             partitions=tuple(DerivedPartitionRecord(**item) for item in payload["partitions"]),
             content_sha256=str(payload["content_sha256"]),
             publication_sha256=str(payload["publication_sha256"]),
@@ -809,6 +1128,9 @@ def read_leakage_audit_receipt(path: str | Path) -> LeakageAuditReceipt:
             approval_sha256=str(payload["approval_sha256"]),
             publication_identity_sha256=str(payload["publication_identity_sha256"]),
             builder_output_sha256=str(payload["builder_output_sha256"]),
+            input_snapshot_stream_sha256=str(payload["input_snapshot_stream_sha256"]),
+            starting_context_sha256=str(payload["starting_context_sha256"]),
+            feature_build_budget_sha256=str(payload["feature_build_budget_sha256"]),
             published_content_sha256=str(payload["published_content_sha256"]),
             builder_output_row_count=int(payload["builder_output_row_count"]),
             reviewer_id=str(payload["reviewer_id"]),
@@ -884,6 +1206,9 @@ def verify_derived_publication(
             or receipt.approval_sha256 != active.identity.leakage_audit_approval_sha256
             or receipt.publication_identity_sha256 != active.identity.sha256
             or receipt.builder_output_sha256 != active.feature_builder_output_sha256
+            or receipt.input_snapshot_stream_sha256 != active.feature_input_snapshot_stream_sha256
+            or receipt.starting_context_sha256 != active.feature_starting_context_sha256
+            or receipt.feature_build_budget_sha256 != active.feature_build_budget_sha256
             or receipt.published_content_sha256 != active.content_sha256
             or receipt.builder_output_row_count != active.row_count
         ):
@@ -915,6 +1240,194 @@ def verify_derived_publication(
         counted += partition.row_count
     if counted != active.row_count:
         raise ValueError("partition row counts do not match publication row count")
+
+
+def iter_published_event_bindings(
+    directory: str | Path,
+    manifest: DerivedPublicationManifest,
+    *,
+    maximum_rows_per_batch: int = 10_000,
+) -> Iterator[PublishedEventBinding]:
+    """Stream canonical event bindings from one exact verified publication.
+
+    Partition order and Parquet row order are preserved. The causal feature-row
+    timestamp is ``information_cutoff - timeframe_duration(timeframe)``, matching
+    the discovery matrix's ``symbol|timeframe|timestamp`` identity.
+    """
+
+    if (
+        isinstance(maximum_rows_per_batch, bool)
+        or not isinstance(maximum_rows_per_batch, int)
+        or not 1 <= maximum_rows_per_batch <= _MAX_EVENT_BINDING_BATCH_ROWS
+    ):
+        raise ValueError(
+            "maximum_rows_per_batch must be a positive integer within the event binding limit"
+        )
+    verify_derived_publication(directory, manifest)
+    if manifest.publication_kind != "events":
+        raise ValueError("published event bindings require an event publication")
+    if manifest.row_count > _MAX_PUBLICATION_ENTRIES:
+        raise ValueError("event publication exceeds the bounded binding row limit")
+    schema = dict(manifest.parquet_schema)
+    required_schema = {
+        "event_id": str(pl.String),
+        "event_type": str(pl.String),
+        "start": str(pl.Datetime("us", "UTC")),
+        "end": str(pl.Datetime("us", "UTC")),
+        "information_cutoff": str(pl.Datetime("us", "UTC")),
+        "symbol": str(pl.String),
+        "timeframe": str(pl.String),
+        "segment_id": str(pl.Int64),
+        "dataset_version": str(pl.String),
+        "config_version": str(pl.String),
+        "profile_version": str(pl.String),
+        "window_policy_id": str(pl.String),
+        "feature_set_id": str(pl.String),
+        "registry_sha256": str(pl.String),
+    }
+    if any(schema.get(name) != dtype for name, dtype in required_schema.items()):
+        raise ValueError("event publication schema does not support canonical bindings")
+
+    root = Path(directory)
+    columns = tuple(required_schema)
+    yielded = 0
+    previous_key: tuple[object, ...] | None = None
+    for partition in manifest.partitions:
+        path = root / _validated_partition_path(partition.path)
+        batches = (
+            pl.scan_parquet(path)
+            .select(columns)
+            .collect_batches(chunk_size=maximum_rows_per_batch, maintain_order=True)
+        )
+        for batch in batches:
+            if batch.height > maximum_rows_per_batch:
+                raise RuntimeError("event binding reader exceeded its bounded batch size")
+            for payload in batch.iter_rows(named=True):
+                binding, key = _published_event_binding(payload, manifest)
+                if previous_key is not None and key < previous_key:
+                    raise ValueError("event publication rows are not in deterministic order")
+                if key == previous_key:
+                    raise ValueError("event publication contains a duplicate event row")
+                previous_key = key
+                yielded += 1
+                yield binding
+    if yielded != manifest.row_count:
+        raise ValueError("event publication binding count does not match its manifest")
+
+
+def verify_published_event_bindings(
+    directory: str | Path,
+    manifest: DerivedPublicationManifest,
+    bindings: Iterable[PublishedEventBinding],
+    *,
+    expected_row_ids: Sequence[str],
+    maximum_rows_per_batch: int = 10_000,
+) -> None:
+    """Verify exact row-keyed event/duration bindings with bounded materialization."""
+
+    if isinstance(bindings, (str, bytes)) or not isinstance(bindings, Iterable):
+        raise TypeError("bindings must be an iterable of PublishedEventBinding values")
+    if isinstance(expected_row_ids, (str, bytes)) or not isinstance(expected_row_ids, Sequence):
+        raise TypeError("expected_row_ids must be a sequence")
+    row_ids = tuple(expected_row_ids)
+    if len(row_ids) > _MAX_PUBLICATION_ENTRIES:
+        raise ValueError("expected_row_ids exceed the bounded binding row limit")
+    if any(not isinstance(row_id, str) or not row_id for row_id in row_ids):
+        raise ValueError("expected_row_ids must contain non-empty strings")
+    if len(set(row_ids)) != len(row_ids):
+        raise ValueError("expected_row_ids contain a duplicate row_id")
+    binding_input_bytes = sum(len(row_id.encode("utf-8")) for row_id in row_ids)
+    if binding_input_bytes > _MAX_EVENT_BINDING_INPUT_BYTES:
+        raise ValueError("binding input byte budget exceeded")
+
+    expected_row_id_set = set(row_ids)
+    supplied_by_row_id: dict[str, PublishedEventBinding] = {}
+    supplied_event_ids: set[str] = set()
+    for index, binding in enumerate(bindings):
+        if index >= _MAX_PUBLICATION_ENTRIES:
+            raise ValueError("published event bindings exceed the bounded binding row limit")
+        if not isinstance(binding, PublishedEventBinding):
+            raise TypeError("bindings must contain PublishedEventBinding values")
+        if binding.event_publication_sha256 != manifest.publication_sha256:
+            raise ValueError("binding references a foreign event publication")
+        binding_input_bytes += len(_canonical_json(asdict(binding)))
+        if binding_input_bytes > _MAX_EVENT_BINDING_INPUT_BYTES:
+            raise ValueError("binding input byte budget exceeded")
+        if binding.row_id in supplied_by_row_id or binding.event_id in supplied_event_ids:
+            raise ValueError("published event bindings contain a duplicate binding identity")
+        supplied_by_row_id[binding.row_id] = binding
+        supplied_event_ids.add(binding.event_id)
+    if set(supplied_by_row_id) != expected_row_id_set:
+        if expected_row_id_set - set(supplied_by_row_id):
+            raise ValueError("published event bindings are missing a binding")
+        raise ValueError("published event bindings contain an extra binding")
+
+    canonical = iter_published_event_bindings(
+        directory,
+        manifest,
+        maximum_rows_per_batch=maximum_rows_per_batch,
+    )
+    canonical_row_ids: set[str] = set()
+    canonical_event_ids: set[str] = set()
+    for expected_binding in canonical:
+        if (
+            expected_binding.row_id in canonical_row_ids
+            or expected_binding.event_id in canonical_event_ids
+        ):
+            raise ValueError("event publication contains a duplicate binding identity")
+        canonical_row_ids.add(expected_binding.row_id)
+        canonical_event_ids.add(expected_binding.event_id)
+        if expected_binding.row_id not in expected_row_id_set:
+            raise ValueError("event publication row coverage does not match expected_row_ids")
+        if supplied_by_row_id[expected_binding.row_id] != expected_binding:
+            raise ValueError("published event binding semantic content mismatch")
+    if canonical_row_ids != expected_row_id_set:
+        raise ValueError("event publication is missing an expected row binding")
+
+
+def _published_event_binding(
+    payload: Mapping[str, object],
+    manifest: DerivedPublicationManifest,
+) -> tuple[PublishedEventBinding, tuple[object, ...]]:
+    start = cast(datetime, payload["start"])
+    end = cast(datetime, payload["end"])
+    cutoff = cast(datetime, payload["information_cutoff"])
+    symbol = cast(str, payload["symbol"])
+    timeframe = cast(str, payload["timeframe"])
+    event_id = cast(str, payload["event_id"])
+    _require_utc(start, "event start")
+    _require_utc(end, "event end")
+    _require_utc(cutoff, "event information_cutoff")
+    if cutoff != end:
+        raise ValueError("event information_cutoff must equal its exclusive end")
+    expected_identity = {
+        "dataset_version": manifest.identity.dataset_version,
+        "config_version": manifest.identity.config_version,
+        "profile_version": manifest.identity.profile_version,
+        "window_policy_id": manifest.identity.window_policy_id,
+        "feature_set_id": manifest.identity.feature_set_id,
+        "registry_sha256": manifest.identity.feature_registry_sha256,
+    }
+    if any(payload[name] != value for name, value in expected_identity.items()):
+        raise ValueError("event publication row identity does not match its manifest")
+    feature_timestamp = cutoff - _timeframe_duration(timeframe)
+    row_id = f"{symbol}|{timeframe}|{_iso_utc(feature_timestamp)}"
+    binding = PublishedEventBinding(
+        row_id=row_id,
+        event_id=event_id,
+        duration_seconds=(end - start).total_seconds(),
+        event_publication_sha256=manifest.publication_sha256,
+    )
+    key = (
+        symbol,
+        timeframe,
+        cast(int, payload["segment_id"]),
+        start,
+        end,
+        cast(str, payload["event_type"]),
+        event_id,
+    )
+    return binding, key
 
 
 def feature_partition_records(
@@ -1003,6 +1516,7 @@ def _existing_publication(
     max_rows_per_part: int,
     feature_names: tuple[str, ...],
     event_counter: _EventEvidenceCounter | None,
+    event_source_binding: _EventSourceBinding | None,
 ) -> DerivedPublicationManifest | None:
     if not final.exists():
         return None
@@ -1017,6 +1531,8 @@ def _existing_publication(
         feature_names=feature_names,
         event_counter=event_counter,
     )
+    if event_source_binding is not None:
+        _verify_event_source_manifest_fields(active, event_source_binding)
     return active
 
 
@@ -1109,11 +1625,9 @@ def _publish(
     registry_snapshot: FeatureRegistrySnapshot | None = None,
     leakage_audit: LeakageAuditApproval | None = None,
     feature_batch_metadata: FeatureBuildBatchMetadata | None = None,
+    event_source_binding: _EventSourceBinding | None = None,
 ) -> DerivedPublicationManifest:
-    if isinstance(max_rows_per_part, bool) or not isinstance(max_rows_per_part, int):
-        raise TypeError("max_rows_per_part must be an integer")
-    if max_rows_per_part < 1:
-        raise ValueError("max_rows_per_part must be positive")
+    _validate_max_rows_per_part(max_rows_per_part)
     final, base = _publication_paths(output_root, identity, kind)
     active = _existing_publication(
         final,
@@ -1123,6 +1637,7 @@ def _publish(
         max_rows_per_part=max_rows_per_part,
         feature_names=feature_names,
         event_counter=event_counter,
+        event_source_binding=event_source_binding,
     )
     if active is not None:
         return active
@@ -1136,6 +1651,7 @@ def _publish(
             max_rows_per_part=max_rows_per_part,
             feature_names=feature_names,
             event_counter=event_counter,
+            event_source_binding=event_source_binding,
         )
         if active is not None:
             return active
@@ -1152,6 +1668,7 @@ def _publish(
             registry_snapshot=registry_snapshot,
             leakage_audit=leakage_audit,
             feature_batch_metadata=feature_batch_metadata,
+            event_source_binding=event_source_binding,
         )
     finally:
         _release_publication_ownership(ownership)
@@ -1171,13 +1688,17 @@ def _publish_owned(
     registry_snapshot: FeatureRegistrySnapshot | None,
     leakage_audit: LeakageAuditApproval | None,
     feature_batch_metadata: FeatureBuildBatchMetadata | None,
+    event_source_binding: _EventSourceBinding | None,
 ) -> DerivedPublicationManifest:
+    if kind == "events" and event_source_binding is None:
+        raise RuntimeError("event publication lost its source feature linkage")
     identity_path = staging / _IDENTITY_NAME
     identity_text = _json_text(asdict(identity)) + "\n"
     _atomic_write_text(identity_path, identity_text)
 
     records: list[DerivedPartitionRecord] = []
     buffer: list[dict[str, object]] = []
+    buffered_bytes = 0
     current_partition: tuple[str, str, int, int] | None = None
     part_numbers: Counter[tuple[str, str, int, int]] = Counter()
     previous_key: tuple[object, ...] | None = None
@@ -1187,9 +1708,11 @@ def _publish_owned(
     content_digest = hashlib.sha256()
 
     def flush() -> None:
-        nonlocal buffer
+        nonlocal buffer, buffered_bytes
         if not buffer or current_partition is None:
             return
+        if len(records) >= _MAX_PUBLICATION_PARTITIONS:
+            raise ValueError("publication partition budget exceeded")
         part_numbers[current_partition] += 1
         part_number = part_numbers[current_partition]
         symbol, timeframe, year, month = current_partition
@@ -1228,15 +1751,23 @@ def _publish_owned(
             )
         )
         buffer = []
+        buffered_bytes = 0
 
     for payload, partition_timestamp, key in rows:
+        if total >= _MAX_PUBLICATION_ROWS:
+            raise ValueError("publication row budget exceeded")
         _require_utc(partition_timestamp, "partition timestamp")
         if previous_key is not None and key < previous_key:
             raise ValueError(f"out-of-order {kind} row")
         if key == previous_key:
             raise ValueError(f"duplicate {kind} row")
         previous_key = key
-        content_digest.update(_canonical_row(payload))
+        canonical_row = _canonical_row(payload)
+        if len(canonical_row) > _MAX_PUBLICATION_BUFFER_BYTES or (
+            buffered_bytes + len(canonical_row) > _MAX_PUBLICATION_BUFFER_BYTES
+        ):
+            raise ValueError("publication buffer byte budget exceeded")
+        content_digest.update(canonical_row)
         content_digest.update(b"\n")
         partition = (
             cast(str, payload["symbol"]),
@@ -1251,6 +1782,7 @@ def _publish_owned(
         null_values += row_nulls
         warmup_rows += int(row_nulls > 0)
         buffer.append(payload)
+        buffered_bytes += len(canonical_row)
         max_buffered = max(max_buffered, len(buffer))
         total += 1
         minimum = partition_timestamp if minimum is None else min(minimum, partition_timestamp)
@@ -1288,6 +1820,9 @@ def _publish_owned(
             registry=registry_snapshot,
             approval=leakage_audit,
             builder_output_sha256=feature_batch_metadata.content_sha256,
+            input_snapshot_stream_sha256=(feature_batch_metadata.input_snapshot_stream_sha256),
+            starting_context_sha256=feature_batch_metadata.starting_context_sha256,
+            feature_build_budget_sha256=_feature_build_budget_sha256(feature_batch_metadata),
             published_content_sha256=content_sha256,
             builder_output_row_count=total,
         )
@@ -1300,7 +1835,7 @@ def _publish_owned(
         receipt_artifact_sha256 = _sha256_file(staging / LEAKAGE_AUDIT_NAME)
     schema_pairs = tuple(sorted((name, str(dtype)) for name, dtype in schema.items()))
     provisional = DerivedPublicationManifest(
-        schema_version=3,
+        schema_version=4,
         publication_kind=kind,
         identity=identity,
         row_count=total,
@@ -1313,11 +1848,65 @@ def _publish_owned(
         feature_builder_output_sha256=(
             feature_batch_metadata.content_sha256 if feature_batch_metadata is not None else None
         ),
+        feature_input_snapshot_stream_sha256=(
+            feature_batch_metadata.input_snapshot_stream_sha256
+            if feature_batch_metadata is not None
+            else None
+        ),
+        feature_starting_context_sha256=(
+            feature_batch_metadata.starting_context_sha256
+            if feature_batch_metadata is not None
+            else None
+        ),
+        feature_build_budget_sha256=(
+            _feature_build_budget_sha256(feature_batch_metadata)
+            if feature_batch_metadata is not None
+            else None
+        ),
         feature_dependency_contract_sha256=(
             registry_snapshot.dependency_contract_sha256 if registry_snapshot is not None else None
         ),
         leakage_audit_receipt_sha256=receipt_sha256,
         leakage_audit_artifact_sha256=receipt_artifact_sha256,
+        source_feature_publication_sha256=(
+            event_source_binding.manifest.publication_sha256
+            if event_source_binding is not None
+            else None
+        ),
+        source_feature_registry_sha256=(
+            event_source_binding.manifest.identity.feature_registry_sha256
+            if event_source_binding is not None
+            else None
+        ),
+        source_feature_dependency_contract_sha256=(
+            event_source_binding.manifest.feature_dependency_contract_sha256
+            if event_source_binding is not None
+            else None
+        ),
+        source_leakage_audit_approval_sha256=(
+            event_source_binding.manifest.identity.leakage_audit_approval_sha256
+            if event_source_binding is not None
+            else None
+        ),
+        source_leakage_audit_receipt_sha256=(
+            event_source_binding.manifest.leakage_audit_receipt_sha256
+            if event_source_binding is not None
+            else None
+        ),
+        source_leakage_audit_artifact_sha256=(
+            event_source_binding.manifest.leakage_audit_artifact_sha256
+            if event_source_binding is not None
+            else None
+        ),
+        source_feature_binding_count=(
+            event_source_binding.count if event_source_binding is not None else None
+        ),
+        source_feature_binding_sha256=(
+            event_source_binding.sha256 if event_source_binding is not None else None
+        ),
+        source_feature_partitions=(
+            event_source_binding.partitions if event_source_binding is not None else ()
+        ),
         partitions=ordered,
         content_sha256=content_sha256,
         publication_sha256="0" * 64,
@@ -1340,6 +1929,37 @@ def _publish_owned(
     except FileExistsError:
         raise FileExistsError("derived publication was published concurrently") from None
     return manifest
+
+
+def _verify_event_source_manifest_fields(
+    manifest: DerivedPublicationManifest,
+    binding: _EventSourceBinding,
+) -> None:
+    source = binding.manifest
+    expected = (
+        source.publication_sha256,
+        source.identity.feature_registry_sha256,
+        source.feature_dependency_contract_sha256,
+        source.identity.leakage_audit_approval_sha256,
+        source.leakage_audit_receipt_sha256,
+        source.leakage_audit_artifact_sha256,
+        binding.count,
+        binding.sha256,
+        binding.partitions,
+    )
+    actual = (
+        manifest.source_feature_publication_sha256,
+        manifest.source_feature_registry_sha256,
+        manifest.source_feature_dependency_contract_sha256,
+        manifest.source_leakage_audit_approval_sha256,
+        manifest.source_leakage_audit_receipt_sha256,
+        manifest.source_leakage_audit_artifact_sha256,
+        manifest.source_feature_binding_count,
+        manifest.source_feature_binding_sha256,
+        manifest.source_feature_partitions,
+    )
+    if actual != expected:
+        raise FileExistsError("event publication uses different source feature linkage")
 
 
 def _feature_schema(registry: FeatureRegistrySnapshot) -> pl.Schema:
@@ -1518,6 +2138,9 @@ def _preflight_leakage_receipt(
         registry=registry,
         approval=approval,
         builder_output_sha256=metadata.content_sha256,
+        input_snapshot_stream_sha256=metadata.input_snapshot_stream_sha256,
+        starting_context_sha256=metadata.starting_context_sha256,
+        feature_build_budget_sha256=_feature_build_budget_sha256(metadata),
         published_content_sha256="0" * 64,
         builder_output_row_count=metadata.row_count,
     )
@@ -1531,6 +2154,9 @@ def _build_leakage_audit_receipt(
     registry: FeatureRegistrySnapshot,
     approval: LeakageAuditApproval,
     builder_output_sha256: str,
+    input_snapshot_stream_sha256: str,
+    starting_context_sha256: str,
+    feature_build_budget_sha256: str,
     published_content_sha256: str,
     builder_output_row_count: int,
 ) -> LeakageAuditReceipt:
@@ -1541,6 +2167,9 @@ def _build_leakage_audit_receipt(
         approval_sha256=approval.sha256,
         publication_identity_sha256=identity.sha256,
         builder_output_sha256=builder_output_sha256,
+        input_snapshot_stream_sha256=input_snapshot_stream_sha256,
+        starting_context_sha256=starting_context_sha256,
+        feature_build_budget_sha256=feature_build_budget_sha256,
         published_content_sha256=published_content_sha256,
         builder_output_row_count=builder_output_row_count,
         reviewer_id=approval.reviewer_id,
@@ -1563,6 +2192,18 @@ def _build_leakage_audit_receipt(
             for definition in registry.definitions
         ),
     )
+
+
+def _feature_build_budget_sha256(metadata: FeatureBuildBatchMetadata) -> str:
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "maximum_row_bytes": metadata.maximum_row_bytes,
+                "maximum_total_bytes": metadata.maximum_total_bytes,
+                "schema_version": 1,
+            }
+        )
+    ).hexdigest()
 
 
 def _validate_feature_identity(row: FeatureRow, identity: DerivedPublicationIdentity) -> None:
@@ -1595,22 +2236,48 @@ def _validate_event_identity(
             raise ValueError(f"event {name} does not match publication identity")
     if event.information_cutoff != event.end:
         raise ValueError("event information_cutoff must equal its exclusive end")
-    registry.validate_row(
-        FeatureRow(
-            timestamp=event.end - _timeframe_duration(event.timeframe),
-            information_cutoff=event.end,
-            symbol=event.symbol,
-            timeframe=event.timeframe,
-            segment_id=event.segment_id,
-            dataset_version=event.dataset_version,
-            config_version=event.config_version,
-            profile_version=event.profile_version,
-            window_policy_id=event.window_policy_id,
-            feature_set_id=event.feature_set_id,
-            registry_id=event.registry_id,
-            values=event.feature_values,
-        )
+    registry.validate_row(_event_feature_row(event))
+
+
+def _event_feature_row(event: Any) -> FeatureRow:
+    return FeatureRow(
+        timestamp=event.end - _timeframe_duration(event.timeframe),
+        information_cutoff=event.end,
+        symbol=event.symbol,
+        timeframe=event.timeframe,
+        segment_id=event.segment_id,
+        dataset_version=event.dataset_version,
+        config_version=event.config_version,
+        profile_version=event.profile_version,
+        window_policy_id=event.window_policy_id,
+        feature_set_id=event.feature_set_id,
+        registry_id=event.registry_id,
+        values=event.feature_values,
     )
+
+
+def _preflight_event_source(
+    *,
+    directory: Path,
+    manifest: DerivedPublicationManifest,
+    identity: DerivedPublicationIdentity,
+    registry: FeatureRegistrySnapshot,
+) -> _EventSourceBinding:
+    try:
+        verify_derived_publication(directory, manifest)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
+        raise ValueError("source feature publication verification failed") from error
+    if manifest.publication_kind != "features":
+        raise ValueError("source feature publication must be a feature publication")
+    if manifest.identity.feature_registry_sha256 != registry.sha256:
+        raise ValueError("source feature publication targets a different feature registry")
+    if manifest.feature_dependency_contract_sha256 != registry.dependency_contract_sha256:
+        raise ValueError("source feature publication dependency contract mismatch")
+    if manifest.identity.leakage_audit_approval_sha256 != identity.leakage_audit_approval_sha256:
+        raise ValueError("source feature publication leakage approval mismatch")
+    if manifest.identity != identity:
+        raise ValueError("source feature publication identity does not match event publication")
+    return _EventSourceBinding(directory=directory, manifest=manifest, registry=registry)
 
 
 def _timeframe_duration(timeframe: str) -> timedelta:
@@ -1630,6 +2297,66 @@ def _publication_paths(
         / f"feature_set={identity.feature_set_id}"
     )
     return base / kind, base
+
+
+def _validate_max_rows_per_part(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("max_rows_per_part must be an integer")
+    if value < 1:
+        raise ValueError("max_rows_per_part must be positive")
+    if value > _MAX_ROWS_PER_PART:
+        raise ValueError(f"max_rows_per_part exceeds the hard limit of {_MAX_ROWS_PER_PART}")
+    return value
+
+
+def _require_publication_row_budget(row_count: int) -> None:
+    if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
+        raise ValueError("publication row count must be a non-negative integer")
+    if row_count > _MAX_PUBLICATION_ROWS:
+        raise ValueError("publication row budget exceeded")
+
+
+def _require_publication_partition_budget(row_count: int, max_rows_per_part: int) -> None:
+    minimum_partitions = (row_count + max_rows_per_part - 1) // max_rows_per_part
+    if minimum_partitions > _MAX_PUBLICATION_PARTITIONS:
+        raise ValueError("publication partition budget exceeded")
+
+
+def _partition_records_by_stream(
+    records: tuple[DerivedPartitionRecord, ...],
+) -> dict[tuple[str, str], list[DerivedPartitionRecord]]:
+    grouped: dict[tuple[str, str], list[DerivedPartitionRecord]] = {}
+    for record in records:
+        parts = _validated_partition_path(record.path).parts
+        if (
+            len(parts) < 2
+            or not parts[0].startswith("symbol=")
+            or not parts[1].startswith("timeframe=")
+        ):
+            raise ValueError("source feature partition path lacks stream identity")
+        stream = (parts[0].removeprefix("symbol="), parts[1].removeprefix("timeframe="))
+        grouped.setdefault(stream, []).append(record)
+    return grouped
+
+
+def _feature_row_from_payload(
+    payload: Mapping[str, object],
+    registry: FeatureRegistrySnapshot,
+) -> FeatureRow:
+    return FeatureRow(
+        timestamp=cast(datetime, payload["timestamp"]),
+        information_cutoff=cast(datetime, payload["information_cutoff"]),
+        symbol=cast(str, payload["symbol"]),
+        timeframe=cast(str, payload["timeframe"]),
+        segment_id=cast(int, payload["segment_id"]),
+        dataset_version=cast(str, payload["dataset_version"]),
+        config_version=cast(str, payload["config_version"]),
+        profile_version=cast(str, payload["profile_version"]),
+        window_policy_id=cast(str, payload["window_policy_id"]),
+        feature_set_id=cast(str, payload["feature_set_id"]),
+        registry_id=cast(str, payload["registry_id"]),
+        values={name: cast(FeatureValue, payload[name]) for name in registry.names},
+    )
 
 
 def _audit_names(values: Mapping[str, object]) -> None:

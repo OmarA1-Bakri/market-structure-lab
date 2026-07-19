@@ -13,10 +13,11 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-95434DA32383B8D9",
-        "cluster_definition_sha256": "c12cf26b9e271e2eccd365ece386c54413f1519f3d007e75827d1faa5e653f07",
+        "behaviour_id": "B-8254215A00884732",
+        "cluster_definition_sha256": "6a16c0ab1fbf71c8ff0567105ae79591fd9bcfe01d8a0db98f06ffea5f1cccb0",
         "description": "Neutral recurring outcome-blind feature configurations.",
         "discovery_run_id": "DR-000601",
+        "event_bindings_sha256": "b815308d8e00351f49b9e5bd260b6010aa60cea06eecbe803118e387ed5829d6",
         "feature_centroid": [
           10.05,
           1.005
@@ -31,7 +32,7 @@
             "third_quartile": 10.225
           },
           {
-            "feature_name": "volume_change",
+            "feature_name": "volume_deviation_from_baseline",
             "first_quartile": 0.9874999999999999,
             "maximum": 1.04,
             "median": 1.005,
@@ -43,11 +44,11 @@
         "median_duration_seconds": 60.0,
         "regime_coverage": [],
         "representative_event_ids": [
-          "EV-P4-014",
-          "EV-P4-005",
-          "EV-P4-006",
-          "EV-P4-013",
-          "EV-P4-004"
+          "EV-0C23761EE15ED434A0EFBD11EB269BD05C3586BE6A66E5DA2F9BBA461E1A28F7",
+          "EV-76DF202E9187C87C58EC6EFD8B416EAEF4B764D9D1E14CF98D9571B90A1EC719",
+          "EV-1905220D627B8FE9CCB2F5F2BF21CE955DF58E7ADE9CAD23AE96E65270AEC83F",
+          "EV-68F05476154086399221CA1E236594EBA8B48F16D16B120316EF2B3BA9709FE9",
+          "EV-E3D74F6D23509B34EC790CA809BD918ECF77F69FA20722543422AFE0A49926D4"
         ],
         "stability": {
           "accepted": true,
@@ -172,7 +173,7 @@
       },
       "contrasting_behaviour_ids": [],
       "nearest_behaviour_ids": [
-        "B-D36FD2F5998A3854"
+        "B-94E253BA77DC21DF"
       ],
       "run_id": "DR-000601",
       "schema_version": "behaviour-evidence-pack-v2",
@@ -281,10 +282,11 @@
           "BTCUSDT",
           "ETHUSDT"
         ],
-        "behaviour_id": "B-D36FD2F5998A3854",
-        "cluster_definition_sha256": "2b40d9dd9026e8d7b6cbc87eee6e2cbfcb1a7f08c0edc3e8742d1a84d2edafac",
+        "behaviour_id": "B-94E253BA77DC21DF",
+        "cluster_definition_sha256": "708ceb36f3b6b84b25905790cf28300789d718d44198a3e65e93a0c5490a6ff0",
         "description": "Neutral recurring outcome-blind feature configurations.",
         "discovery_run_id": "DR-000601",
+        "event_bindings_sha256": "b815308d8e00351f49b9e5bd260b6010aa60cea06eecbe803118e387ed5829d6",
         "feature_centroid": [
           -10.05,
           -1.005
@@ -299,7 +301,7 @@
             "third_quartile": -9.875
           },
           {
-            "feature_name": "volume_change",
+            "feature_name": "volume_deviation_from_baseline",
             "first_quartile": -1.0225,
             "maximum": -0.97,
             "median": -1.005,
@@ -311,11 +313,11 @@
         "median_duration_seconds": 60.0,
         "regime_coverage": [],
         "representative_event_ids": [
-          "EV-P4-009",
-          "EV-P4-002",
-          "EV-P4-001",
-          "EV-P4-010",
-          "EV-P4-003"
+          "EV-1F25077AEEB5056C842D1B4C71B0516C2AB1C6A1EFDA0AEFCB35B6CD9EA75D86",
+          "EV-5310DB6E70F12AB167F90563EEC04589517A144AE97A78864024B8AA59174B20",
+          "EV-15318FB08C343C226A8155DED9EDC4C526B04496E946C9A914C95BD83797BD89",
+          "EV-6483FD15695A71532AD36D6DE96B2193B9BEDBE23601DA8EAEC78AA017D702B4",
+          "EV-F9B1E1C7D57F8A9C5853AAD73CEAD58C54C3D7A43662CEC4C8B403C586FBDEC6"
         ],
         "stability": {
           "accepted": true,
@@ -440,7 +442,7 @@
       },
       "contrasting_behaviour_ids": [],
       "nearest_behaviour_ids": [
-        "B-95434DA32383B8D9"
+        "B-8254215A00884732"
       ],
       "run_id": "DR-000601",
       "schema_version": "behaviour-evidence-pack-v2",
@@ -544,7 +546,7 @@
       }
     }
   ],
-  "evidence_sha256": "9d21451405553e835a77e7181fc6c96859ff73315be85d69a6597f516ff85895",
+  "evidence_sha256": "becca9e821ed50268aed42f414680b8b5290403b3dcf913e22e69d598ebafd97",
   "required_response_fields": [
     "behaviour_id",
     "neutral_name",
@@ -557,6 +559,6 @@
     "spuriousness_reasons"
   ],
   "run_id": "DR-000601",
-  "run_manifest_sha256": "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b",
+  "run_manifest_sha256": "404da0b473a6b3d065c9ce009b37cb89d91e1394c28382b64854901e1295d27e",
   "schema_version": "phase4-interpretation-input-v2"
 }

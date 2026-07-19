@@ -26,6 +26,7 @@ from market_structure_lab.features.registry import FeatureRegistry
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$")
 _ROW_SOURCE_IDENTITY_FIELDS = ("config_version", "profile_version", "window_policy_id")
 _DISCOVERY_INPUT_FACTORY = object()
+MAX_DISCOVERY_INPUT_ROWS = 1_000_000
 _DISCOVERY_PROVENANCE_FACTORY = object()
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{7,64}$")
@@ -384,6 +385,8 @@ def make_discovery_input(
     _guard_partition_role(partition, purpose)
     if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 1:
         raise ValueError("max_rows must be a positive integer")
+    if max_rows > MAX_DISCOVERY_INPUT_ROWS:
+        raise ValueError("max_rows exceeds the discovery materialization safety bound")
     if not isinstance(registry, FeatureRegistry):
         raise TypeError("registry must be a FeatureRegistry")
 
