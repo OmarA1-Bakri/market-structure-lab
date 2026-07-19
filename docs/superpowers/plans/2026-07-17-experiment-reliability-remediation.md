@@ -104,7 +104,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 9 — motif boundaries and stability | Complete | Multivariate motifs cannot bridge hard sequence boundaries and retain separate multi-axis stability/support evidence. |
 | Task 10 — transition uncertainty | Complete | Horizon, bootstrap, block selection, confidence, diagnostics, sensitivity, work caps, and descriptive-only terminology are frozen. |
 | Task 11 — semantic leakage evidence | Complete | Dependency/builder contracts, independent review receipts, negative tests, and pre-consumption guards are bound; residual manual review remains explicit. |
-| Task 12 — Phase 4 hardening gate | Complete locally; stopped before Phase C | Deterministic hardening evidence is committed at `b69e38973d5a30cacf636a399d0b30d76d794004`; the commit remains local until a leader-authorized push, so the remote-SHA criterion stays open. |
+| Task 12 — Phase 4 hardening gate | Complete and remotely checkpointed; stopped before Phase C | Deterministic hardening evidence is committed at `b69e38973d5a30cacf636a399d0b30d76d794004`, with the reviewed consistency follow-up at `035aa35c50724d2a8638846a2045b69e554f5a8e`; both are remotely verified. |
 | Tasks 13–14 | Approval-gated | Do not run real outcome-blind discovery, outcome attachment, validation, or edge evaluation without the preceding written gate and explicit approval. |
 
 ## Skill and workflow routing
@@ -176,9 +176,9 @@ The authoritative sweep is `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`.
 - [x] Feature leakage evidence includes declared source dependencies and an independent audit.
 - [x] A real outcome-blind discovery may run only after explicit approval and must not access final
       holdout rows or outcomes.
-- [ ] Every completed Phase 4 hardening task has a verified remote commit SHA recorded in the
-      evidence report. Tasks 7–11 are remotely verified; Task 12 is intentionally local under its
-      no-push constraint.
+- [x] Every completed Phase 4 hardening task has a verified remote commit SHA recorded in the
+      evidence report. Tasks 7–12 are remotely verified; Task 12 evidence is at `b69e389` and its
+      reviewed consistency follow-up is at `035aa35`.
 
 ### Phase 5 readiness criteria
 

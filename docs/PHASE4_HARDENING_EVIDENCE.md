@@ -28,12 +28,13 @@ exercised to prove terminal accounting.
 | Task 9 — motif boundaries and stability | `5c2ee0d` | `eb301c7` | verified |
 | Task 10 — transition uncertainty policy | `a7f8d5d` | `17ae818` | verified |
 | Task 11 — semantic leakage evidence | `bd9f82b` | included in the same reviewed checkpoint | verified |
-| Task 12 — verification and evidence | `b69e38973d5a30cacf636a399d0b30d76d794004` | this local evidence checkpoint | local; not pushed |
+| Task 12 — verification and evidence | `b69e38973d5a30cacf636a399d0b30d76d794004` | verification evidence commit | pushed; remote ancestry verified |
+| Task 12 — independent review closure | `035aa35c50724d2a8638846a2045b69e554f5a8e` | dashboard, plan, and evidence consistency correction | pushed; local and origin matched at this checkpoint |
 
-The Task 12 documentation and verification commit
-`b69e38973d5a30cacf636a399d0b30d76d794004` is intentionally local because Task 12 prohibited
-pushing. The remote-SHA criterion therefore remains unchecked until a leader-authorized push;
-neither this local checkpoint nor a later administrative push authorizes Phase C.
+The Task 12 evidence and independent-review correction commits were pushed after leader
+authorization. Local and origin both resolved to
+`035aa35c50724d2a8638846a2045b69e554f5a8e` before this final administrative checklist sync.
+That remote checkpoint does not authorize Phase C.
 
 ## Independent Task 12 review closure
 
@@ -223,8 +224,8 @@ or strategy artefact exists.
    approved validation plan.
 6. Eight database integration profiles remained skipped because no disposable PostgreSQL URL was
    supplied. Phase B changed no database code and the complete non-database Windows suite passed.
-7. Task 12 is intentionally not pushed. The evidence commit therefore requires a later authorized
-   remote checkpoint before the administrative remote-SHA criterion can be recorded as complete.
+7. The Task 12 remote checkpoint is complete. Real empirical discovery and every later research
+   gate remain separately approval-gated.
 
 ## Gate checklist and conclusion
 
