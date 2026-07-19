@@ -1,5 +1,5 @@
 {
-  "schema_version": "phase4-discovery-fixture-v2",
+  "schema_version": "phase4-discovery-fixture-v3",
   "dataset_snapshot": {
     "dataset_version": "DS-000601",
     "sha256": "8be7a8986ce91cff9af10249be029aaeb6893e2fdf7a63ca99115b6ec58b9dc5"
@@ -14,7 +14,7 @@
     "definitions": [
       {
         "name": "auction_location",
-        "definition": "Normalized observable auction location.",
+        "definition": "Explicit causal fixture auction-location ratio at the cutoff.",
         "family": "auction",
         "value_kind": "float",
         "units": "ratio",
@@ -22,11 +22,20 @@
         "missing_policy": "error",
         "version": "1.0.0",
         "leakage_class": "AT_CUTOFF",
+        "source_fields": [
+          "fixture.auction_location_ratio"
+        ],
+        "trailing_window": "current_observation",
+        "observable_cutoff_rule": "at_information_cutoff",
+        "normalization_requirement": "not_required",
+        "future_outcome_prohibited": true,
+        "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
+        "builder_version": "phase4-fixture-producer-v1",
         "allowed_categories": []
       },
       {
         "name": "volume_change",
-        "definition": "Trailing normalized observable volume change.",
+        "definition": "Causal two-observation fixture volume delta divided by its explicit scale.",
         "family": "sequence",
         "value_kind": "float",
         "units": "ratio",
@@ -34,6 +43,17 @@
         "missing_policy": "error",
         "version": "1.0.0",
         "leakage_class": "TRAILING_ONLY",
+        "source_fields": [
+          "fixture.current_volume",
+          "fixture.previous_volume",
+          "fixture.volume_scale"
+        ],
+        "trailing_window": "trailing_2_observations",
+        "observable_cutoff_rule": "trailing_through_information_cutoff",
+        "normalization_requirement": "not_required",
+        "future_outcome_prohibited": true,
+        "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
+        "builder_version": "phase4-fixture-producer-v1",
         "allowed_categories": []
       }
     ]
@@ -87,144 +107,176 @@
       "timestamp": "2025-01-01T00:00:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -10.4,
-        "volume_change": -1.04
+      "source": {
+        "auction_location_ratio": -10.4,
+        "previous_volume": 1000.0,
+        "current_volume": 896.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:01:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -10.2,
-        "volume_change": -1.02
+      "source": {
+        "auction_location_ratio": -10.2,
+        "previous_volume": 1000.0,
+        "current_volume": 898.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:02:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -10.0,
-        "volume_change": -1.0
+      "source": {
+        "auction_location_ratio": -10.0,
+        "previous_volume": 1000.0,
+        "current_volume": 900.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:03:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -9.8,
-        "volume_change": -0.98
+      "source": {
+        "auction_location_ratio": -9.8,
+        "previous_volume": 1000.0,
+        "current_volume": 902.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:04:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 9.8,
-        "volume_change": 0.98
+      "source": {
+        "auction_location_ratio": 9.8,
+        "previous_volume": 1000.0,
+        "current_volume": 1098.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:05:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 10.0,
-        "volume_change": 1.0
+      "source": {
+        "auction_location_ratio": 10.0,
+        "previous_volume": 1000.0,
+        "current_volume": 1100.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:06:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 10.2,
-        "volume_change": 1.02
+      "source": {
+        "auction_location_ratio": 10.2,
+        "previous_volume": 1000.0,
+        "current_volume": 1102.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:07:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 10.4,
-        "volume_change": 1.04
+      "source": {
+        "auction_location_ratio": 10.4,
+        "previous_volume": 1000.0,
+        "current_volume": 1104.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:00:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -10.3,
-        "volume_change": -1.03
+      "source": {
+        "auction_location_ratio": -10.3,
+        "previous_volume": 1000.0,
+        "current_volume": 897.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:01:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -10.1,
-        "volume_change": -1.01
+      "source": {
+        "auction_location_ratio": -10.1,
+        "previous_volume": 1000.0,
+        "current_volume": 899.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:02:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -9.9,
-        "volume_change": -0.99
+      "source": {
+        "auction_location_ratio": -9.9,
+        "previous_volume": 1000.0,
+        "current_volume": 901.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:03:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -9.7,
-        "volume_change": -0.97
+      "source": {
+        "auction_location_ratio": -9.7,
+        "previous_volume": 1000.0,
+        "current_volume": 903.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:04:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 9.7,
-        "volume_change": 0.97
+      "source": {
+        "auction_location_ratio": 9.7,
+        "previous_volume": 1000.0,
+        "current_volume": 1097.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:05:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 9.9,
-        "volume_change": 0.99
+      "source": {
+        "auction_location_ratio": 9.9,
+        "previous_volume": 1000.0,
+        "current_volume": 1099.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:06:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 10.1,
-        "volume_change": 1.01
+      "source": {
+        "auction_location_ratio": 10.1,
+        "previous_volume": 1000.0,
+        "current_volume": 1101.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-01T00:07:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 10.3,
-        "volume_change": 1.03
+      "source": {
+        "auction_location_ratio": 10.3,
+        "previous_volume": 1000.0,
+        "current_volume": 1103.0,
+        "volume_scale": 100.0
       }
     }
   ],
@@ -233,72 +285,88 @@
       "timestamp": "2025-01-02T00:00:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -10.1,
-        "volume_change": -1.01
+      "source": {
+        "auction_location_ratio": -10.1,
+        "previous_volume": 1000.0,
+        "current_volume": 899.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-02T00:01:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 10.1,
-        "volume_change": 1.01
+      "source": {
+        "auction_location_ratio": 10.1,
+        "previous_volume": 1000.0,
+        "current_volume": 1101.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-03T00:00:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -9.9,
-        "volume_change": -0.99
+      "source": {
+        "auction_location_ratio": -9.9,
+        "previous_volume": 1000.0,
+        "current_volume": 901.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-03T00:01:00Z",
       "symbol": "BTCUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 9.9,
-        "volume_change": 0.99
+      "source": {
+        "auction_location_ratio": 9.9,
+        "previous_volume": 1000.0,
+        "current_volume": 1099.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-02T00:00:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -10.0,
-        "volume_change": -1.0
+      "source": {
+        "auction_location_ratio": -10.0,
+        "previous_volume": 1000.0,
+        "current_volume": 900.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-02T00:01:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 10.0,
-        "volume_change": 1.0
+      "source": {
+        "auction_location_ratio": 10.0,
+        "previous_volume": 1000.0,
+        "current_volume": 1100.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-03T00:00:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": -9.8,
-        "volume_change": -0.98
+      "source": {
+        "auction_location_ratio": -9.8,
+        "previous_volume": 1000.0,
+        "current_volume": 902.0,
+        "volume_scale": 100.0
       }
     },
     {
       "timestamp": "2025-01-03T00:01:00Z",
       "symbol": "ETHUSDT",
       "segment_id": 0,
-      "values": {
-        "auction_location": 9.8,
-        "volume_change": 0.98
+      "source": {
+        "auction_location_ratio": 9.8,
+        "previous_volume": 1000.0,
+        "current_volume": 1098.0,
+        "volume_scale": 100.0
       }
     }
   ],
@@ -364,9 +432,9 @@
       },
       "expected": {
         "status": "completed",
-        "manifest_sha256": "a0d5293393309cb4071fef710e1a0b79bb7274e0fc61216f628ec18225ad6481",
-        "identity_sha256": "d7ea36267ffe1329b0a712abccc3e61e3cc66ed0d0e82c368e865f8b57855ebf",
-        "config_sha256": "3ca7c566f0a5b3cda5bb34d9fd3f9f27a4c5310cf7b072dcc6eb286c370bf40c",
+        "manifest_sha256": "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b",
+        "identity_sha256": "e6ed0930ac3be8b9b3f500aad5174a2bee70286ece1ed1005ec4657a8d4c3009",
+        "config_sha256": "1dc35d4f30ee73740972906770ebfcb8b6efaf7f3c54408fcf32ead595932819",
         "behaviour_ids": [
           "B-95434DA32383B8D9",
           "B-D36FD2F5998A3854"
@@ -374,7 +442,7 @@
         "artifact_sha256": {
           "behaviours.json": "dca6fb129b5ded4912e72a57ff9bed147dad198e58b39f75532d6c086394ecc6",
           "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "6a621fac1cc31955e9c960301babe4767c5104ab8ec12bed662c6a5d8bccb0c5",
+          "config.json": "8b38b3a328a9654915959477cc36e07c53f2b106273a8d83e15e9732f1222a0d",
           "metrics.json": "da6525584588cc5edf9060861ec8f021bf337f2481f01fad6224ed24c9e76a1a",
           "motifs.json": "121eb4daf299f8a7b5503287a395dfb2e9c8dd6915ed90cf0f7aa10074158368",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
@@ -482,14 +550,14 @@
       },
       "expected": {
         "status": "rejected_unstable",
-        "manifest_sha256": "03b0fc8daa7738814000f3564da48417646992a5bc2b192009aebec637f882dc",
-        "identity_sha256": "fdf0eaa3be88a99d2c4617105a5134a74fa0ba60c79d4733a15e3f27de59cfb4",
-        "config_sha256": "12b5acb7fb4f512485b48120639ee3d1514d866d5978b2b7a8bdc64e3e21f338",
+        "manifest_sha256": "700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0",
+        "identity_sha256": "d544e10dd8d6903114367b6bdcd1f4d814be8c1bfd9d017cbcb5b2dca7a283d9",
+        "config_sha256": "00f1080f1aba3f950e363918a74390ea2f9c9d89e9a89aa8f82d0c3942f099a4",
         "behaviour_ids": [],
         "artifact_sha256": {
           "behaviours.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
           "clustering.json": "dfffb30b4f0eef335231133e035e44fc177a79c1a26788b4d58d1189cfd103ae",
-          "config.json": "052052861341799f41c54d5cf46ccb28245598f0bc4a9eff86b654e97e57fab5",
+          "config.json": "c0b09f5732699d1f9d386aeacc5266c668cc4a9a8af97bbbbdab33512089a8f8",
           "metrics.json": "a5c54003d093ab0717a775fcc263d80f508f6c0679b7861ae3f1d3a58d796406",
           "motifs.json": "bf8284138a7f11f82296c44d023c9dd970bd65226337145b60c3415dbd18ce9e",
           "projection.json": "213dc5afd02d395adfa398ae83456b63dedfe31831bb5f6f3f6fd89fa956de76",
@@ -573,7 +641,7 @@
       }
     }
   },
-  "interpretation_input_sha256": "daf4b8451cd6777db0f99d1afbe4283a62188b8f21b6a2bd8fff5932a7ad91f4",
+  "interpretation_input_sha256": "9a695a20ca0e7757de142f4c6508c2955e9d1849a36dcce331559d9f34d65cec",
   "interpretation_response_sha256": "d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec",
   "interpretation_publication": {
     "expected": {
@@ -583,12 +651,12 @@
         "B-95434DA32383B8D9",
         "B-D36FD2F5998A3854"
       ],
-      "identity_sha256": "47aaaefb162f6390a824b81ba7c324bb16bb880a706f70cacc6bcfe4beda4558",
+      "identity_sha256": "981951e36b7686062f51213a61c4bb7d793e6f3a89683aede6eb32d940e6cab1",
       "artifact_sha256": {
         "evidence.json": "f34ee6acd0c8315ecc82dffed9e8c545238dacdbcc8f755bf675fcd77bbed53c",
-        "interpretations.json": "17d604c52fb0c903a4b5c2f444bd0a5c0f00a7fb437777fcd5ac346b460743f7"
+        "interpretations.json": "bceeb81efbc26338dbe6b4aeaa8e7fe0bd0d0a5d6cff4e62b794cdd87b03c2c9"
       },
-      "manifest_sha256": "4bba9523095c11d29188edab1b4b34b91b89ab3c6dcd6255a66e1ff970914550"
+      "manifest_sha256": "b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119"
     }
   },
   "motif_regime_assignments": {
@@ -700,5 +768,10 @@
       ]
     ],
     "sha256": "00966656c758e288addacdc08176be13823db4e3bb9f0fb4e96201cf1cb59654"
+  },
+  "fixture_producer": {
+    "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
+    "builder_version": "phase4-fixture-producer-v1",
+    "input_schema": "phase4-fixture-source-v1"
   }
 }

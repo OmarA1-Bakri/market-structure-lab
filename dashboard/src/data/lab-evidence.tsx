@@ -93,16 +93,27 @@ export interface LabEvidence {
     fixture_kind: "synthetic_golden";
     fixture_path: string;
     fixture_sha256: string;
+    fixture_schema_version: "phase4-discovery-fixture-v3";
+    fixture_producer: {
+      builder_id: "phase4_fixture_producer.Phase4FixtureFeatureProducer";
+      builder_version: "phase4-fixture-producer-v1";
+      input_schema: "phase4-fixture-source-v1";
+    };
+    fixture_registry_sha256: string;
     verification_receipt_available: false;
     claim: string;
     interpretation_input_sha256: string;
     interpretation_response_sha256: string;
+    interpretation_publication_manifest_sha256: string;
     runs: Record<
       "stable" | "rejected",
       {
         run_id: string;
         status: "completed" | "rejected_unstable";
         manifest_sha256: string;
+        identity_sha256: string;
+        config_sha256: string;
+        artifact_sha256: Record<string, string>;
         transition_algorithm_version: typeof TRANSITION_ALGORITHM_VERSION;
         behaviour_ids: string[];
         metrics: Record<string, unknown>;
@@ -134,6 +145,17 @@ export interface LabEvidence {
       missing_policy: "null" | "error";
       version: string;
       leakage_class: "AT_CUTOFF" | "TRAILING_ONLY" | "TRAIN_FITTED";
+      source_fields: string[];
+      trailing_window: string;
+      observable_cutoff_rule:
+        | "at_information_cutoff"
+        | "trailing_through_information_cutoff";
+      normalization_requirement:
+        | "not_required"
+        | "training_partition_fitted";
+      future_outcome_prohibited: true;
+      builder_id: string;
+      builder_version: string;
       allowed_categories: string[];
     }>;
   };
@@ -163,6 +185,13 @@ const LabEvidenceContext = createContext<LabEvidenceState | null>(null);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return (
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
 }
 
 function isSha256(value: unknown): value is string {
@@ -317,6 +346,20 @@ function isFeatureRegistry(
       ["AT_CUTOFF", "TRAILING_ONLY", "TRAIN_FITTED"].includes(
         String(definition.leakage_class),
       ) &&
+      Array.isArray(definition.source_fields) &&
+      definition.source_fields.length > 0 &&
+      definition.source_fields.every((item) => typeof item === "string") &&
+      typeof definition.trailing_window === "string" &&
+      [
+        "at_information_cutoff",
+        "trailing_through_information_cutoff",
+      ].includes(String(definition.observable_cutoff_rule)) &&
+      ["not_required", "training_partition_fitted"].includes(
+        String(definition.normalization_requirement),
+      ) &&
+      definition.future_outcome_prohibited === true &&
+      typeof definition.builder_id === "string" &&
+      typeof definition.builder_version === "string" &&
       Array.isArray(definition.allowed_categories) &&
       definition.allowed_categories.every((item) => typeof item === "string")
     );
@@ -344,6 +387,21 @@ function isReplay(value: unknown): value is LabEvidence["software_replay"] {
     typeof run.run_id === "string" &&
     run.status === status &&
     isSha256(run.manifest_sha256) &&
+    isSha256(run.identity_sha256) &&
+    isSha256(run.config_sha256) &&
+    isObject(run.artifact_sha256) &&
+    hasExactKeys(run.artifact_sha256, [
+      "behaviours.json",
+      "clustering.json",
+      "config.json",
+      "metrics.json",
+      "motifs.json",
+      "projection.json",
+      "stability.json",
+      "summary.md",
+      "transitions.json",
+    ]) &&
+    Object.values(run.artifact_sha256).every(isSha256) &&
     run.transition_algorithm_version === TRANSITION_ALGORITHM_VERSION &&
     Array.isArray(run.behaviour_ids) &&
     run.behaviour_ids.every((id) => typeof id === "string") &&
@@ -376,11 +434,24 @@ function isReplay(value: unknown): value is LabEvidence["software_replay"] {
   return (
     value.status === "fixture_contract_present" &&
     value.fixture_kind === "synthetic_golden" &&
+    value.fixture_schema_version === "phase4-discovery-fixture-v3" &&
+    isObject(value.fixture_producer) &&
+    hasExactKeys(value.fixture_producer, [
+      "builder_id",
+      "builder_version",
+      "input_schema",
+    ]) &&
+    value.fixture_producer.builder_id ===
+      "phase4_fixture_producer.Phase4FixtureFeatureProducer" &&
+    value.fixture_producer.builder_version === "phase4-fixture-producer-v1" &&
+    value.fixture_producer.input_schema === "phase4-fixture-source-v1" &&
     typeof value.fixture_path === "string" &&
     typeof value.claim === "string" &&
     isSha256(value.fixture_sha256) &&
+    isSha256(value.fixture_registry_sha256) &&
     isSha256(value.interpretation_input_sha256) &&
     isSha256(value.interpretation_response_sha256) &&
+    isSha256(value.interpretation_publication_manifest_sha256) &&
     value.verification_receipt_available === false &&
     behavioursValid &&
     JSON.stringify([...ids].sort()) ===

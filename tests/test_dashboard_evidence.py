@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -229,7 +230,31 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     assert accuracy["derivation_chain_verified"] is False
     assert accuracy["fixture_trials_counted_as_real"] is False
     replay = evidence["software_replay"]
+    assert replay["fixture_schema_version"] == "phase4-discovery-fixture-v3"
+    assert replay["fixture_producer"] == {
+        "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
+        "builder_version": "phase4-fixture-producer-v1",
+        "input_schema": "phase4-fixture-source-v1",
+    }
     assert replay["runs"]["stable"]["run_id"] == "DR-000601"
+    assert replay["runs"]["stable"]["manifest_sha256"] == (
+        "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b"
+    )
+    assert replay["runs"]["stable"]["identity_sha256"] == (
+        "e6ed0930ac3be8b9b3f500aad5174a2bee70286ece1ed1005ec4657a8d4c3009"
+    )
+    assert replay["runs"]["stable"]["config_sha256"] == (
+        "1dc35d4f30ee73740972906770ebfcb8b6efaf7f3c54408fcf32ead595932819"
+    )
+    assert replay["runs"]["rejected"]["manifest_sha256"] == (
+        "700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0"
+    )
+    assert replay["runs"]["rejected"]["identity_sha256"] == (
+        "d544e10dd8d6903114367b6bdcd1f4d814be8c1bfd9d017cbcb5b2dca7a283d9"
+    )
+    assert replay["runs"]["rejected"]["config_sha256"] == (
+        "00f1080f1aba3f950e363918a74390ea2f9c9d89e9a89aa8f82d0c3942f099a4"
+    )
     assert replay["runs"]["stable"]["transition_algorithm_version"] == (
         "boundary-aware-dwell-transitions-v3"
     )
@@ -246,6 +271,70 @@ def test_dashboard_evidence_is_hermetic_exact_and_trial_scoped(tmp_path: Path) -
     assert len(registry["definitions"]) == 26
     assert {"missing_policy", "version", "value_kind", "leakage_class"} <= set(
         registry["definitions"][0]
+    )
+    assert "b20163a74cc0b4c19e2afbd214bf29e31ec14eb0d494e545db4bdc7a5c41ce98" not in (
+        json.dumps(evidence, sort_keys=True)
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda fixture: fixture.__setitem__("schema_version", "phase4-discovery-fixture-v2"),
+        lambda fixture: fixture.__setitem__("schema_version", "phase4-discovery-fixture-v4"),
+        lambda fixture: fixture.__setitem__("unexpected", True),
+        lambda fixture: fixture["fixture_producer"].pop("builder_id"),
+        lambda fixture: fixture["fixture_producer"].__setitem__("unexpected", True),
+        lambda fixture: fixture["fixture_producer"].__setitem__("builder_version", "wrong-v1"),
+        lambda fixture: fixture["discovery_rows"][0]["source"].pop("current_volume"),
+        lambda fixture: fixture["discovery_rows"][0]["source"].__setitem__("unexpected", 1.0),
+        lambda fixture: fixture["discovery_rows"][0]["source"].__setitem__("volume_scale", "100"),
+    ],
+    ids=(
+        "stale-v2",
+        "unknown-v4",
+        "extra-top-level",
+        "missing-producer-field",
+        "extra-producer-field",
+        "wrong-producer-version",
+        "missing-raw-source",
+        "extra-raw-source",
+        "malformed-raw-source",
+    ),
+)
+def test_dashboard_rejects_nonexact_phase4_v3_fixture_contract(
+    tmp_path: Path,
+    mutation: Callable[[dict[str, Any]], object],
+) -> None:
+    root = _repository(tmp_path)
+    fixture_path = root / "tests" / "fixtures" / "phase4" / "discovery_run_v1.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    mutation(fixture)
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Phase 4 fixture"):
+        generate_lab_evidence(root, generated_at="2026-07-17T03:00:00Z")
+
+
+def test_public_dashboard_evidence_uses_current_phase4_v3_manifest() -> None:
+    repository = Path(__file__).parents[1]
+    artifact = repository / "dashboard" / "public" / "data" / "lab-evidence-v1.json"
+    evidence = json.loads(artifact.read_text(encoding="utf-8"))
+    replay = evidence["software_replay"]
+
+    assert replay["fixture_schema_version"] == "phase4-discovery-fixture-v3"
+    assert replay["runs"]["stable"]["manifest_sha256"] == (
+        "eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b"
+    )
+    assert replay["runs"]["rejected"]["manifest_sha256"] == (
+        "700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0"
+    )
+    assert (
+        replay["fixture_sha256"]
+        == hashlib.sha256((FIXTURES / "discovery_run_v1.json").read_bytes()).hexdigest()
+    )
+    assert "b20163a74cc0b4c19e2afbd214bf29e31ec14eb0d494e545db4bdc7a5c41ce98" not in (
+        artifact.read_text(encoding="utf-8")
     )
 
 

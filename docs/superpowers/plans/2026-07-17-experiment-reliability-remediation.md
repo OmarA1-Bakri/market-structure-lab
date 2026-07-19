@@ -700,24 +700,24 @@ or marked descriptive; run identity changes with every uncertainty-policy change
 - Tests: `tests/test_feature_registry.py`, `tests/test_feature_builder.py`,
   `tests/test_derived_publication.py`
 
-- [ ] **Step 1: Define auditable feature dependencies**
+- [x] **Step 1: Define auditable feature dependencies**
 
 Each feature definition records source fields, trailing window, observable cutoff rule, warm-up,
 normalization requirement, and an explicit future/outcome prohibition. Hash this into registry
 identity.
 
-- [ ] **Step 2: Add adversarial leakage fixtures**
+- [x] **Step 2: Add adversarial leakage fixtures**
 
 Include innocuously named future returns, full-period normalization, centered windows, global
 max/min, future-dependent labels, and timestamps whose values are observable only after the declared
 cutoff. These must fail publication.
 
-- [ ] **Step 3: Produce an independent leakage-audit receipt**
+- [x] **Step 3: Produce an independent leakage-audit receipt**
 
 Publication records which registered builder produced each field and the tested cutoff/dependency
 contract. Static metadata is evidence, not proof; retain reviewer and negative-test evidence.
 
-- [ ] **Step 4: Verify no holdout iteration**
+- [x] **Step 4: Verify no holdout iteration**
 
 Keep generator tests proving rejected holdout inputs are never consumed, even once.
 

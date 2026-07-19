@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from market_structure_lab.auction.engine import AuctionLocation
 from market_structure_lab.features.registry import (
+    BUILTIN_FEATURE_BUILDER_ID,
+    BUILTIN_FEATURE_BUILDER_VERSION,
     FeatureDefinition,
     FeatureFamily,
     FeatureRegistry,
     FeatureValueKind,
     LeakageClass,
     MissingPolicy,
+    NormalizationRequirement,
+    ObservableCutoffRule,
 )
 
 BUILTIN_FEATURE_SET_ID = "FS-000001"
@@ -22,9 +26,20 @@ def _definition(
     units: str,
     required_prior: int,
     *,
+    source_fields: tuple[str, ...],
+    trailing_window: str | None = None,
     value_kind: FeatureValueKind = FeatureValueKind.FLOAT,
     allowed_categories: tuple[str, ...] = (),
 ) -> FeatureDefinition:
+    continuity_fields = (
+        (
+            "snapshot.events.kind",
+            "snapshot.segment_id",
+            "snapshot.timestamp",
+        )
+        if required_prior > 0 or trailing_window == "since_continuity_boundary"
+        else ()
+    )
     return FeatureDefinition(
         name=name,
         definition=formula,
@@ -37,6 +52,28 @@ def _definition(
         leakage_class=(
             LeakageClass.AT_CUTOFF if required_prior == 0 else LeakageClass.TRAILING_ONLY
         ),
+        source_fields=tuple(sorted({*source_fields, *continuity_fields})),
+        trailing_window=(
+            trailing_window
+            or (
+                "current_observation"
+                if required_prior == 0
+                else f"trailing_{required_prior + 1}_observations"
+            )
+        ),
+        observable_cutoff_rule=(
+            ObservableCutoffRule.AT_INFORMATION_CUTOFF
+            if required_prior == 0 and trailing_window != "since_continuity_boundary"
+            else ObservableCutoffRule.TRAILING_THROUGH_INFORMATION_CUTOFF
+        ),
+        normalization_requirement=(
+            NormalizationRequirement.NOT_REQUIRED
+            if value_kind is FeatureValueKind.CATEGORY
+            else NormalizationRequirement.TRAINING_PARTITION_FITTED
+        ),
+        future_outcome_prohibited=True,
+        builder_id=BUILTIN_FEATURE_BUILDER_ID,
+        builder_version=BUILTIN_FEATURE_BUILDER_VERSION,
         allowed_categories=allowed_categories,
     )
 
@@ -48,6 +85,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "category",
         0,
+        source_fields=("snapshot.location",),
         value_kind=FeatureValueKind.CATEGORY,
         allowed_categories=tuple(location.value for location in AuctionLocation),
     ),
@@ -57,6 +95,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_close",
         0,
+        source_fields=("snapshot.latest_candle.close", "snapshot.profile.point_of_control"),
     ),
     _definition(
         "poc_velocity_close_1",
@@ -64,6 +103,10 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_previous_close",
         1,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.profile.point_of_control",
+        ),
     ),
     _definition(
         "value_width_close",
@@ -71,6 +114,11 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_close",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.profile.value_area_high",
+            "snapshot.profile.value_area_low",
+        ),
     ),
     _definition(
         "value_midpoint_velocity_close_1",
@@ -78,6 +126,11 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_previous_close",
         1,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.profile.value_area_high",
+            "snapshot.profile.value_area_low",
+        ),
     ),
     _definition(
         "poc_volume_share",
@@ -85,6 +138,11 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction",
         0,
+        source_fields=(
+            "snapshot.profile.bin_volumes",
+            "snapshot.profile.poc_index",
+            "snapshot.profile.total_volume",
+        ),
     ),
     _definition(
         "vwap_distance_close",
@@ -92,6 +150,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_close",
         0,
+        source_fields=("snapshot.latest_candle.close", "snapshot.profile.vwap"),
     ),
     _definition(
         "vwap_slope_close_1",
@@ -99,6 +158,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_previous_close",
         1,
+        source_fields=("snapshot.latest_candle.close", "snapshot.profile.vwap"),
     ),
     _definition(
         "close_value_position",
@@ -106,6 +166,11 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.profile.value_area_high",
+            "snapshot.profile.value_area_low",
+        ),
     ),
     _definition(
         "value_area_jaccard_1",
@@ -113,6 +178,10 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction",
         1,
+        source_fields=(
+            "snapshot.profile.value_area_high_index",
+            "snapshot.profile.value_area_low_index",
+        ),
     ),
     _definition(
         "nearest_hvn_distance_close",
@@ -120,6 +189,12 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_close",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.nodes.kind",
+            "snapshot.nodes.price",
+            "snapshot.nodes.representative_index",
+        ),
     ),
     _definition(
         "nearest_lvn_distance_close",
@@ -127,6 +202,12 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction_of_close",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.nodes.kind",
+            "snapshot.nodes.price",
+            "snapshot.nodes.representative_index",
+        ),
     ),
     _definition(
         "max_node_persistence_bars",
@@ -134,6 +215,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "bars",
         0,
+        source_fields=("snapshot.nodes.persistence",),
         value_kind=FeatureValueKind.INTEGER,
     ),
     _definition(
@@ -142,6 +224,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "fraction",
         19,
+        source_fields=("snapshot.location",),
     ),
     _definition(
         "value_reentry_rate_20",
@@ -149,6 +232,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "events_per_bar",
         19,
+        source_fields=("snapshot.events.kind",),
     ),
     _definition(
         "location_dwell_bars",
@@ -156,6 +240,8 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.AUCTION,
         "bars",
         0,
+        source_fields=("snapshot.location",),
+        trailing_window="since_continuity_boundary",
         value_kind=FeatureValueKind.INTEGER,
     ),
     _definition(
@@ -164,6 +250,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "log_return",
         1,
+        source_fields=("snapshot.latest_candle.close",),
     ),
     _definition(
         "range_close_fraction",
@@ -171,6 +258,11 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "fraction_of_close",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.latest_candle.high",
+            "snapshot.latest_candle.low",
+        ),
     ),
     _definition(
         "body_range_ratio",
@@ -178,6 +270,12 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "fraction_of_range",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.latest_candle.high",
+            "snapshot.latest_candle.low",
+            "snapshot.latest_candle.open",
+        ),
     ),
     _definition(
         "upper_wick_range_ratio",
@@ -185,6 +283,12 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "fraction_of_range",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.latest_candle.high",
+            "snapshot.latest_candle.low",
+            "snapshot.latest_candle.open",
+        ),
     ),
     _definition(
         "lower_wick_range_ratio",
@@ -192,6 +296,12 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "fraction_of_range",
         0,
+        source_fields=(
+            "snapshot.latest_candle.close",
+            "snapshot.latest_candle.high",
+            "snapshot.latest_candle.low",
+            "snapshot.latest_candle.open",
+        ),
     ),
     _definition(
         "log_volume_ratio_1",
@@ -199,6 +309,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "log_ratio",
         1,
+        source_fields=("snapshot.latest_candle.volume",),
     ),
     _definition(
         "realized_volatility_20",
@@ -206,6 +317,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "log_return",
         20,
+        source_fields=("snapshot.latest_candle.close",),
     ),
     _definition(
         "volatility_normalized_return_20",
@@ -213,6 +325,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "ratio",
         20,
+        source_fields=("snapshot.latest_candle.close",),
     ),
     _definition(
         "return_autocorrelation_1_20",
@@ -220,6 +333,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "correlation",
         20,
+        source_fields=("snapshot.latest_candle.close",),
     ),
     _definition(
         "volume_relative_median_20",
@@ -227,6 +341,7 @@ BUILTIN_DEFINITIONS = (
         FeatureFamily.SEQUENCE,
         "fraction",
         19,
+        source_fields=("snapshot.latest_candle.volume",),
     ),
 )
 

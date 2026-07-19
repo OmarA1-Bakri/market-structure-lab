@@ -29,6 +29,13 @@ constant within and across discovery/development inputs. The final holdout is re
 and cannot be used for feature selection, cluster selection, threshold tuning, interpretation,
 parameter changes, or strategy construction.
 
+Before feature rows can be published for discovery, each registered field must carry the causal
+dependency contract and independent checksum-bound leakage evidence documented in
+`docs/benchmarks/feature-leakage-audit-contract-v1.md`. The receipt binds actual serialized output
+to the reviewed contract through a bounded producer envelope emitted by `FeatureBuilder`; plain row
+iterables are not publishable. The receipt explicitly retains residual manual review because
+metadata and output binding are not proof that arbitrary builder code is leakage-free.
+
 ## Algorithms and fixed caps
 
 - `build_feature_matrix` admits only registered numeric discovery-safe features and fails when its
@@ -109,13 +116,13 @@ uv run pytest -q tests/test_phase4_golden.py
 ```
 
 The stable `DR-000601` fixture freezes two behaviours and has manifest SHA-256
-`a0d5293393309cb4071fef710e1a0b79bb7274e0fc61216f628ec18225ad6481`. The unstable
+`eb09fe6c3773bb7454626701495b5c0674beb09d22ac9fbe729da08faf4b872b`. The unstable
 `DR-000602` fixture is deterministically retained with no behaviours and manifest SHA-256
-`03b0fc8daa7738814000f3564da48417646992a5bc2b192009aebec637f882dc`.
+`700f2a95b5ac01efc9ce582c826022071ed9f27517553e849e0c867bd6e918f0`.
 
 The parent-model interpretation prompt input is frozen at
 `tests/fixtures/phase4/discovery_interpretation_input_v1.json`, SHA-256
-`daf4b8451cd6777db0f99d1afbe4283a62188b8f21b6a2bd8fff5932a7ad91f4`. It is derived through the
+`9a695a20ca0e7757de142f4c6508c2955e9d1849a36dcce331559d9f34d65cec`. It is derived through the
 real evidence-pack API.
 
 The session model's exact response and supplied provenance are stored separately at
@@ -123,7 +130,7 @@ The session model's exact response and supplied provenance are stored separately
 `d7a965d9b8c40c4af760e665c88d84f26001f79c5df515f7587f47556acfa1ec`. The test constructs real
 `AIInterpretation` records from those bytes and publishes them through
 `publish_ai_interpretations`. The interpretation manifest SHA-256 is
-`4bba9523095c11d29188edab1b4b34b91b89ab3c6dcd6255a66e1ff970914550`. These are candidate
+`b10edc9c5d99ed28468bbd97cdac9f0dba60a98a49e44b4bc408046b0a385119`. These are candidate
 interpretations and proposed Phase 5 tests, not validation results.
 
 ## Interpretation of transitions

@@ -12,12 +12,16 @@ from market_structure_lab.events.models import EventKind, MarketEvent, make_even
 from market_structure_lab.events.overlap import build_overlap_report, kind_pair_key
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
+    BUILTIN_FEATURE_BUILDER_ID,
+    BUILTIN_FEATURE_BUILDER_VERSION,
     FeatureDefinition,
     FeatureFamily,
     FeatureRegistry,
     FeatureValueKind,
     LeakageClass,
     MissingPolicy,
+    NormalizationRequirement,
+    ObservableCutoffRule,
 )
 
 
@@ -35,6 +39,13 @@ REGISTRY = FeatureRegistry(
             missing_policy=MissingPolicy.NULL,
             version="1",
             leakage_class=LeakageClass.AT_CUTOFF,
+            source_fields=("fixture.poc_distance",),
+            trailing_window="current_observation",
+            observable_cutoff_rule=ObservableCutoffRule.AT_INFORMATION_CUTOFF,
+            normalization_requirement=NormalizationRequirement.TRAINING_PARTITION_FITTED,
+            future_outcome_prohibited=True,
+            builder_id=BUILTIN_FEATURE_BUILDER_ID,
+            builder_version=BUILTIN_FEATURE_BUILDER_VERSION,
         ),
     ),
 )

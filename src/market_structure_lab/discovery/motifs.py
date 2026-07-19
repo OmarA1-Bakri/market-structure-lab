@@ -351,9 +351,7 @@ class MotifStabilityPolicy:
     def perturbation_count(self) -> int:
         seed_tie_count = len(self.tie_seeds) * len(self.tie_policies)
         parameter_count = (
-            len(self.window_lengths)
-            * len(self.exclusion_zones)
-            * len(self.distance_multipliers)
+            len(self.window_lengths) * len(self.exclusion_zones) * len(self.distance_multipliers)
         )
         return seed_tie_count * 2 + parameter_count
 
@@ -492,8 +490,7 @@ class MotifCandidateEvidence:
             (self.parameter_evidence, "parameter"),
         ):
             if any(
-                not isinstance(item, MotifPerturbationEvidence)
-                or item.evidence_kind != kind
+                not isinstance(item, MotifPerturbationEvidence) or item.evidence_kind != kind
                 for item in evidence
             ):
                 raise TypeError(f"{kind} evidence contains invalid values")
@@ -780,9 +777,7 @@ def discover_multivariate_motifs(
                 heapq.heappush(retained, entry)
             elif candidate_key < retained[0][0].key:
                 heapq.heapreplace(retained, entry)
-    return tuple(
-        item[1] for item in sorted(retained, key=lambda item: item[0].key)
-    )
+    return tuple(item[1] for item in sorted(retained, key=lambda item: item[0].key))
 
 
 def evaluate_motif_stability(
@@ -810,9 +805,7 @@ def evaluate_motif_stability(
         regime_universe=regime_universe,
     )
     feature_names = _shared_feature_names((*discovery, *development))
-    universe_member_count = (
-        len(asset_universe) + len(period_universe) + len(regime_universe)
-    )
+    universe_member_count = len(asset_universe) + len(period_universe) + len(regime_universe)
     policy_axis_entry_count = (
         len(policy.window_lengths)
         + len(policy.exclusion_zones)
@@ -828,9 +821,7 @@ def evaluate_motif_stability(
         + len(development)
         + universe_member_count
     )
-    perturbation_entry_bound = (
-        _SERIALIZED_PERTURBATION_FIXED_ENTRIES + len(discovery)
-    )
+    perturbation_entry_bound = _SERIALIZED_PERTURBATION_FIXED_ENTRIES + len(discovery)
     recurrence_entry_bound = _SERIALIZED_RECURRENCE_FIXED_ENTRIES + 4
     universe_entry_bound = _SERIALIZED_UNIVERSE_FIXED_ENTRIES + 2
     candidate_entry_bound = (
@@ -840,9 +831,7 @@ def evaluate_motif_stability(
         + len(development) * recurrence_entry_bound
         + universe_member_count * universe_entry_bound
     )
-    serialized_evidence_bound = (
-        report_entry_bound + policy.top_k * candidate_entry_bound
-    )
+    serialized_evidence_bound = report_entry_bound + policy.top_k * candidate_entry_bound
     if serialized_evidence_bound > _MAX_SERIALIZED_MOTIF_EVIDENCE:
         raise ValueError("serialized motif evidence exceeds its conservative cap")
     primary_window = policy.window_lengths[0]
@@ -963,15 +952,14 @@ def evaluate_motif_stability(
             for window_length, exclusion_zone, multiplier, ranking in parameter_rankings
         )
         seed_agreement = math.fsum(
-            _retained_rank_agreement(item, base_rank, policy.top_k)
-            for item in seed_evidence
+            _retained_rank_agreement(item, base_rank, policy.top_k) for item in seed_evidence
         ) / len(seed_evidence)
-        subsample_agreement = math.fsum(
-            item.passed for item in subsample_evidence
-        ) / len(subsample_evidence)
-        parameter_agreement = math.fsum(
-            item.passed for item in parameter_evidence
-        ) / len(parameter_evidence)
+        subsample_agreement = math.fsum(item.passed for item in subsample_evidence) / len(
+            subsample_evidence
+        )
+        parameter_agreement = math.fsum(item.passed for item in parameter_evidence) / len(
+            parameter_evidence
+        )
         recurrence = _development_recurrence(
             match=match,
             discovery_sequences=discovery,
@@ -1049,9 +1037,7 @@ def _validated_sequence(sequence: Sequence[float | None]) -> tuple[float | None,
     return tuple(values)
 
 
-def _is_contiguous_motif_observation(
-    left: MotifObservation, right: MotifObservation
-) -> bool:
+def _is_contiguous_motif_observation(left: MotifObservation, right: MotifObservation) -> bool:
     return (
         is_contiguous_observation(left, right)
         and left.period_id == right.period_id
@@ -1206,13 +1192,9 @@ def _universe_support(
         )
         for sequence in development_sequences
     )
-    recurrent_ids = {
-        item.sequence_id for item in recurrence_support if item.recurrent
-    }
+    recurrent_ids = {item.sequence_id for item in recurrence_support if item.recurrent}
     rows: list[MotifUniverseSupport] = []
-    dimensions: tuple[
-        tuple[MotifUniverseDimension, tuple[str, ...], int], ...
-    ] = (
+    dimensions: tuple[tuple[MotifUniverseDimension, tuple[str, ...], int], ...] = (
         ("asset", asset_universe, 0),
         ("period", period_universe, 1),
         ("regime", regime_universe, 2),
@@ -1221,9 +1203,7 @@ def _universe_support(
         for member in members:
             matching_ids = tuple(
                 sequence.sequence_id
-                for sequence, values in zip(
-                    development_sequences, sequence_dimensions, strict=True
-                )
+                for sequence, values in zip(development_sequences, sequence_dimensions, strict=True)
                 if values[index] == member
             )
             rows.append(
@@ -1243,8 +1223,7 @@ def _supported_universe_count(
     support: Sequence[MotifUniverseSupport], dimension: MotifUniverseDimension
 ) -> int:
     return sum(
-        item.dimension == dimension and item.recurrent_sequence_count > 0
-        for item in support
+        item.dimension == dimension and item.recurrent_sequence_count > 0 for item in support
     )
 
 
@@ -1261,9 +1240,7 @@ def _development_recurrence(
         if sequence.sequence_id == match.left_sequence_id
     )
     source_start = next(
-        index
-        for index, row in enumerate(source.observations)
-        if row.row_id == match.left_row_id
+        index for index, row in enumerate(source.observations) if row.row_id == match.left_row_id
     )
     source_window = _normalized_multivariate_window(
         source.observations[source_start : source_start + match.window_length]
@@ -1390,9 +1367,7 @@ def _sequence_id(rows: Sequence[MotifObservation]) -> str:
     return f"MS-{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16].upper()}"
 
 
-def _motif_tie_key(
-    match: MultivariateMotifMatch, seed: int, policy: MotifTiePolicy
-) -> str:
+def _motif_tie_key(match: MultivariateMotifMatch, seed: int, policy: MotifTiePolicy) -> str:
     if policy == "canonical":
         return "|".join(
             (
@@ -1533,8 +1508,10 @@ def _finite_number(value: object, label: str) -> float:
 
 
 def _require_utc(value: datetime, label: str) -> None:
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != UTC.utcoffset(
-        value
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() != UTC.utcoffset(value)
     ):
         raise ValueError(f"{label} must be timezone-aware UTC")
 

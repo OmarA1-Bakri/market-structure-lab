@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import copy
+import gc
 import json
+import weakref
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from math import log, sqrt
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
+import market_structure_lab.features as features_package
 
 from market_structure_lab.auction.engine import (
     AuctionLocation,
@@ -15,12 +20,24 @@ from market_structure_lab.auction.engine import (
     StructuralEventKind,
 )
 from market_structure_lab.auction.models import AuctionCandle
-from market_structure_lab.features.builder import FeatureBuilder
+import market_structure_lab.features.builder as feature_builder_module
+
+from market_structure_lab.features.builder import (
+    FeatureBuildBatch,
+    FeatureBuildBatchLease,
+    FeatureBuildBatchMetadata,
+    FeatureBuilder,
+)
 from market_structure_lab.features.builtin import (
     BUILTIN_DEFINITIONS,
     builtin_feature_registry,
 )
-from market_structure_lab.features.registry import FeatureDefinition, FeatureRegistry
+from market_structure_lab.features.models import FeatureRow
+from market_structure_lab.features.registry import (
+    BUILTIN_FEATURE_BUILDER_ID,
+    BUILTIN_FEATURE_BUILDER_VERSION,
+    FeatureRegistry,
+)
 from market_structure_lab.profiles.binning import FixedStepBins
 from market_structure_lab.profiles.models import ProfileSnapshot
 from market_structure_lab.structure.nodes import NodeKind, ProfileNode
@@ -28,6 +45,443 @@ from market_structure_lab.structure.nodes import NodeKind, ProfileNode
 BASE = datetime(2025, 1, 1, tzinfo=UTC)
 BINS = FixedStepBins(step=1.0)
 GOLDEN = Path(__file__).parent / "fixtures" / "phase3" / "feature_golden_v1.json"
+
+
+def test_builder_identity_and_output_match_every_registered_field_contract() -> None:
+    builder = FeatureBuilder()
+    row = builder.update(snapshot(0))
+
+    assert builder.builder_id == BUILTIN_FEATURE_BUILDER_ID
+    assert builder.builder_version == BUILTIN_FEATURE_BUILDER_VERSION
+    assert tuple(row.values) == builder.registry.names
+    assert all(
+        definition.builder_id == builder.builder_id
+        and definition.builder_version == builder.builder_version
+        and definition.future_outcome_prohibited is True
+        and definition.source_fields
+        and len(definition.dependency_contract_sha256) == 64
+        for definition in builder.registry.definitions
+    )
+
+
+def test_builder_emits_immutable_replayable_producer_bound_batch(tmp_path: Path) -> None:
+    builder = FeatureBuilder()
+    batch = builder.build_batch(
+        (snapshot(index, close=100.0 + index) for index in range(3)),
+        artifact_path=tmp_path / "feature-output.jsonl",
+        maximum_rows=3,
+    )
+
+    first = tuple(batch.iter_rows())
+    second = tuple(batch.iter_rows())
+
+    assert first == second
+    assert batch.row_count == 3
+    assert batch.builder_id == builder.builder_id
+    assert batch.builder_version == builder.builder_version
+    assert batch.feature_registry_sha256 == builder.registry.sha256
+    assert batch.dependency_contract_sha256 == builder.registry.dependency_contract_sha256
+    assert batch.artifact_sha256 == batch.content_sha256
+
+
+def test_batch_replay_uses_authoritative_absolute_path_after_working_directory_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_root = tmp_path / "build-root"
+    (build_root / "batches").mkdir(parents=True)
+    other_root = tmp_path / "other-root"
+    other_root.mkdir()
+    monkeypatch.chdir(build_root)
+    batch = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=Path("batches") / "rows.jsonl",
+        maximum_rows=1,
+    )
+
+    assert batch.artifact_path.is_absolute()
+    assert batch.artifact_path == build_root / "batches" / "rows.jsonl"
+    monkeypatch.chdir(other_root)
+
+    assert tuple(batch.iter_rows()) == (FeatureBuilder().update(snapshot(0)),)
+
+
+def _batch_constructor_fields(batch: FeatureBuildBatch) -> dict[str, object]:
+    return {
+        "artifact_path": batch.artifact_path,
+        "artifact_sha256": batch.artifact_sha256,
+        "content_sha256": batch.content_sha256,
+        "row_count": batch.row_count,
+        "builder_id": batch.builder_id,
+        "builder_version": batch.builder_version,
+        "feature_registry_sha256": batch.feature_registry_sha256,
+        "dependency_contract_sha256": batch.dependency_contract_sha256,
+        "registry_id": batch.registry_id,
+        "maximum_row_bytes": batch.maximum_row_bytes,
+    }
+
+
+@pytest.mark.parametrize("forgery_kind", ("replace", "copy", "deepcopy", "manual", "subclass"))
+def test_only_exact_issued_batch_instance_can_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    forgery_kind: str,
+) -> None:
+    issued = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "issued.jsonl",
+        maximum_rows=1,
+    )
+    fields = _batch_constructor_fields(issued)
+    if forgery_kind == "replace":
+        forged = replace(issued)
+    elif forgery_kind == "copy":
+        forged = copy.copy(issued)
+    elif forgery_kind == "deepcopy":
+        forged = copy.deepcopy(issued)
+    elif forgery_kind == "manual":
+        forged = FeatureBuildBatch(**fields)
+    else:
+
+        class ForgedFeatureBuildBatch(FeatureBuildBatch):
+            pass
+
+        forged = ForgedFeatureBuildBatch(**fields)
+
+    def artifact_was_read(*args: object, **kwargs: object) -> str:
+        raise AssertionError("unissued feature batch reached artifact replay")
+
+    monkeypatch.setattr(feature_builder_module, "iter_bounded_regular_lines", artifact_was_read)
+    with pytest.raises((TypeError, ValueError), match="exact issued FeatureBuildBatch"):
+        tuple(forged.iter_rows())
+
+
+def test_donor_artifact_substitution_invalidates_exact_issued_instance_before_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issued = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "issued.jsonl",
+        maximum_rows=1,
+    )
+    donor = FeatureBuilder().build_batch(
+        [snapshot(0, close=101.0)],
+        artifact_path=tmp_path / "donor.jsonl",
+        maximum_rows=1,
+    )
+    for field_name in (
+        "artifact_path",
+        "artifact_sha256",
+        "content_sha256",
+        "row_count",
+    ):
+        object.__setattr__(issued, field_name, getattr(donor, field_name))
+
+    def artifact_was_read(*args: object, **kwargs: object) -> str:
+        raise AssertionError("mutated issued batch reached donor artifact replay")
+
+    monkeypatch.setattr(feature_builder_module, "iter_bounded_regular_lines", artifact_was_read)
+    with pytest.raises(ValueError, match="metadata changed"):
+        tuple(issued.iter_rows())
+
+
+def test_batch_issuance_is_revoked_on_close_and_does_not_prevent_collection(tmp_path: Path) -> None:
+    closed = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "closed.jsonl",
+        maximum_rows=1,
+    )
+    closed.close()
+    with pytest.raises(ValueError, match="exact issued FeatureBuildBatch"):
+        tuple(closed.iter_rows())
+
+    collected = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "collected.jsonl",
+        maximum_rows=1,
+    )
+    reference = weakref.ref(collected)
+    del collected
+    gc.collect()
+
+    assert reference() is None
+
+
+def test_replay_uses_authenticated_metadata_snapshot_during_concurrent_attribute_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issued = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "issued.jsonl",
+        maximum_rows=1,
+    )
+    donor = FeatureBuilder().build_batch(
+        [snapshot(0, close=101.0)],
+        artifact_path=tmp_path / "donor.jsonl",
+        maximum_rows=1,
+    )
+    expected = (FeatureBuilder().update(snapshot(0)),)
+    original_verify = FeatureBuildBatch.verify_issued
+    verified = Event()
+    resume = Event()
+    paused = False
+
+    def verify_with_barrier(candidate: object):
+        nonlocal paused
+        metadata = original_verify(candidate)
+        if candidate is issued and not paused:
+            paused = True
+            verified.set()
+            assert resume.wait(timeout=10)
+        return metadata
+
+    monkeypatch.setattr(FeatureBuildBatch, "verify_issued", staticmethod(verify_with_barrier))
+    rows: list[FeatureRow] = []
+    errors: list[BaseException] = []
+
+    def replay() -> None:
+        try:
+            rows.extend(issued.iter_rows())
+        except BaseException as error:
+            errors.append(error)
+
+    thread = Thread(target=replay)
+    thread.start()
+    assert verified.wait(timeout=10)
+    for field_name in (
+        "artifact_path",
+        "artifact_sha256",
+        "content_sha256",
+        "row_count",
+        "maximum_row_bytes",
+    ):
+        object.__setattr__(issued, field_name, getattr(donor, field_name))
+    object.__setattr__(issued, "builder_id", "forged-builder")
+    object.__setattr__(issued, "builder_version", "forged-version")
+    object.__setattr__(issued, "registry_id", "FR-000000000000")
+    resume.set()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert rows == list(expected)
+
+
+def test_replay_rejects_donor_lease_substitution_at_deterministic_barrier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issued = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "issued.jsonl",
+        maximum_rows=1,
+    )
+    donor = FeatureBuilder().build_batch(
+        [snapshot(0, close=101.0)],
+        artifact_path=tmp_path / "donor.jsonl",
+        maximum_rows=1,
+    )
+    donor_lease = FeatureBuildBatch.verify_issued(donor)
+    original_verify = FeatureBuildBatch.verify_issued
+    captured: list[FeatureBuildBatchLease] = []
+    verified = Event()
+    resume = Event()
+
+    def verify_with_barrier(candidate: object) -> FeatureBuildBatchLease:
+        lease = original_verify(candidate)
+        if candidate is issued:
+            captured.append(lease)
+            verified.set()
+            assert resume.wait(timeout=10)
+        return lease
+
+    monkeypatch.setattr(FeatureBuildBatch, "verify_issued", staticmethod(verify_with_barrier))
+    rows: list[FeatureRow] = []
+    errors: list[BaseException] = []
+
+    def replay() -> None:
+        try:
+            rows.extend(issued.iter_rows())
+        except BaseException as error:
+            errors.append(error)
+
+    thread = Thread(target=replay)
+    thread.start()
+    assert verified.wait(timeout=10)
+    object.__setattr__(captured[0], "lease_id", donor_lease.lease_id)
+    for field_name in ("artifact_path", "artifact_sha256", "content_sha256", "row_count"):
+        object.__setattr__(issued, field_name, getattr(donor, field_name))
+    resume.set()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert rows == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], ValueError)
+    assert "lease is no longer issued" in str(errors[0])
+
+
+def test_resolved_metadata_is_detached_and_private_canonical_record_is_not_exported(
+    tmp_path: Path,
+) -> None:
+    issued = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "issued.jsonl",
+        maximum_rows=1,
+    )
+    donor = FeatureBuilder().build_batch(
+        [snapshot(0, close=101.0)],
+        artifact_path=tmp_path / "donor.jsonl",
+        maximum_rows=1,
+    )
+    lease = FeatureBuildBatch.verify_issued(issued)
+    metadata = FeatureBuildBatch.resolve_lease(issued, lease)
+
+    assert type(lease) is FeatureBuildBatchLease
+    assert type(metadata) is FeatureBuildBatchMetadata
+    assert "_IssuedFeatureBuildBatch" not in features_package.__all__
+    object.__setattr__(metadata, "artifact_path", donor.artifact_path)
+    object.__setattr__(metadata, "artifact_sha256", donor.artifact_sha256)
+
+    assert tuple(issued.iter_rows(lease)) == (FeatureBuilder().update(snapshot(0)),)
+
+
+def test_close_after_replay_lease_is_acquired_keeps_active_replay_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issued = FeatureBuilder().build_batch(
+        [snapshot(0)],
+        artifact_path=tmp_path / "issued.jsonl",
+        maximum_rows=1,
+    )
+    expected = (FeatureBuilder().update(snapshot(0)),)
+    original_lines = feature_builder_module.iter_bounded_regular_lines
+    lease_acquired = Event()
+    resume = Event()
+
+    def lines_with_barrier(*args: object, **kwargs: object):
+        lease_acquired.set()
+        assert resume.wait(timeout=10)
+        yield from original_lines(*args, **kwargs)
+
+    monkeypatch.setattr(feature_builder_module, "iter_bounded_regular_lines", lines_with_barrier)
+    rows: list[FeatureRow] = []
+    errors: list[BaseException] = []
+
+    def replay() -> None:
+        try:
+            rows.extend(issued.iter_rows())
+        except BaseException as error:
+            errors.append(error)
+
+    thread = Thread(target=replay)
+    thread.start()
+    assert lease_acquired.wait(timeout=10)
+    issued.close()
+    resume.set()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert rows == list(expected)
+    with pytest.raises(ValueError, match="exact issued FeatureBuildBatch"):
+        tuple(issued.iter_rows())
+
+
+@pytest.mark.parametrize("override_kind", ("subclass", "instance"))
+def test_producer_bound_batch_uses_sealed_row_construction_despite_method_overrides(
+    tmp_path: Path,
+    override_kind: str,
+) -> None:
+    snapshots = (snapshot(0), snapshot(0, symbol="ETHUSDT"))
+    expected = (
+        FeatureBuilder().update(snapshots[0]),
+        FeatureBuilder().update(snapshots[1]),
+    )
+    forged_calls = 0
+    overridden_reset_calls = 0
+
+    def forged_update(snapshot: AuctionSnapshot) -> object:
+        nonlocal forged_calls
+        forged_calls += 1
+        genuine = FeatureBuilder().update(snapshot)
+        return replace(
+            genuine,
+            values={**genuine.values, "poc_distance_close": 999.0},
+        )
+
+    def forged_reset() -> None:
+        nonlocal overridden_reset_calls
+        overridden_reset_calls += 1
+        raise AssertionError("overridden reset reached token-bearing construction")
+
+    if override_kind == "subclass":
+
+        class MaliciousFeatureBuilder(FeatureBuilder):
+            def update(self, snapshot: AuctionSnapshot) -> object:
+                return forged_update(snapshot)
+
+            def reset(self) -> None:
+                forged_reset()
+
+        builder = MaliciousFeatureBuilder()
+    else:
+        builder = FeatureBuilder()
+        builder.update = forged_update  # type: ignore[method-assign]
+        builder.reset = forged_reset  # type: ignore[method-assign]
+
+    batch = builder.build_batch(
+        snapshots,
+        artifact_path=tmp_path / f"{override_kind}.jsonl",
+        maximum_rows=2,
+    )
+
+    assert tuple(batch.iter_rows()) == expected
+    assert forged_calls == 0
+    assert overridden_reset_calls == 0
+    assert builder.history_size == 1
+
+
+@pytest.mark.parametrize(
+    ("kind", "feature_name"),
+    [
+        (NodeKind.HVN, "nearest_hvn_distance_close"),
+        (NodeKind.LVN, "nearest_lvn_distance_close"),
+    ],
+)
+def test_nearest_node_tie_uses_declared_representative_index_dependency(
+    kind: NodeKind,
+    feature_name: str,
+) -> None:
+    higher_index = ProfileNode(
+        kind,
+        99.0,
+        10.0,
+        1.0,
+        start_index=8,
+        end_index=8,
+        representative_index=8,
+    )
+    lower_index = ProfileNode(
+        kind,
+        101.0,
+        10.0,
+        1.0,
+        start_index=2,
+        end_index=2,
+        representative_index=2,
+    )
+
+    row = FeatureBuilder().update(snapshot(0, nodes=(higher_index, lower_index)))
+    definition = next(
+        item for item in builtin_feature_registry().definitions if item.name == feature_name
+    )
+
+    assert row.values[feature_name] == pytest.approx(-0.01)
+    assert "snapshot.nodes.representative_index" in definition.source_fields
 
 
 def snapshot(
@@ -337,17 +791,7 @@ def test_prefix_invariance_future_poisoning_and_bounded_history() -> None:
 def test_builder_rejects_metadata_drift_under_reused_feature_set_id() -> None:
     changed = list(BUILTIN_DEFINITIONS)
     original = changed[0]
-    changed[0] = FeatureDefinition(
-        **{
-            **original.to_dict(),
-            "definition": "Changed formula metadata.",
-            "family": original.family,
-            "value_kind": original.value_kind,
-            "missing_policy": original.missing_policy,
-            "leakage_class": original.leakage_class,
-            "allowed_categories": original.allowed_categories,
-        }
-    )
+    changed[0] = replace(original, definition="Changed formula metadata.")
     drifted = FeatureRegistry("FS-000001", changed)
 
     with pytest.raises(ValueError, match="exactly match"):

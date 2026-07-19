@@ -211,6 +211,7 @@ if (
 )
   fail("trial ledger contract");
 const replay = evidence.software_replay;
+const fixtureProducer = replay?.fixture_producer;
 if (
   !object(replay) ||
   replay.status !== "fixture_contract_present" ||
@@ -219,8 +220,16 @@ if (
   typeof replay.claim !== "string" ||
   replay.verification_receipt_available !== false ||
   !sha(replay.fixture_sha256) ||
+  replay.fixture_schema_version !== "phase4-discovery-fixture-v3" ||
+  !exactKeys(fixtureProducer, ["builder_id", "builder_version", "input_schema"]) ||
+  fixtureProducer.builder_id !==
+    "phase4_fixture_producer.Phase4FixtureFeatureProducer" ||
+  fixtureProducer.builder_version !== "phase4-fixture-producer-v1" ||
+  fixtureProducer.input_schema !== "phase4-fixture-source-v1" ||
+  !sha(replay.fixture_registry_sha256) ||
   !sha(replay.interpretation_input_sha256) ||
   !sha(replay.interpretation_response_sha256) ||
+  !sha(replay.interpretation_publication_manifest_sha256) ||
   !object(replay.runs) ||
   !Array.isArray(replay.behaviours)
 )
@@ -265,6 +274,20 @@ for (const [key, status] of [
     typeof run.run_id !== "string" ||
     run.status !== status ||
     !sha(run.manifest_sha256) ||
+    !sha(run.identity_sha256) ||
+    !sha(run.config_sha256) ||
+    !exactKeys(run.artifact_sha256, [
+      "behaviours.json",
+      "clustering.json",
+      "config.json",
+      "metrics.json",
+      "motifs.json",
+      "projection.json",
+      "stability.json",
+      "summary.md",
+      "transitions.json",
+    ]) ||
+    !Object.values(run.artifact_sha256).every(sha) ||
     run.transition_algorithm_version !== transitionAlgorithmVersion ||
     !Array.isArray(run.behaviour_ids) ||
     run.behaviour_ids.some((value) => typeof value !== "string") ||
@@ -314,6 +337,20 @@ for (const item of registry.definitions)
     !["AT_CUTOFF", "TRAILING_ONLY", "TRAIN_FITTED"].includes(
       item.leakage_class,
     ) ||
+    !Array.isArray(item.source_fields) ||
+    item.source_fields.length === 0 ||
+    item.source_fields.some((value) => typeof value !== "string") ||
+    typeof item.trailing_window !== "string" ||
+    ![
+      "at_information_cutoff",
+      "trailing_through_information_cutoff",
+    ].includes(item.observable_cutoff_rule) ||
+    !["not_required", "training_partition_fitted"].includes(
+      item.normalization_requirement,
+    ) ||
+    item.future_outcome_prohibited !== true ||
+    typeof item.builder_id !== "string" ||
+    typeof item.builder_version !== "string" ||
     !Array.isArray(item.allowed_categories) ||
     item.allowed_categories.some((value) => typeof value !== "string")
   )

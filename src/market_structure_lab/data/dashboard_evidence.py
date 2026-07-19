@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,19 @@ from market_structure_lab.features import builtin_feature_registry
 from market_structure_lab.experiments import ExperimentMode, TerminalStatus, read_trial_ledger
 
 LAB_EVIDENCE_SCHEMA_VERSION = 1
+_PHASE4_FIXTURE_SCHEMA_VERSION = "phase4-discovery-fixture-v3"
+_PHASE4_FIXTURE_PRODUCER = {
+    "builder_id": "phase4_fixture_producer.Phase4FixtureFeatureProducer",
+    "builder_version": "phase4-fixture-producer-v1",
+    "input_schema": "phase4-fixture-source-v1",
+}
+_PHASE4_ROW_KEYS = {"timestamp", "symbol", "segment_id", "source"}
+_PHASE4_SOURCE_KEYS = {
+    "auction_location_ratio",
+    "previous_volume",
+    "current_volume",
+    "volume_scale",
+}
 
 
 def generate_lab_evidence(
@@ -306,12 +320,19 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
         "interpretation_input_sha256",
         "interpretation_response_sha256",
         "interpretation_publication",
+        "fixture_producer",
     }
     if (
         set(fixture) != expected_top
-        or fixture.get("schema_version") != "phase4-discovery-fixture-v2"
+        or fixture.get("schema_version") != _PHASE4_FIXTURE_SCHEMA_VERSION
     ):
         raise ValueError("unsupported Phase 4 fixture schema")
+    producer = fixture.get("fixture_producer")
+    if not isinstance(producer, dict) or producer != _PHASE4_FIXTURE_PRODUCER:
+        raise ValueError("Phase 4 fixture producer contract is invalid")
+    registry_sha256 = _validate_phase4_registry(fixture.get("registry"))
+    _validate_phase4_source_rows(fixture.get("discovery_rows"), label="discovery")
+    _validate_phase4_source_rows(fixture.get("development_rows"), label="development")
     input_sha = _sha256_file(input_path)
     response_sha = _sha256_file(response_path)
     if fixture["interpretation_input_sha256"] != input_sha:
@@ -323,6 +344,10 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
         raise ValueError("Phase 4 fixture requires stable and rejected runs")
     stable = _fixture_run(runs["stable"], expected_status="completed")
     rejected = _fixture_run(runs["rejected"], expected_status="rejected_unstable")
+    interpretation_publication = _fixture_interpretation_publication(
+        fixture.get("interpretation_publication"),
+        stable=stable,
+    )
     if interpretation_input.get("schema_version") != "phase4-interpretation-input-v2":
         raise ValueError("unsupported Phase 4 interpretation input schema")
     if (
@@ -377,8 +402,12 @@ def _phase4_fixture_evidence(repository_root: Path) -> dict[str, Any]:
         "fixture_kind": "synthetic_golden",
         "fixture_path": "tests/fixtures/phase4/discovery_run_v1.json",
         "fixture_sha256": _sha256_file(fixture_path),
+        "fixture_schema_version": _PHASE4_FIXTURE_SCHEMA_VERSION,
+        "fixture_producer": dict(_PHASE4_FIXTURE_PRODUCER),
+        "fixture_registry_sha256": registry_sha256,
         "interpretation_input_sha256": input_sha,
         "interpretation_response_sha256": response_sha,
+        "interpretation_publication_manifest_sha256": interpretation_publication["manifest_sha256"],
         "verification_receipt_available": False,
         "claim": "fixture only; no real-market recurrence or predictive evidence",
         "runs": {"stable": stable, "rejected": rejected},
@@ -391,23 +420,140 @@ def _fixture_run(value: object, *, expected_status: str) -> dict[str, Any]:
         raise ValueError("Phase 4 run fixture is invalid")
     expected = value["expected"]
     metrics = expected.get("metrics")
+    artifact_sha256 = expected.get("artifact_sha256")
+    expected_artifacts = {
+        "behaviours.json",
+        "clustering.json",
+        "config.json",
+        "metrics.json",
+        "motifs.json",
+        "projection.json",
+        "stability.json",
+        "summary.md",
+        "transitions.json",
+    }
     if (
         not isinstance(value.get("run_id"), str)
         or expected.get("status") != expected_status
         or not _is_sha256(expected.get("manifest_sha256"))
+        or not _is_sha256(expected.get("identity_sha256"))
+        or not _is_sha256(expected.get("config_sha256"))
         or not isinstance(expected.get("behaviour_ids"), list)
         or expected.get("transition_algorithm_version") != "boundary-aware-dwell-transitions-v3"
         or not isinstance(metrics, dict)
+        or not isinstance(artifact_sha256, dict)
+        or set(artifact_sha256) != expected_artifacts
+        or any(not _is_sha256(digest) for digest in artifact_sha256.values())
     ):
         raise ValueError("Phase 4 run fixture contract is invalid")
     return {
         "run_id": value["run_id"],
         "status": expected_status,
         "manifest_sha256": expected["manifest_sha256"],
+        "identity_sha256": expected["identity_sha256"],
+        "config_sha256": expected["config_sha256"],
+        "artifact_sha256": dict(sorted(artifact_sha256.items())),
         "behaviour_ids": expected["behaviour_ids"],
         "transition_algorithm_version": expected["transition_algorithm_version"],
         "metrics": metrics,
     }
+
+
+def _validate_phase4_registry(value: object) -> str:
+    if not isinstance(value, dict) or set(value) != {"feature_set_id", "definitions"}:
+        raise ValueError("Phase 4 fixture registry contract is invalid")
+    if value.get("feature_set_id") != "FS-000601":
+        raise ValueError("Phase 4 fixture registry feature-set ID is invalid")
+    definitions = value.get("definitions")
+    if not isinstance(definitions, list) or len(definitions) != 2:
+        raise ValueError("Phase 4 fixture registry definitions are invalid")
+    by_name = {item.get("name"): item for item in definitions if isinstance(item, dict)}
+    expected_contracts = {
+        "auction_location": {
+            "value_kind": "float",
+            "source_fields": ["fixture.auction_location_ratio"],
+            "trailing_window": "current_observation",
+            "observable_cutoff_rule": "at_information_cutoff",
+            "normalization_requirement": "not_required",
+        },
+        "volume_change": {
+            "value_kind": "float",
+            "source_fields": [
+                "fixture.current_volume",
+                "fixture.previous_volume",
+                "fixture.volume_scale",
+            ],
+            "trailing_window": "trailing_2_observations",
+            "observable_cutoff_rule": "trailing_through_information_cutoff",
+            "normalization_requirement": "not_required",
+        },
+    }
+    if set(by_name) != set(expected_contracts):
+        raise ValueError("Phase 4 fixture registry field names are invalid")
+    for name, contract in expected_contracts.items():
+        definition = by_name[name]
+        if (
+            any(definition.get(field) != expected for field, expected in contract.items())
+            or definition.get("builder_id") != _PHASE4_FIXTURE_PRODUCER["builder_id"]
+            or definition.get("builder_version") != _PHASE4_FIXTURE_PRODUCER["builder_version"]
+            or definition.get("future_outcome_prohibited") is not True
+        ):
+            raise ValueError("Phase 4 fixture registry producer contract is invalid")
+    return hashlib.sha256(
+        json.dumps(value, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _validate_phase4_source_rows(value: object, *, label: str) -> None:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Phase 4 fixture {label} rows are invalid")
+    for row in value:
+        if not isinstance(row, dict) or set(row) != _PHASE4_ROW_KEYS:
+            raise ValueError(f"Phase 4 fixture {label} row schema is invalid")
+        source = row.get("source")
+        if not isinstance(source, dict) or set(source) != _PHASE4_SOURCE_KEYS:
+            raise ValueError(f"Phase 4 fixture {label} raw source schema is invalid")
+        if (
+            not isinstance(row.get("timestamp"), str)
+            or not isinstance(row.get("symbol"), str)
+            or isinstance(row.get("segment_id"), bool)
+            or not isinstance(row.get("segment_id"), int)
+            or any(
+                isinstance(item, bool) or not isinstance(item, (int, float))
+                for item in source.values()
+            )
+            or not math.isfinite(float(source["auction_location_ratio"]))
+            or not math.isfinite(float(source["previous_volume"]))
+            or not math.isfinite(float(source["current_volume"]))
+            or not math.isfinite(float(source["volume_scale"]))
+            or float(source["volume_scale"]) <= 0
+        ):
+            raise ValueError(f"Phase 4 fixture {label} raw source values are invalid")
+
+
+def _fixture_interpretation_publication(
+    value: object,
+    *,
+    stable: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"expected"}:
+        raise ValueError("Phase 4 fixture interpretation publication is invalid")
+    expected = value.get("expected")
+    if not isinstance(expected, dict):
+        raise ValueError("Phase 4 fixture interpretation publication is invalid")
+    artifacts = expected.get("artifact_sha256")
+    if (
+        expected.get("schema_version") != "interpretation-manifest-v2"
+        or expected.get("run_id") != stable["run_id"]
+        or expected.get("behaviour_ids") != stable["behaviour_ids"]
+        or not _is_sha256(expected.get("identity_sha256"))
+        or not _is_sha256(expected.get("manifest_sha256"))
+        or not isinstance(artifacts, dict)
+        or set(artifacts) != {"evidence.json", "interpretations.json"}
+        or any(not _is_sha256(digest) for digest in artifacts.values())
+    ):
+        raise ValueError("Phase 4 fixture interpretation publication contract is invalid")
+    return expected
 
 
 def _is_sha256(value: object) -> bool:

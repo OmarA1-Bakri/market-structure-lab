@@ -178,8 +178,10 @@ def freeze_discovery_provenance(
         raise ValueError("normalizer artifact bytes are not canonical")
     if not isinstance(split, FrozenDiscoverySplit):
         raise TypeError("split must be a FrozenDiscoverySplit")
-    if not isinstance(feature_names, tuple) or not feature_names or len(set(feature_names)) != len(
-        feature_names
+    if (
+        not isinstance(feature_names, tuple)
+        or not feature_names
+        or len(set(feature_names)) != len(feature_names)
     ):
         raise ValueError("feature_names must be a unique non-empty tuple")
     if _COMMIT.fullmatch(code_commit) is None:

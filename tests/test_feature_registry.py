@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from types import MappingProxyType
 
@@ -9,12 +10,19 @@ import pytest
 
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
+    BUILTIN_FEATURE_BUILDER_ID,
+    BUILTIN_FEATURE_BUILDER_VERSION,
+    MAX_FEATURE_CATEGORIES,
+    MAX_FEATURE_DEFINITION_LENGTH,
+    MAX_FEATURE_SOURCE_FIELDS,
     FeatureDefinition,
     FeatureFamily,
     FeatureRegistry,
     FeatureValueKind,
     LeakageClass,
     MissingPolicy,
+    NormalizationRequirement,
+    ObservableCutoffRule,
 )
 
 
@@ -26,6 +34,17 @@ def definition(
     missing_policy: MissingPolicy = MissingPolicy.NULL,
     leakage_class: LeakageClass = LeakageClass.AT_CUTOFF,
     allowed_categories: tuple[str, ...] = (),
+    source_fields: tuple[str, ...] = ("snapshot.latest_candle.close",),
+    trailing_window: str = "trailing_2_observations",
+    observable_cutoff_rule: ObservableCutoffRule = (
+        ObservableCutoffRule.TRAILING_THROUGH_INFORMATION_CUTOFF
+    ),
+    normalization_requirement: NormalizationRequirement = (
+        NormalizationRequirement.TRAINING_PARTITION_FITTED
+    ),
+    future_outcome_prohibited: bool = True,
+    builder_id: str = BUILTIN_FEATURE_BUILDER_ID,
+    builder_version: str = BUILTIN_FEATURE_BUILDER_VERSION,
 ) -> FeatureDefinition:
     return FeatureDefinition(
         name=name,
@@ -38,6 +57,13 @@ def definition(
         version="v1",
         leakage_class=leakage_class,
         allowed_categories=allowed_categories,
+        source_fields=source_fields,
+        trailing_window=trailing_window,
+        observable_cutoff_rule=observable_cutoff_rule,
+        normalization_requirement=normalization_requirement,
+        future_outcome_prohibited=future_outcome_prohibited,
+        builder_id=builder_id,
+        builder_version=builder_version,
     )
 
 
@@ -90,26 +116,148 @@ def test_registry_canonical_payload_and_hash_ignore_insertion_order() -> None:
     assert json.loads(first.canonical_json())["feature_set_id"] == "FS-000123"
 
 
+def test_registry_snapshot_is_detached_frozen_and_authoritative() -> None:
+    active = registry(definition("poc_distance"), definition("return_1"))
+    snapshot = active.snapshot()
+    expected_json = snapshot.canonical_json
+    expected_names = snapshot.names
+    expected_dependency = snapshot.dependency_contract_sha256
+
+    object.__setattr__(active._definitions[0], "source_fields", ("snapshot.future.close",))
+    active._names = tuple(reversed(active._names))
+
+    assert snapshot.canonical_json == expected_json
+    assert snapshot.names == expected_names
+    assert snapshot.dependency_contract_sha256 == expected_dependency
+    snapshot.audit_discovery()
+    with pytest.raises(ValueError, match="future or outcome source"):
+        active.snapshot()
+
+
 def test_registry_hash_is_golden_and_metadata_change_is_detectable() -> None:
     first = registry(definition("poc_distance"))
-    changed = FeatureDefinition(
-        **{
-            **first.definitions[0].to_dict(),
-            "family": FeatureFamily.AUCTION,
-            "value_kind": FeatureValueKind.FLOAT,
-            "missing_policy": MissingPolicy.NULL,
-            "leakage_class": LeakageClass.AT_CUTOFF,
-            "definition": "Changed, still deterministic definition",
-            "allowed_categories": (),
-        }
+    changed = replace(
+        first.definitions[0],
+        definition="Changed, still deterministic definition",
     )
     reused_id = registry(changed)
 
-    assert first.sha256 == "704c8a61ed22ac30c56b911283ae22d084aae6ad5987003c49c08698823ae099"
-    assert first.registry_id == "FR-704C8A61ED22"
+    assert first.sha256 == "2834616ec63d0a8e5f0dcea96fd3cfc1d39a7adc1c64011ad402b841186dda80"
+    assert first.registry_id == "FR-2834616EC63D"
     assert reused_id.feature_set_id == first.feature_set_id
     assert reused_id.sha256 != first.sha256
     assert reused_id.registry_id != first.registry_id
+
+
+def test_feature_dependency_contract_is_complete_and_hashed() -> None:
+    item = definition("price_shape")
+    payload = item.to_dict()
+
+    assert payload["source_fields"] == ["snapshot.latest_candle.close"]
+    assert payload["trailing_window"] == "trailing_2_observations"
+    assert payload["observable_cutoff_rule"] == ("trailing_through_information_cutoff")
+    assert payload["required_prior_observations"] == 1
+    assert payload["normalization_requirement"] == "training_partition_fitted"
+    assert payload["future_outcome_prohibited"] is True
+    assert payload["builder_id"] == BUILTIN_FEATURE_BUILDER_ID
+    assert payload["builder_version"] == BUILTIN_FEATURE_BUILDER_VERSION
+    assert len(item.dependency_contract_sha256) == 64
+
+    base = registry(item)
+    for changes in (
+        {"source_fields": ("snapshot.latest_candle.volume",)},
+        {
+            "trailing_window": "trailing_3_observations",
+            "required_prior_observations": 2,
+        },
+        {
+            "observable_cutoff_rule": ObservableCutoffRule.AT_INFORMATION_CUTOFF,
+            "trailing_window": "current_observation",
+            "required_prior_observations": 0,
+        },
+        {"normalization_requirement": NormalizationRequirement.NOT_REQUIRED},
+    ):
+        changed = registry(replace(item, **changes))
+        assert changed.sha256 != base.sha256
+    assert (
+        replace(
+            item,
+            builder_version="causal-feature-builder-v3",
+        ).dependency_contract_sha256
+        != item.dependency_contract_sha256
+    )
+
+
+def test_feature_definition_accepts_exact_caps_and_rejects_one_over() -> None:
+    exact_sources = tuple(
+        f"snapshot.field_{index:02d}" for index in range(MAX_FEATURE_SOURCE_FIELDS)
+    )
+    exact_categories = tuple(f"category_{index:03d}" for index in range(MAX_FEATURE_CATEGORIES))
+    exact = replace(
+        definition("bounded_feature"),
+        definition="d" * MAX_FEATURE_DEFINITION_LENGTH,
+        source_fields=exact_sources,
+    )
+    category = replace(
+        definition(
+            "bounded_category",
+            value_kind=FeatureValueKind.CATEGORY,
+            allowed_categories=exact_categories,
+            normalization_requirement=NormalizationRequirement.NOT_REQUIRED,
+        ),
+        allowed_categories=exact_categories,
+    )
+
+    assert len(exact.source_fields) == MAX_FEATURE_SOURCE_FIELDS
+    assert len(category.allowed_categories) == MAX_FEATURE_CATEGORIES
+    with pytest.raises(ValueError, match="source_fields"):
+        replace(exact, source_fields=(*exact_sources, "snapshot.too_many"))
+    with pytest.raises(ValueError, match="definition"):
+        replace(exact, definition="d" * (MAX_FEATURE_DEFINITION_LENGTH + 1))
+    with pytest.raises(ValueError, match="allowed_categories"):
+        replace(category, allowed_categories=(*exact_categories, "too_many"))
+    with pytest.raises(ValueError, match="name"):
+        replace(exact, name="a" * 128)
+    with pytest.raises(ValueError, match="version"):
+        replace(exact, version="v" * 128)
+    with pytest.raises(ValueError, match="trailing_window"):
+        replace(exact, trailing_window="trailing_" + "9" * 65 + "_observations")
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"source_fields": ("snapshot.future.close",)}, "future or outcome source"),
+        (
+            {"normalization_requirement": NormalizationRequirement.FULL_PERIOD},
+            "full-period normalization",
+        ),
+        (
+            {"normalization_requirement": NormalizationRequirement.GLOBAL_MIN_MAX},
+            "global min/max normalization",
+        ),
+        (
+            {"observable_cutoff_rule": ObservableCutoffRule.CENTERED_WINDOW},
+            "centered window",
+        ),
+        (
+            {"observable_cutoff_rule": ObservableCutoffRule.FUTURE_DEPENDENT_LABEL},
+            "future-dependent label",
+        ),
+        (
+            {"observable_cutoff_rule": ObservableCutoffRule.AFTER_DECLARED_CUTOFF},
+            "after declared cutoff",
+        ),
+        ({"future_outcome_prohibited": False}, "future/outcome prohibition"),
+        ({"builder_version": "unregistered-v1"}, "registered builder"),
+    ],
+)
+def test_innocent_feature_names_cannot_hide_semantic_leakage(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        registry(replace(definition("price_shape"), **changes))
 
 
 @pytest.mark.parametrize("feature_set_id", ["", "FS-1", "FS-ABCDEF", "fs-000001", "FS-0000000"])
@@ -143,6 +291,13 @@ def test_feature_definition_rejects_unsafe_or_incomplete_metadata(
         "missing_policy": MissingPolicy.NULL,
         "version": "v1",
         "leakage_class": LeakageClass.AT_CUTOFF,
+        "source_fields": ("snapshot.latest_candle.close",),
+        "trailing_window": "current_observation",
+        "observable_cutoff_rule": ObservableCutoffRule.AT_INFORMATION_CUTOFF,
+        "normalization_requirement": NormalizationRequirement.TRAINING_PARTITION_FITTED,
+        "future_outcome_prohibited": True,
+        "builder_id": BUILTIN_FEATURE_BUILDER_ID,
+        "builder_version": BUILTIN_FEATURE_BUILDER_VERSION,
     }
     values.update(changes)
 

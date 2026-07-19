@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import hashlib
 import os
-import stat
 from pathlib import Path
+import stat
 from typing import BinaryIO
 
 _CHUNK_SIZE = 1024 * 1024
@@ -104,6 +105,27 @@ def read_bounded_regular(path: Path, maximum: int) -> bytes:
     return payload
 
 
+def iter_bounded_regular_lines(
+    path: Path,
+    *,
+    maximum_lines: int,
+    maximum_line_bytes: int,
+) -> Iterator[bytes]:
+    """Yield newline-terminated regular-file records without unbounded reads."""
+
+    if maximum_lines < 0 or maximum_line_bytes < 1:
+        raise ValueError("line and byte limits must be positive bounded values")
+    with _open_regular(path) as handle:
+        count = 0
+        while line := handle.readline(maximum_line_bytes + 2):
+            count += 1
+            if count > maximum_lines:
+                raise RuntimeError("artifact file exceeds the bounded line limit")
+            if len(line) > maximum_line_bytes + 1 or not line.endswith(b"\n"):
+                raise RuntimeError("artifact record exceeds its bound or lacks a newline")
+            yield line[:-1]
+
+
 def sha256_regular(path: Path) -> str:
     """Stream a SHA-256 digest from a non-symlink regular file."""
 
@@ -129,9 +151,7 @@ def regular_file_matches(path: Path, expected: bytes) -> bool:
 def _open_regular(path: Path) -> BinaryIO:
     validated, metadata = _validated_no_link_path(path)
     if not stat.S_ISREG(metadata.st_mode):
-        raise RuntimeError(
-            "artifact entry must be a regular file, not a symlink or reparse point"
-        )
+        raise RuntimeError("artifact entry must be a regular file, not a symlink or reparse point")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(validated, flags)
     try:
@@ -151,9 +171,7 @@ def _validated_no_link_path(path: Path) -> tuple[Path, os.stat_result]:
     _require_no_link_ancestors(absolute)
     metadata = absolute.lstat()
     if _is_link_or_reparse(metadata):
-        raise RuntimeError(
-            "artifact path contains a symlink or reparse ancestor or entry"
-        )
+        raise RuntimeError("artifact path contains a symlink or reparse ancestor or entry")
     return absolute, metadata
 
 
@@ -169,9 +187,7 @@ def _require_no_link_ancestors(absolute: Path) -> None:
     for component in reversed(absolute.parents):
         metadata = component.lstat()
         if _is_link_or_reparse(metadata):
-            raise RuntimeError(
-                "artifact path contains a symlink or reparse ancestor"
-            )
+            raise RuntimeError("artifact path contains a symlink or reparse ancestor")
 
 
 def _is_link_or_reparse(metadata: os.stat_result) -> bool:
@@ -183,6 +199,7 @@ def _is_link_or_reparse(metadata: os.stat_result) -> bool:
 __all__ = [
     "bounded_regular_files",
     "bounded_subdirectories",
+    "iter_bounded_regular_lines",
     "path_exists_no_follow",
     "read_bounded_regular",
     "regular_file_matches",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import itertools
 import json
 import subprocess
 from dataclasses import fields, replace
@@ -15,11 +16,15 @@ import market_structure_lab.data.derived as derived_data
 import market_structure_lab.data.export as snapshot_export
 import market_structure_lab.discovery.runs as discovery_runs
 
+from market_structure_lab.auction.engine import AuctionLocation, AuctionSnapshot
+from market_structure_lab.auction.models import AuctionCandle
 from market_structure_lab.core.artifact_io import read_bounded_regular
 from market_structure_lab.data.canonical import CANONICAL_SCHEMA
 from market_structure_lab.data.derived import (
     DerivedPublicationIdentity,
-    publish_feature_rows,
+    LeakageAuditApproval,
+    LeakageNegativePattern,
+    publish_feature_rows as publish_feature_batch,
 )
 from market_structure_lab.data.export import (
     SnapshotIdentity,
@@ -48,15 +53,12 @@ from market_structure_lab.features.normalization import (
     TrainingPartition,
     fit_robust_normalizer,
 )
+from market_structure_lab.features.builder import FeatureBuilder
+from market_structure_lab.features.builtin import builtin_feature_registry
 from market_structure_lab.features.models import FeatureRow
-from market_structure_lab.features.registry import (
-    FeatureDefinition,
-    FeatureFamily,
-    FeatureRegistry,
-    FeatureValueKind,
-    LeakageClass,
-    MissingPolicy,
-)
+from market_structure_lab.features.registry import FeatureRegistry
+from market_structure_lab.profiles.binning import FixedStepBins
+from market_structure_lab.profiles.models import ProfileSnapshot
 from market_structure_lab.experiments import (
     ExperimentMode,
     TerminalStatus,
@@ -66,32 +68,47 @@ from market_structure_lab.experiments import (
 
 
 def _registry() -> FeatureRegistry:
-    return FeatureRegistry(
-        "FS-000501",
-        (
-            FeatureDefinition(
-                name="auction_location",
-                definition="Normalized auction location.",
-                family=FeatureFamily.AUCTION,
-                value_kind=FeatureValueKind.FLOAT,
-                units="ratio",
-                required_prior_observations=0,
-                missing_policy=MissingPolicy.ERROR,
-                version="1.0.0",
-                leakage_class=LeakageClass.AT_CUTOFF,
-            ),
-            FeatureDefinition(
-                name="volume_change",
-                definition="Trailing normalized volume change.",
-                family=FeatureFamily.SEQUENCE,
-                value_kind=FeatureValueKind.FLOAT,
-                units="ratio",
-                required_prior_observations=1,
-                missing_policy=MissingPolicy.ERROR,
-                version="1.0.0",
-                leakage_class=LeakageClass.TRAILING_ONLY,
-            ),
+    return builtin_feature_registry()
+
+
+def _leakage_approval(registry: FeatureRegistry) -> LeakageAuditApproval:
+    return LeakageAuditApproval(
+        schema_version=1,
+        feature_registry_sha256=registry.sha256,
+        reviewer_id="software-fixture-reviewer-v1",
+        review_artifact_sha256=hashlib.sha256(b"software fixture review").hexdigest(),
+        field_test_evidence=tuple(
+            (name, hashlib.sha256(f"dependency test:{name}".encode()).hexdigest())
+            for name in registry.names
         ),
+        negative_test_evidence=tuple(
+            (
+                pattern,
+                hashlib.sha256(f"negative test:{pattern.value}".encode()).hexdigest(),
+            )
+            for pattern in LeakageNegativePattern
+        ),
+    )
+
+
+_BATCH_SEQUENCE = itertools.count()
+
+
+def publish_feature_rows(snapshots, *, output_root, identity, registry, leakage_audit, **kwargs):
+    batch_root = Path(output_root) / ".test-producer-batches"
+    batch_root.mkdir(parents=True, exist_ok=True)
+    batch = FeatureBuilder(registry).build_batch(
+        snapshots,
+        artifact_path=batch_root / f"batch-{next(_BATCH_SEQUENCE):06d}.jsonl",
+        maximum_rows=10_000,
+    )
+    return publish_feature_batch(
+        batch,
+        output_root=output_root,
+        identity=identity,
+        registry=registry,
+        leakage_audit=leakage_audit,
+        **kwargs,
     )
 
 
@@ -115,26 +132,67 @@ def _transition_uncertainty_policy(**changes) -> TransitionUncertaintyPolicy:
     return TransitionUncertaintyPolicy(**values)
 
 
-def _row(
+def _snapshot(
     timestamp: datetime,
     symbol: str,
     value: float,
-    registry: FeatureRegistry,
-) -> FeatureRow:
-    return FeatureRow(
+    *,
+    segment_id: int = 0,
+) -> AuctionSnapshot:
+    poc_index = round(100.0 + value)
+    profile = ProfileSnapshot(
+        bin_volumes={poc_index: 10.0},
+        total_volume=10.0,
+        poc_index=poc_index,
+        value_area_low_index=poc_index,
+        value_area_high_index=poc_index,
+        vwap=100.0 + value / 10.0,
+        binning=FixedStepBins(step=1.0),
+        allocation_id="software-fixture-allocation-v1",
+    )
+    candle = AuctionCandle(
         timestamp=timestamp,
-        information_cutoff=timestamp + timedelta(minutes=1),
         symbol=symbol,
         timeframe="1m",
-        segment_id=0,
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.0,
+        volume=10.0 + abs(value),
+        segment_id=segment_id,
+    )
+    return AuctionSnapshot(
+        timestamp=timestamp,
+        symbol=symbol,
+        timeframe="1m",
+        segment_id=segment_id,
+        candle_count=1,
+        latest_candle=candle,
+        active_timestamps=(timestamp,),
+        profile=profile,
+        location=AuctionLocation.POINT_OF_CONTROL,
+        nodes=(),
+        migration=None,
+        events=(),
+        window_id="window-1",
+        window_version="window-1",
         dataset_version="DS-000501",
         config_version="cfg-1",
-        profile_version="profile-1",
-        window_policy_id="window-1",
-        feature_set_id=registry.feature_set_id,
-        registry_id=registry.registry_id,
-        values={"auction_location": value, "volume_change": value / 10.0},
+        profile_definition_id="profile-1",
     )
+
+
+def _build_rows(snapshots: tuple[AuctionSnapshot, ...]) -> tuple[FeatureRow, ...]:
+    rows: list[FeatureRow] = []
+    builder = FeatureBuilder()
+    active_stream: tuple[str, str] | None = None
+    for snapshot in snapshots:
+        stream = (snapshot.symbol, snapshot.timeframe)
+        if active_stream is not None and stream != active_stream:
+            builder = FeatureBuilder()
+        active_stream = stream
+        rows.append(builder.update(snapshot))
+    return tuple(rows)
 
 
 def _feature_row_id(row: FeatureRow) -> str:
@@ -230,18 +288,18 @@ def _fixture(
         development=development_partition,
         holdout=holdout_partition,
     )
-    discovery_rows = tuple(
-        _row(
+    discovery_snapshots = tuple(
+        _snapshot(
             discovery_partition.start + timedelta(minutes=index),
             symbol,
             value,
-            registry,
         )
         for symbol in ("BTCUSDT", "ETHUSDT")
         for index, value in enumerate((-10.3, -10.2, -10.1, 10.1, 10.2, 10.3))
     )
-    development_rows = tuple(
-        _row(timestamp, symbol, value, registry)
+    discovery_rows = _build_rows(discovery_snapshots)
+    development_snapshots = tuple(
+        _snapshot(timestamp, symbol, value, segment_id=timestamp.day)
         for symbol in ("BTCUSDT", "ETHUSDT")
         for timestamp, value in (
             (datetime(2025, 1, 2, 0, 0, tzinfo=UTC), -10.2),
@@ -250,6 +308,7 @@ def _fixture(
             (datetime(2025, 1, 3, 0, 1, tzinfo=UTC), 9.9),
         )
     )
+    development_rows = _build_rows(development_snapshots)
     lockfile_bytes = b"version = 1\n"
     lock_sha256 = hashlib.sha256(lockfile_bytes).hexdigest()
     input_root = tmp_path.parent / f"{tmp_path.name}-inputs"
@@ -293,7 +352,11 @@ def _fixture(
         replace(
             row,
             values={
-                name: float(value) + normalizer_row_delta for name, value in row.values.items()
+                **row.values,
+                "poc_distance_close": float(row.values["poc_distance_close"])
+                + normalizer_row_delta,
+                "vwap_distance_close": float(row.values["vwap_distance_close"])
+                + normalizer_row_delta,
             },
         )
         for row in discovery_rows
@@ -309,14 +372,15 @@ def _fixture(
             symbols=normalizer_symbols or discovery_partition.symbols,
         ),
         "DS-000501",
-        selected_features=("auction_location", "volume_change"),
+        selected_features=("poc_distance_close", "vwap_distance_close"),
     )
     normalizer_artifact = normalizer.canonical_json()
     feature_publication_root = input_root / "features"
+    leakage_audit = _leakage_approval(registry)
     feature_publication = publish_feature_rows(
         sorted(
-            discovery_rows + development_rows,
-            key=lambda row: (row.symbol, row.timeframe, row.timestamp),
+            discovery_snapshots + development_snapshots,
+            key=lambda snapshot: (snapshot.symbol, snapshot.timeframe, snapshot.timestamp),
         ),
         output_root=feature_publication_root,
         identity=DerivedPublicationIdentity(
@@ -329,10 +393,12 @@ def _fixture(
             window_policy_id="window-1",
             event_version="events-v1",
             normalizer_artifact_sha256=normalizer.artifact_sha256,
+            leakage_audit_approval_sha256=leakage_audit.sha256,
             code_commit=code_commit,
             uv_lock_sha256=lock_sha256,
         ),
         registry=registry,
+        leakage_audit=leakage_audit,
         max_rows_per_part=4,
     )
     feature_publication_directory = (
@@ -389,7 +455,7 @@ def _fixture(
         registry=registry,
         normalizer_artifact=normalizer_artifact,
         split=split,
-        feature_names=("auction_location", "volume_change"),
+        feature_names=("poc_distance_close", "vwap_distance_close"),
         discovery=discovery,
         development=development,
         code_commit=code_commit,
@@ -404,7 +470,7 @@ def _fixture(
         registry_sha256=registry.sha256,
         config_version="cfg-1",
         split=split,
-        feature_names=("auction_location", "volume_change"),
+        feature_names=("poc_distance_close", "vwap_distance_close"),
         pca_components=1,
         clusters=2,
         seeds=(7, 11),
@@ -506,7 +572,7 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
 
     assert provenance is not None
     assert provenance.feature_partitions
-    assert provenance.feature_names == ("auction_location", "volume_change")
+    assert provenance.feature_names == ("poc_distance_close", "vwap_distance_close")
     assert arguments["feature_publication"].max_buffered_rows <= 4
 
     first = _run(arguments)
@@ -569,7 +635,7 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
         "policy_purpose": "software_fixture",
     }
     assert published_motifs["algorithm_version"] == "boundary-safe-multivariate-motifs-v3"
-    assert published_motifs["feature_names"] == ["auction_location", "volume_change"]
+    assert published_motifs["feature_names"] == ["poc_distance_close", "vwap_distance_close"]
     assert published_motifs["development_regime_universe"] == ["balanced", "expanding"]
     assert "unclassified" not in json.dumps(published_motifs)
     assert published_config["motif_regime_assignments"]["sha256"] == (
@@ -764,13 +830,13 @@ def test_provenance_drift_is_rejected_before_matrix_construction(
         base["registry"],
         normalizer.partition,
         normalizer.dataset_snapshot_id,
-        selected_features=("auction_location",),
+        selected_features=("poc_distance_close",),
     ).canonical_json()
     changed_registry = FeatureRegistry(
         base["registry"].feature_set_id,
         tuple(
             replace(definition, definition=f"{definition.definition} changed")
-            if definition.name == "auction_location"
+            if definition.name == "poc_distance_close"
             else definition
             for definition in base["registry"].definitions
         ),
@@ -1021,7 +1087,7 @@ def test_feature_row_content_forgery_is_rejected_before_matrix_construction(
     discovery = arguments["discovery"]
     forged = replace(
         discovery.rows[0],
-        values={**discovery.rows[0].values, "auction_location": 999.0},
+        values={**discovery.rows[0].values, "poc_distance_close": 999.0},
     )
     arguments["discovery"] = make_discovery_input(
         partition=discovery.partition,
@@ -1235,7 +1301,7 @@ def test_interpretation_publication_is_atomic_idempotent_and_detector_frozen(
 
     changed = replace(
         interpretations[0],
-        detector_fields=("auction_location",),
+        detector_fields=("poc_distance_close",),
     )
     with pytest.raises(ValueError, match="detector"):
         publish_ai_interpretations(

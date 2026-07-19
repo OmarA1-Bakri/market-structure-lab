@@ -16,12 +16,16 @@ from market_structure_lab.discovery.splits import (
 )
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
+    BUILTIN_FEATURE_BUILDER_ID,
+    BUILTIN_FEATURE_BUILDER_VERSION,
     FeatureDefinition,
     FeatureFamily,
     FeatureRegistry,
     FeatureValueKind,
     LeakageClass,
     MissingPolicy,
+    NormalizationRequirement,
+    ObservableCutoffRule,
 )
 
 
@@ -39,6 +43,13 @@ def _registry() -> FeatureRegistry:
                 missing_policy=MissingPolicy.ERROR,
                 version="v1",
                 leakage_class=LeakageClass.AT_CUTOFF,
+                source_fields=("fixture.signal",),
+                trailing_window="trailing_2_observations",
+                observable_cutoff_rule=ObservableCutoffRule.TRAILING_THROUGH_INFORMATION_CUTOFF,
+                normalization_requirement=NormalizationRequirement.TRAINING_PARTITION_FITTED,
+                future_outcome_prohibited=True,
+                builder_id=BUILTIN_FEATURE_BUILDER_ID,
+                builder_version=BUILTIN_FEATURE_BUILDER_VERSION,
             )
         ],
     )

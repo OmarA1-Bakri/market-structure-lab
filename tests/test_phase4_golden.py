@@ -38,12 +38,22 @@ from market_structure_lab.discovery import (
 from market_structure_lab.discovery.stability import STABILITY_ALGORITHM_VERSION
 from market_structure_lab.features.models import FeatureRow
 from market_structure_lab.features.registry import (
+    BUILTIN_FEATURE_BUILDER_ID,
+    BUILTIN_FEATURE_BUILDER_VERSION,
     FeatureDefinition,
     FeatureFamily,
     FeatureRegistry,
     FeatureValueKind,
     LeakageClass,
     MissingPolicy,
+    NormalizationRequirement,
+    ObservableCutoffRule,
+)
+from phase4_fixture_producer import (
+    PHASE4_FIXTURE_BUILDER_ID,
+    PHASE4_FIXTURE_BUILDER_VERSION,
+    Phase4FixtureFeatureProducer,
+    Phase4FixtureSource,
 )
 
 FIXTURE_PATH = Path("tests/fixtures/phase4/discovery_run_v1.json")
@@ -108,11 +118,20 @@ def _registry(payload: dict[str, Any]) -> FeatureRegistry:
             missing_policy=MissingPolicy(item["missing_policy"]),
             version=item["version"],
             leakage_class=LeakageClass(item["leakage_class"]),
+            source_fields=tuple(item["source_fields"]),
+            trailing_window=item["trailing_window"],
+            observable_cutoff_rule=ObservableCutoffRule(item["observable_cutoff_rule"]),
+            normalization_requirement=NormalizationRequirement(item["normalization_requirement"]),
+            future_outcome_prohibited=item["future_outcome_prohibited"],
+            builder_id=item["builder_id"],
+            builder_version=item["builder_version"],
             allowed_categories=tuple(item["allowed_categories"]),
         )
         for item in payload["definitions"]
     )
-    return FeatureRegistry(payload["feature_set_id"], definitions)
+    if payload["feature_set_id"] != "FS-000601":
+        raise ValueError("Phase 4 fixture uses an unexpected feature-set ID")
+    return Phase4FixtureFeatureProducer.registry(definitions)
 
 
 def _rows(
@@ -123,23 +142,22 @@ def _rows(
 ) -> tuple[FeatureRow, ...]:
     identity = fixture["source_identity"]
     dataset = fixture["dataset_snapshot"]
-    return tuple(
-        FeatureRow(
-            timestamp=_timestamp(item["timestamp"]),
-            information_cutoff=_timestamp(item["timestamp"]) + timedelta(minutes=1),
-            symbol=item["symbol"],
-            timeframe="1m",
-            segment_id=item["segment_id"],
-            dataset_version=dataset["dataset_version"],
-            config_version=identity["config_version"],
-            profile_version=identity["profile_version"],
-            window_policy_id=identity["window_policy_id"],
-            feature_set_id=registry.feature_set_id,
-            registry_id=registry.registry_id,
-            values={name: float(value) for name, value in item["values"].items()},
+    producer = Phase4FixtureFeatureProducer()
+    rows: list[FeatureRow] = []
+    for item in payloads:
+        timestamp = _timestamp(item["timestamp"])
+        rows.append(
+            producer.build_row(
+                Phase4FixtureSource.from_payload(item, timestamp=timestamp),
+                information_cutoff=timestamp + timedelta(minutes=1),
+                dataset_version=dataset["dataset_version"],
+                config_version=identity["config_version"],
+                profile_version=identity["profile_version"],
+                window_policy_id=identity["window_policy_id"],
+                registry=registry,
+            )
         )
-        for item in payloads
-    )
+    return tuple(rows)
 
 
 def _run_arguments(
@@ -693,11 +711,48 @@ def _interpretations(
     )
 
 
+def test_phase4_fixture_producer_exactly_owns_fs_000601_rows() -> None:
+    assert Phase4FixtureFeatureProducer.__module__ == "phase4_fixture_producer"
+    assert PHASE4_FIXTURE_BUILDER_ID == (
+        f"{Phase4FixtureFeatureProducer.__module__}.{Phase4FixtureFeatureProducer.__qualname__}"
+    )
+    fixture = _load_json(FIXTURE_PATH)
+    registry = _registry(fixture["registry"])
+    rows = _rows(
+        [*fixture["discovery_rows"], *fixture["development_rows"]],
+        fixture=fixture,
+        registry=registry,
+    )
+
+    assert registry.names == Phase4FixtureFeatureProducer.feature_names
+    assert all(tuple(row.values) == registry.names for row in rows)
+    assert all(type(value) is float for row in rows for value in row.values.values())
+    assert {definition.builder_id for definition in registry.definitions} == {
+        PHASE4_FIXTURE_BUILDER_ID
+    }
+    assert {definition.builder_version for definition in registry.definitions} == {
+        PHASE4_FIXTURE_BUILDER_VERSION
+    }
+    assert BUILTIN_FEATURE_BUILDER_ID not in {
+        definition.builder_id for definition in registry.definitions
+    }
+    assert BUILTIN_FEATURE_BUILDER_VERSION not in {
+        definition.builder_version for definition in registry.definitions
+    }
+    assert all("values" not in item for item in fixture["discovery_rows"])
+    assert all("values" not in item for item in fixture["development_rows"])
+
+
 def test_phase4_golden_stable_and_rejected_runs_replay_byte_identically(tmp_path) -> None:
     fixture = _load_json(FIXTURE_PATH)
     assert STABILITY_ALGORITHM_VERSION == "cluster-stability-v2"
     assert MOTIF_ALGORITHM_VERSION == "boundary-safe-multivariate-motifs-v3"
-    assert fixture["schema_version"] == "phase4-discovery-fixture-v2"
+    assert fixture["schema_version"] == "phase4-discovery-fixture-v3"
+    assert fixture["fixture_producer"] == {
+        "builder_id": PHASE4_FIXTURE_BUILDER_ID,
+        "builder_version": PHASE4_FIXTURE_BUILDER_VERSION,
+        "input_schema": "phase4-fixture-source-v1",
+    }
     assert "holdout_rows" not in fixture
     assert all(
         forbidden not in FIXTURE_PATH.read_text(encoding="utf-8").lower()

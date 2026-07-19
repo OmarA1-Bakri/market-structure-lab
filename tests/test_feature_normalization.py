@@ -17,12 +17,16 @@ from market_structure_lab.features.normalization import (
     fit_robust_normalizer,
 )
 from market_structure_lab.features.registry import (
+    BUILTIN_FEATURE_BUILDER_ID,
+    BUILTIN_FEATURE_BUILDER_VERSION,
     FeatureDefinition,
     FeatureFamily,
     FeatureRegistry,
     FeatureValueKind,
     LeakageClass,
     MissingPolicy,
+    NormalizationRequirement,
+    ObservableCutoffRule,
 )
 
 
@@ -45,6 +49,17 @@ def _definition(
         missing_policy=missing_policy,
         version="1.0.0",
         leakage_class=LeakageClass.TRAILING_ONLY,
+        source_fields=(f"fixture.{name}",),
+        trailing_window="current_observation",
+        observable_cutoff_rule=ObservableCutoffRule.AT_INFORMATION_CUTOFF,
+        normalization_requirement=(
+            NormalizationRequirement.NOT_REQUIRED
+            if kind is FeatureValueKind.CATEGORY
+            else NormalizationRequirement.TRAINING_PARTITION_FITTED
+        ),
+        future_outcome_prohibited=True,
+        builder_id=BUILTIN_FEATURE_BUILDER_ID,
+        builder_version=BUILTIN_FEATURE_BUILDER_VERSION,
         allowed_categories=("cold", "hot") if kind is FeatureValueKind.CATEGORY else (),
     )
 
@@ -134,8 +149,7 @@ def test_normalizer_binds_exact_training_rows_and_asset_universe(
         symbols=("BTCUSDT",),
     )
     rows = tuple(
-        _row(registry, index, signal=value)
-        for index, value in enumerate((1.0, 2.0, 3.0, 8.0))
+        _row(registry, index, signal=value) for index, value in enumerate((1.0, 2.0, 3.0, 8.0))
     )
     normalizer = fit_robust_normalizer(
         rows,
