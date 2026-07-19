@@ -452,10 +452,11 @@ Exact operator commands, paths, status meanings, resumption procedure, compatibi
 deliberate snapshot policy are documented in
 [`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md).
 
-## Phase 4 hardening: Task 13 residual audit authorized, empirical work stopped
+## Phase 4 hardening: Task 13 remotely complete, Task 14 authorized
 
-The Phase 4 implementation remains synthetic software-fixture evidence only and is **not authorized
-for a real experiment**. The hardening work is complete at the software boundary:
+The Phase 4 implementation remains synthetic software-fixture evidence only. The hardening work is
+complete at the software boundary, and the explicitly authorized Task 14 may now create the first
+real outcome-blind discovery evidence without accessing holdout rows or outcomes:
 
 - concrete snapshot, publication, registry, normalizer, split, commit, and lock identities are
   verified before matrix construction;
@@ -476,13 +477,13 @@ of stable, rejected, and interpretation publications. Exact commands, log hashes
 limitations, and the stop decision are in
 [`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md).
 
-Task 13 uses completed and remotely verified baseline
-`3cf3721f1ec694b61ec1da78d0b7be24fea93caf`. It is limited to independent software residual-risk
-reproduction and evidence-backed correction. It may not run discovery, inspect holdout rows or
-outcomes, attach outcomes, estimate accuracy, or begin Task 14 before the verified Task 13 remote
-checkpoint.
+Task 13 used completed and remotely verified baseline
+`3cf3721f1ec694b61ec1da78d0b7be24fea93caf` and is remotely checkpointed at
+`59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. Its audit did not run discovery, inspect holdout rows
+or outcomes, attach outcomes, or estimate accuracy. Task 14 is now authorized under those same
+outcome-blind boundaries.
 
 The committed golden data remain software-verification fixtures, not market evidence, a validated
 signal, or an edge. The repository still contains zero verified real trials. A new research
-snapshot, empirical thresholds, and any real outcome-blind discovery remain Phase C Task 14 work
-and must wait for the committed, pushed, remotely verified Task 13 checkpoint.
+snapshot, empirical thresholds, and the first real outcome-blind discovery are the active Phase C
+Task 14 work. Outcome attachment remains a later, separately controlled gate.

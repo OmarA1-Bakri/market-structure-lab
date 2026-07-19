@@ -4,9 +4,10 @@ Phase 4 freezes recurring market-structure behaviours before any future outcome 
 an inspectable discovery baseline, not an edge validator, strategy engine, or trading system.
 
 The original Task 12 software gate is remotely complete at baseline
-`3cf3721f1ec694b61ec1da78d0b7be24fea93caf`. Task 13 is an authorized independent residual-risk
-audit of this synthetic software boundary only. No real discovery is authorized; the first real
-outcome-blind run is now Task 14 and remains behind the verified Task 13 remote-checkpoint gate.
+`3cf3721f1ec694b61ec1da78d0b7be24fea93caf`. The separate Task 13 residual-risk audit is complete
+and remotely checkpointed at `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. The first real
+outcome-blind run is Task 14; it is now authorized, while holdout rows, outcomes, validation, and
+strategy work remain inaccessible and unstarted.
 
 ## Pipeline and access boundary
 

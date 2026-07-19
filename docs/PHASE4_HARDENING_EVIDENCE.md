@@ -51,10 +51,10 @@ reproducible local verification evidence but no automated merge-enforcement clai
 
 The follow-up review found stale phase-gate presentation rather than an algorithm defect. The
 generator, Python tests, Node verifier, browser runtime validator, and committed public evidence now
-agree that Phase 0 and original deterministic Phase 4 hardening are complete. Task 13 is the
-authorized independent residual-risk audit, and Task 14 is authorized only after Task 13 is
-committed, pushed, and verified against the remote branch. The canonical progress snapshot lists
-Tasks 7–12 complete, Task 13 in progress, and Tasks 14–15 sequentially gated. The public evidence
+agree that Phase 0 and original deterministic Phase 4 hardening are complete. Task 13 was the
+authorized independent residual-risk audit and is now committed, pushed, and verified against the
+remote branch. The canonical progress snapshot lists Tasks 7–13 complete and Task 14 authorized;
+Task 15 and outcome attachment remain sequentially gated. The public evidence
 was regenerated twice at the same
 explicit UTC timestamp; both complete files had SHA-256
 `6c88747b4580d106c93ecdff96f7e29264cd619b8605b45eff946dbc340b25e4`.
@@ -382,8 +382,10 @@ an explicit enforcement risk rather than a local-pass claim. **Not-tested:** the
 surface was unavailable in this session; no dependency was added and Ruff, Mypy, tests, build, and
 the independent reviews are the repository-native evidence.
 
-Task 13 implementation checkpoint SHA: **pending commit**. The exact pushed SHA and remote equality
-will be recorded in the evidence-only closure checkpoint before Task 14 begins.
+Task 13 implementation checkpoint SHA:
+`59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. It was pushed at `2026-07-19T19:38:40Z`; the local
+SHA and `origin/agent/research-lab-foundation` both resolved to that exact value. This evidence-only
+closure checkpoint records the proof before Task 14 begins.
 
 ## Manual integrity review
 
@@ -496,7 +498,8 @@ or strategy artefact exists.
 - [x] Documentation and dashboard evidence use the committed fixture identities.
 - [x] No Phase C work, market run, holdout access, database mutation, or strategy work occurred.
 
-**Conclusion:** Task 13 deterministic software hardening is accepted subject to the final
-verification, Lore checkpoint, push, and remote-SHA equality recorded below. Empirical validity is
-not implied. The latest instruction authorizes Task 14 only after that exact remote checkpoint; no
-real discovery may start before it.
+**Conclusion:** Task 13 deterministic software hardening is accepted. Final verification passed,
+the Lore implementation checkpoint was pushed, and local/remote equality was verified at
+`59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. Empirical validity is not implied. Task 14 is now
+authorized; holdout rows/outcomes, outcome attachment, validation, and strategy work remain outside
+this completed gate.

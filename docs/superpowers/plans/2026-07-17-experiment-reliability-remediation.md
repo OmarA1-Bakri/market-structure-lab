@@ -105,7 +105,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 10 — transition uncertainty | Complete | Horizon, bootstrap, block selection, confidence, diagnostics, sensitivity, work caps, and descriptive-only terminology are frozen. |
 | Task 11 — semantic leakage evidence | Complete | Dependency/builder contracts, independent review receipts, negative tests, and pre-consumption guards are bound; residual manual review remains explicit. |
 | Task 12 — original Phase 4 hardening gate | Complete and remotely checkpointed | The evidence/review chain is complete through prerequisite-closure baseline `3cf3721f1ec694b61ec1da78d0b7be24fea93caf`; local and remote match. Task 12 authorizes only the explicitly instructed Task 13 audit, not Phase C. |
-| Task 13 — independent residual-risk verification | In progress; explicitly authorized | Challenge the completed Task 12 snapshot, reproduce every finding, correct only confirmed defects, complete three reviews and full verification, and push one distinct checkpoint before any empirical work. |
+| Task 13 — independent residual-risk verification | Complete and remotely checkpointed | Every finding was reproduced, confirmed defects were corrected, all three reviews and the final verification chain passed, and implementation checkpoint `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4` was pushed and remotely verified. |
 | Tasks 14–15 | Explicitly authorized after prerequisite gates | The 2026-07-19 instruction authorizes continuous downstream execution, but Task 14 may start only after the verified Task 13 checkpoint and Task 15 only after Task 14 evidence; no stage may be skipped. |
 
 ## Skill and workflow routing
@@ -177,7 +177,7 @@ The authoritative sweep is `docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`.
 - [x] Feature leakage evidence includes declared source dependencies and an independent audit.
 - [x] A real outcome-blind discovery may run only after explicit approval and must not access final
       holdout rows or outcomes.
-- [ ] The Task 13 residual-risk audit has reproduced and classified all ten review areas, corrected
+- [x] The Task 13 residual-risk audit has reproduced and classified all ten review areas, corrected
       every confirmed defect, completed the three-part review loop, passed targeted/full/golden
       verification, and recorded a verified remote checkpoint.
 - [x] Every completed Phase 4 hardening task through Task 12 has a verified remote commit SHA
@@ -846,7 +846,7 @@ and per-feature drop policies and deterministic rejected/inconclusive outcomes; 
 only confirmed missing preflights, reusing existing bounded-work primitives, and freeze every limit
 that changes output, admissibility, or evidence volume.
 
-- [ ] **Step 4: Verify, review, evidence, checkpoint, push, and stop**
+- [x] **Step 4: Verify, review, evidence, checkpoint, push, and stop**
 
 Run the focused auction/window/feature/derived/matrix/run/split/golden tests, Ruff format and lint,
 Mypy, `git diff --check`, the dashboard `npm ci`/evidence/lint/typecheck/build chain, the complete
