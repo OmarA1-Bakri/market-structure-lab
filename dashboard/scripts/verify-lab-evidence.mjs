@@ -177,6 +177,41 @@ const statusKeys = ["failed", "inconclusive", "abandoned", "rejected", "complete
 const byMode = trials?.by_mode;
 const byStatus = trials?.by_status;
 const matrix = trials?.by_mode_and_status;
+const task14 = accuracy?.task14_programme_checkpoint;
+const artifactIdentity = (value, id) =>
+  exactKeys(value, ["id", "sha256"]) && value.id === id && sha(value.sha256);
+const validTask14 =
+  task14 === null ||
+  (exactKeys(task14, [
+    "dataset_snapshot",
+    "event_publication",
+    "feature_publication",
+    "holdout_rows_accessed",
+    "normalizer",
+    "outcomes_attached",
+    "preregistration_sha256",
+    "programme_conclusion",
+    "program_id",
+    "reliability_vector_sha256",
+    "run_id",
+    "schema_version",
+    "scientific_status",
+    "trial_receipt_sha256",
+  ]) &&
+    task14.schema_version === "task14-programme-checkpoint-v1" &&
+    task14.program_id === "PG-000004" &&
+    task14.run_id === "DR-000704" &&
+    task14.programme_conclusion === "rejected" &&
+    task14.scientific_status === "rejected_unstable" &&
+    sha(task14.preregistration_sha256) &&
+    sha(task14.reliability_vector_sha256) &&
+    sha(task14.trial_receipt_sha256) &&
+    artifactIdentity(task14.dataset_snapshot, "DS-000704") &&
+    artifactIdentity(task14.feature_publication, "FP-000704") &&
+    artifactIdentity(task14.event_publication, "EP-000704") &&
+    artifactIdentity(task14.normalizer, "NZ-000704") &&
+    task14.holdout_rows_accessed === false &&
+    task14.outcomes_attached === false);
 const validMatrix =
   exactKeys(matrix, modeKeys) &&
   modeKeys.every(
@@ -197,6 +232,7 @@ if (
   accuracy.trial_receipt_schema !== "trial-receipt-v2" ||
   accuracy.derivation_chain_verified !== false ||
   accuracy.fixture_trials_counted_as_real !== false ||
+  !validTask14 ||
   !exactKeys(trials, ["by_mode", "by_status", "by_mode_and_status", "total"]) ||
   !exactKeys(byMode, modeKeys) ||
   !counts(byMode) ||
@@ -209,7 +245,11 @@ if (
   accuracy.trial_ledger_status !==
     (trials.total === 0 ? "implemented_empty" : "implemented_with_receipts")
 )
-  fail("trial ledger contract");
+  fail(
+    task14 !== null && !validTask14
+      ? "Task 14 programme checkpoint"
+      : "trial ledger contract",
+  );
 const replay = evidence.software_replay;
 const fixtureProducer = replay?.fixture_producer;
 if (
@@ -367,7 +407,13 @@ if (
       phase.active_phase ===
         "Phase B Task 13 deterministic hardening: complete" &&
       phase.next_required_evidence ===
-        "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint")
+        "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint") ||
+    (phase.status === "complete_task15_authorized" &&
+      task14 !== null &&
+      phase.active_phase ===
+        "Phase C Task 14 outcome-blind discovery: complete" &&
+      phase.next_required_evidence ===
+        "execute the separate Task 15 Phase 5 validation plan")
   ) ||
   typeof phase.next_required_evidence !== "string" ||
   phase.next_required_evidence.length === 0

@@ -80,3 +80,10 @@ def test_default_cli_freezes_pg4_sixteen_hour_pilot_after_pg3_verifier_rejection
     assert pilot.run_max_rows - min(pilot.motif_policy.window_lengths) + 1 <= 512
     assert pilot.started_at.isoformat() == "2026-07-22T20:00:00+00:00"
     assert pilot.completed_at.isoformat() == "2026-07-22T20:01:00+00:00"
+
+
+def test_task14_preregistration_names_only_terminal_run_rejection_rules() -> None:
+    assert discovery_cli.TASK14_TERMINAL_REJECTION_RULES == (
+        "missingness_policy_violation",
+        "stability_policy_rejection",
+    )

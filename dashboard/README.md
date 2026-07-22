@@ -13,8 +13,8 @@ or live trading.
 - **Data health** — searchable symbol freshness and bounded/partial reconciliation evidence.
 - **Auction replay** — illustrative rolling-window fixture; no verification receipt is published.
 - **Feature registry** — generated `FS-000001` definitions and registry identity.
-- **Discovery lab** — checksum-linked synthetic stable/rejected fixture contracts, never counted as
-  real experiments.
+- **Discovery lab** — the checksum-linked Task 14 `PG-000004` outcome-blind programme checkpoint
+  alongside synthetic stable/rejected fixture contracts that are never counted as real experiments.
 - **Artifact inspector** — local-only JSON parsing and SHA-256 calculation.
 
 ## Local development
@@ -65,10 +65,12 @@ cutoff. Deployments cannot regenerate from ignored/private inputs, so the prebui
 malformed or internally inconsistent checked JSON instead. Refresh the artifact deliberately after
 source evidence changes; never expose credentials or infer promotion from partial reconciliation.
 
-The generator also boundedly scans `data/exports/trials/` through the canonical receipt verifier.
-It reports exact counts by experiment mode and terminal status only after every receipt, artifact
-hash, path, and file set verifies. Synthetic golden fixtures are outside that ledger and are never
-counted. The current checked snapshot truthfully reports an implemented-but-empty ledger, zero real
-trials, and accuracy not estimable. Receipt identities are asserted and byte-verified; the complete
-snapshot-to-feature-to-normalizer derivation chain is not yet verified.
-That proof belongs to a later, post-Phase-0 Phase 4 hardening gate.
+The generator boundedly scans both flat and one-level grouped directories under
+`data/exports/trials/` through the canonical receipt verifier. It reports exact counts by experiment
+mode and terminal status only after every receipt, artifact hash, path, and file set verifies.
+Synthetic golden fixtures are outside that ledger and are never counted. The current checked
+snapshot retains all four Task 14 discovery attempts: two failed and two rejected. It additionally
+verifies the `PG-000004` preregistration, non-holdout snapshot boundary, terminal `DR-000704`
+receipt, and reliability-vector linkage. Accuracy remains not estimable, outcomes remain unattached,
+and `derivation_chain_verified` deliberately remains `false`; this dashboard checkpoint does not
+claim that every upstream derived-publication byte has been independently replayed.

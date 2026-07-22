@@ -2,7 +2,7 @@
 
 ## Document control
 
-- **Assessment date:** 2026-07-18
+- **Assessment date:** 2026-07-22
 - **Purpose:** Identify agent skills and workflows that can improve the design, implementation,
   review, and validation of Market Structure Lab experiments without bypassing the repository's
   phase gates or treating generic trading guidance as research evidence.
@@ -116,6 +116,20 @@ must not enter frozen experiment policy without independent justification.
 2. Use `autoresearch-goal` only after that freeze, Task 13 completion, and final Phase B approval.
 3. Record every attempted configuration in `trial-receipt-v2`.
 4. Stop after outcome-blind behaviour publication; do not attach forward outcomes.
+
+#### Task 14 execution record
+
+- TDD, systematic debugging, and verification-before-completion instructions governed the
+  `PG-000003` incident and immutable `PG-000004` retry.
+- Independent specification, code-quality, data/evidence, and adversarial quantitative lanes read
+  the exact runtime artefacts. The quantitative lane confirmed cluster rejection, low effective
+  transition support, zero behaviours, and the ex-post availability-selection limitation.
+- No generic external threshold was imported. No additional package, service, or skill was
+  installed.
+- The named external `data-analytics:validate-data` and `quantitative-research` runtimes were not
+  separately invoked as executable skills in this session; equivalent installed-role review lanes
+  were used and are named accurately in the Task 14 evidence. This is not represented as external
+  skill execution.
 
 ### Task 15 Phase 5 validation planning and later backtesting
 

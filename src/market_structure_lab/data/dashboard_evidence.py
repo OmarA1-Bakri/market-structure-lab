@@ -6,10 +6,17 @@ import hashlib
 import json
 import math
 from collections import Counter
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from market_structure_lab.core.artifact_io import (
+    bounded_subdirectories,
+    path_exists_no_follow,
+    read_bounded_regular,
+)
+from market_structure_lab.data.export import read_snapshot_manifest, verify_snapshot
 from market_structure_lab.data.freshness_sync import read_latest_freshness_artifacts
 from market_structure_lab.data.reconciliation import (
     ReconciliationRunManifest,
@@ -20,7 +27,13 @@ from market_structure_lab.data.reconciliation import (
     verify_work_unit_publication,
 )
 from market_structure_lab.features import builtin_feature_registry
-from market_structure_lab.experiments import ExperimentMode, TerminalStatus, read_trial_ledger
+from market_structure_lab.discovery.program import canonical_policy_sha256
+from market_structure_lab.experiments import (
+    ExperimentMode,
+    TerminalStatus,
+    TrialManifest,
+    verify_trial_receipt,
+)
 
 LAB_EVIDENCE_SCHEMA_VERSION = 1
 MAX_LAB_EVIDENCE_BYTES = 8 * 1024 * 1024
@@ -37,6 +50,12 @@ _PHASE4_SOURCE_KEYS = {
     "current_volume",
     "volume_scale",
 }
+_MAX_DASHBOARD_LEDGER_GROUPS = 1_000
+_MAX_DASHBOARD_TRIAL_RECEIPTS = 100_000
+_MAX_TASK14_EVIDENCE_BYTES = 64 * 1024 * 1024
+_STAGING_TOKENS = ("staging", ".partial", ".tmp")
+_TASK14_PROGRAM_ID = "PG-000004"
+_TASK14_RUN_ID = "DR-000704"
 
 
 def generate_lab_evidence(
@@ -61,7 +80,8 @@ def generate_lab_evidence(
         raise ValueError("promotion receipt exists for incomplete reconciliation evidence")
     replay = _phase4_fixture_evidence(repository_root)
     registry = builtin_feature_registry()
-    trials = read_trial_ledger(trial_root)
+    trials = _read_dashboard_trial_ledger(trial_root)
+    task14_checkpoint = _task14_programme_checkpoint(repository_root, trials)
     trials_by_mode = {mode.value: 0 for mode in ExperimentMode}
     trials_by_status = {status.value: 0 for status in TerminalStatus}
     trials_by_mode_and_status = {
@@ -170,6 +190,7 @@ def generate_lab_evidence(
             "trial_receipt_schema": "trial-receipt-v2",
             "fixture_trials_counted_as_real": False,
             "derivation_chain_verified": False,
+            "task14_programme_checkpoint": task14_checkpoint,
             "scope": "verified real-trial artifacts supplied to this dashboard contract",
             "claim": (
                 "Verified terminal receipts exist, but predictive accuracy remains not estimable."
@@ -178,21 +199,276 @@ def generate_lab_evidence(
                 "numeric accuracy is not estimable."
             ),
         },
-        "phase_gate": {
-            "active_phase": "Phase B Task 13 deterministic hardening: complete"
-            if history_promoted
-            else "Phase 0: trustworthy foundation",
-            "status": (
-                "complete_task14_authorized" if history_promoted else "remediation_in_progress"
-            ),
+        "phase_gate": _phase_gate(
+            history_promoted=history_promoted,
+            history_complete=history_complete,
+            task14_complete=task14_checkpoint is not None,
+        ),
+    }
+
+
+def _read_dashboard_trial_ledger(root: Path) -> tuple[TrialManifest, ...]:
+    """Verify flat and one-level grouped terminal receipts within fixed scan bounds."""
+    if not path_exists_no_follow(root):
+        return ()
+    receipts: list[TrialManifest] = []
+    seen: set[str] = set()
+    children = bounded_subdirectories(root, maximum=_MAX_DASHBOARD_LEDGER_GROUPS)
+    for child in children:
+        _reject_staging_name(child.name)
+        candidates: tuple[Path, ...]
+        if path_exists_no_follow(child / "receipt.json"):
+            candidates = (child,)
+        else:
+            candidates = bounded_subdirectories(
+                child,
+                maximum=_MAX_DASHBOARD_TRIAL_RECEIPTS - len(receipts),
+            )
+            if not candidates:
+                raise RuntimeError("trial ledger contains an empty grouped entry")
+        for candidate in candidates:
+            _reject_staging_name(candidate.name)
+            receipt = verify_trial_receipt(candidate)
+            if receipt.run_id in seen:
+                raise RuntimeError("trial ledger contains conflicting duplicate run IDs")
+            seen.add(receipt.run_id)
+            receipts.append(receipt)
+            if len(receipts) > _MAX_DASHBOARD_TRIAL_RECEIPTS:
+                raise RuntimeError("trial ledger exceeds the bounded receipt limit")
+    return tuple(sorted(receipts, key=lambda item: item.run_id))
+
+
+def _reject_staging_name(name: str) -> None:
+    lowered = name.lower()
+    if name.startswith(".") or any(token in lowered for token in _STAGING_TOKENS):
+        raise RuntimeError("trial ledger contains a hidden or staging-like entry")
+
+
+def _task14_programme_checkpoint(
+    repository_root: Path,
+    trials: tuple[TrialManifest, ...],
+) -> dict[str, Any] | None:
+    program_root = repository_root / "data" / "exports" / "discovery-programs" / _TASK14_PROGRAM_ID
+    if not path_exists_no_follow(program_root):
+        return None
+    expected_attempts = {
+        "DR-000701": TerminalStatus.FAILED,
+        "DR-000702": TerminalStatus.FAILED,
+        "DR-000703": TerminalStatus.REJECTED,
+        "DR-000704": TerminalStatus.REJECTED,
+    }
+    task14 = {trial.run_id: trial for trial in trials if trial.run_id in expected_attempts}
+    if set(task14) != set(expected_attempts) or any(
+        trial.mode is not ExperimentMode.DISCOVERY or trial.status is not expected_attempts[run_id]
+        for run_id, trial in task14.items()
+    ):
+        raise RuntimeError("Task 14 trial ledger does not match the immutable attempt history")
+    preregistration = _verified_wrapped_artifact(program_root / "preregistration.json")
+    selected_universe = _verified_wrapped_artifact(program_root / "selected-universe.json")
+    vector = _read_bounded_json_object(program_root / "reliability-vector.json")
+    vector_sha256 = vector.get("sha256")
+    vector_body = {key: value for key, value in vector.items() if key != "sha256"}
+    if not _is_sha256(vector_sha256) or canonical_policy_sha256(vector_body) != vector_sha256:
+        raise RuntimeError("Task 14 reliability vector logical identity is invalid")
+    preregistration_sha256 = preregistration["sha256"]
+    artifact = preregistration["artifact"]
+    universe_artifact = selected_universe["artifact"]
+    trial = task14[_TASK14_RUN_ID]
+    if (
+        artifact.get("schema_version") != "discovery-preregistration-v2"
+        or artifact.get("preregistration_id") != _TASK14_PROGRAM_ID
+        or artifact.get("selected_universe_sha256") != selected_universe["sha256"]
+        or artifact.get("dataset_snapshot_id") != "DS-000704"
+        or artifact.get("trial_count") != 1
+        or artifact.get("trials")
+        != [{"clusters": 3, "pca_components": 3, "run_id": _TASK14_RUN_ID, "seeds": [7, 11, 13]}]
+        or artifact.get("phase3_execution", {}).get("maximum_rows") != 960
+        or artifact.get("run_execution", {}).get("work_budget", {}).get("maximum_feature_cells")
+        != 8_628
+    ):
+        raise RuntimeError("Task 14 preregistration boundary is invalid")
+    _validate_task14_preregistration_boundary(
+        artifact,
+        universe_artifact,
+        trial.canonical_config,
+    )
+    if (
+        vector.get("schema_version") != "discovery-reliability-vector-v2"
+        or vector.get("preregistration_sha256") != preregistration_sha256
+        or vector.get("attempted_trial_count") != 1
+        or vector.get("status_counts") != {"rejected": 1}
+        or vector.get("conclusion") != "rejected"
+        or not isinstance(vector.get("trials"), list)
+        or len(vector["trials"]) != 1
+    ):
+        raise RuntimeError("Task 14 reliability vector contract is invalid")
+    vector_trial = vector["trials"][0]
+    if (
+        not isinstance(vector_trial, dict)
+        or vector_trial.get("run_id") != trial.run_id
+        or vector_trial.get("status") != trial.status.value
+        or vector_trial.get("receipt_sha256") != trial.receipt_sha256
+        or vector_trial.get("identity_sha256") != trial.identity_sha256
+        or vector_trial.get("artifact_sha256") != dict(trial.artifact_sha256)
+        or trial.canonical_config.get("preregistration_sha256") != preregistration_sha256
+        or trial.dataset_snapshot.identifier != "DS-000704"
+        or trial.feature_publication.identifier != "FP-000704"
+        or trial.normalizer.identifier != "NZ-000704"
+        or trial.outcome_policy is not None
+        or trial.cost_policy is not None
+        or trial.candidate_id is not None
+    ):
+        raise RuntimeError("Task 14 terminal receipt is not linked to the programme checkpoint")
+    trial_directory = (
+        repository_root / "data" / "exports" / "trials" / "task14-PG-000004" / _TASK14_RUN_ID
+    )
+    metrics = _read_bounded_json_object(trial_directory / "metrics.json")
+    if metrics.get("status") != "rejected_unstable":
+        raise RuntimeError("Task 14 scientific status is inconsistent")
+    snapshot_directory = (
+        repository_root
+        / "data"
+        / "exports"
+        / "snapshots"
+        / f"dataset_version={trial.dataset_snapshot.identifier}"
+    )
+    snapshot = read_snapshot_manifest(snapshot_directory / "manifest.json")
+    verify_snapshot(snapshot_directory, snapshot)
+    if (
+        snapshot.snapshot_sha256 != trial.dataset_snapshot.sha256
+        or snapshot.row_count != 960
+        or snapshot.min_timestamp != "2025-02-01T00:00:00Z"
+        or snapshot.max_timestamp != "2025-02-01T15:59:00Z"
+    ):
+        raise RuntimeError("Task 14 snapshot is outside the frozen non-holdout boundary")
+    event_id = trial.canonical_config.get("event_publication_id")
+    event_sha256 = trial.canonical_config.get("event_publication_sha256")
+    if event_id != "EP-000704" or not _is_sha256(event_sha256):
+        raise RuntimeError("Task 14 event publication identity is invalid")
+    return {
+        "schema_version": "task14-programme-checkpoint-v1",
+        "program_id": _TASK14_PROGRAM_ID,
+        "run_id": _TASK14_RUN_ID,
+        "programme_conclusion": "rejected",
+        "scientific_status": "rejected_unstable",
+        "preregistration_sha256": preregistration_sha256,
+        "reliability_vector_sha256": vector_sha256,
+        "trial_receipt_sha256": trial.receipt_sha256,
+        "dataset_snapshot": trial.dataset_snapshot.to_dict(),
+        "feature_publication": trial.feature_publication.to_dict(),
+        "event_publication": {"id": event_id, "sha256": event_sha256},
+        "normalizer": trial.normalizer.to_dict(),
+        "holdout_rows_accessed": False,
+        "outcomes_attached": False,
+    }
+
+
+def _validate_task14_preregistration_boundary(
+    preregistration: Mapping[str, object],
+    selected_universe: Mapping[str, object],
+    canonical_config: Mapping[str, object],
+) -> None:
+    discovery = {
+        "role": "discovery",
+        "start": "2025-02-01T00:00:00Z",
+        "end": "2025-02-01T08:00:00Z",
+        "symbols": ["APTUSDT"],
+    }
+    development = {
+        "role": "development",
+        "start": "2025-02-01T08:00:00Z",
+        "end": "2025-02-01T16:00:00Z",
+        "symbols": ["APTUSDT"],
+    }
+    holdout = {
+        "role": "holdout",
+        "start": "2025-02-01T16:00:00Z",
+        "end": "2025-02-02T00:00:00Z",
+        "symbols": ["APTUSDT"],
+        "asset_holdouts": ["IMXUSDT"],
+    }
+    expected_split = {
+        "split_id": "task14-first-real-discovery-v4",
+        "sha256": preregistration.get("split_sha256"),
+        "discovery": discovery,
+        "development": development,
+        "holdout": {key: value for key, value in holdout.items() if key != "asset_holdouts"},
+        "asset_holdouts": ["IMXUSDT"],
+    }
+    motif_policy = canonical_config.get("motif_stability_policy")
+    if (
+        preregistration.get("discovery_metadata") != discovery
+        or preregistration.get("development_metadata") != development
+        or preregistration.get("holdout_metadata") != holdout
+        or selected_universe.get("schema_version") != "selected-universe-v2"
+        or selected_universe.get("selection_id") != "SU-000704"
+        or selected_universe.get("symbols") != ["APTUSDT"]
+        or selected_universe.get("timeframe") != "1m"
+        or selected_universe.get("start") != discovery["start"]
+        or selected_universe.get("end") != development["end"]
+        or canonical_config.get("run_id") != _TASK14_RUN_ID
+        or canonical_config.get("dataset_snapshot_id") != "DS-000704"
+        or canonical_config.get("feature_set_id") != "FS-000001"
+        or canonical_config.get("feature_names") != preregistration.get("feature_names")
+        or canonical_config.get("max_rows") != 480
+        or canonical_config.get("split") != expected_split
+        or not isinstance(motif_policy, Mapping)
+        or motif_policy.get("max_windows") != 512
+        or canonical_policy_sha256(motif_policy) != preregistration.get("motif_policy_sha256")
+    ):
+        raise RuntimeError("Task 14 preregistration boundary is invalid")
+
+
+def _verified_wrapped_artifact(path: Path) -> dict[str, Any]:
+    value = _read_bounded_json_object(path)
+    if set(value) != {"artifact", "sha256"} or not isinstance(value["artifact"], dict):
+        raise RuntimeError("Task 14 programme artifact contract is malformed")
+    if (
+        not _is_sha256(value["sha256"])
+        or canonical_policy_sha256(value["artifact"]) != value["sha256"]
+    ):
+        raise RuntimeError("Task 14 programme artifact identity is invalid")
+    return value
+
+
+def _read_bounded_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(read_bounded_regular(path, _MAX_TASK14_EVIDENCE_BYTES))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("Task 14 evidence is missing or malformed") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("Task 14 evidence must be a JSON object")
+    return value
+
+
+def _phase_gate(
+    *,
+    history_promoted: bool,
+    history_complete: bool,
+    task14_complete: bool,
+) -> dict[str, str]:
+    if task14_complete:
+        return {
+            "active_phase": "Phase C Task 14 outcome-blind discovery: complete",
+            "status": "complete_task15_authorized",
+            "next_required_evidence": "execute the separate Task 15 Phase 5 validation plan",
+        }
+    if history_promoted:
+        return {
+            "active_phase": "Phase B Task 13 deterministic hardening: complete",
+            "status": "complete_task14_authorized",
             "next_required_evidence": (
                 "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint"
-                if history_promoted
-                else "obtain explicit promotion approval and publish an immutable promotion receipt"
-                if history_complete
-                else "complete RR-000008 and obtain explicit promotion approval"
             ),
-        },
+        }
+    return {
+        "active_phase": "Phase 0: trustworthy foundation",
+        "status": "remediation_in_progress",
+        "next_required_evidence": (
+            "obtain explicit promotion approval and publish an immutable promotion receipt"
+            if history_complete
+            else "complete RR-000008 and obtain explicit promotion approval"
+        ),
     }
 
 

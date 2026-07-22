@@ -952,10 +952,19 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(
     assert "accuracy" not in encoded
 
 
-@pytest.mark.parametrize("controls_executed", [False, True])
-def test_completed_reliability_requires_executed_controls_and_baselines(
+@pytest.mark.parametrize(
+    ("controls_executed", "terminal_status", "expected_conclusion"),
+    [
+        (False, TerminalStatus.COMPLETED, "inconclusive"),
+        (True, TerminalStatus.COMPLETED, "accepted"),
+        (True, TerminalStatus.REJECTED, "rejected"),
+    ],
+)
+def test_reliability_reports_verified_control_execution_for_every_terminal_status(
     tmp_path: Path,
     controls_executed: bool,
+    terminal_status: TerminalStatus,
+    expected_conclusion: str,
 ) -> None:
     selected = _freeze(_write_promotion_receipt(tmp_path / "receipt.json"))
     budget = _program_budget(maximum_trials=1)
@@ -1076,7 +1085,7 @@ def test_completed_reliability_requires_executed_controls_and_baselines(
             else {"status": "string"}
         ),
     )
-    metrics: dict[str, object] = {"status": "completed"}
+    metrics: dict[str, object] = {"status": terminal_status.value}
     artifacts: dict[str, bytes] = {}
     if controls_executed:
         work_evidence = _projection_work_evidence(preregistration.run_work_budget)
@@ -1187,7 +1196,7 @@ def test_completed_reliability_requires_executed_controls_and_baselines(
             )
     save_experiment_result(
         config=config,
-        status=TerminalStatus.COMPLETED,
+        status=terminal_status,
         metrics=metrics,
         conclusion="Completed outcome-blind fixture.",
         started_at=datetime(2026, 7, 22, tzinfo=UTC),
@@ -1202,8 +1211,7 @@ def test_completed_reliability_requires_executed_controls_and_baselines(
         destination=tmp_path / "completed-reliability-vector.json",
     )
 
-    expected = "accepted" if controls_executed else "inconclusive"
-    assert vector.conclusion == expected
+    assert vector.conclusion == expected_conclusion
     expected_status = "executed" if controls_executed else "unexecuted"
     assert vector.negative_control_execution == (
         ("seed_perturbation", expected_status),

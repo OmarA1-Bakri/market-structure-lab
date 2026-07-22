@@ -5,9 +5,9 @@ an inspectable discovery baseline, not an edge validator, strategy engine, or tr
 
 The original Task 12 software gate is remotely complete at baseline
 `3cf3721f1ec694b61ec1da78d0b7be24fea93caf`. The separate Task 13 residual-risk audit is complete
-and remotely checkpointed at `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. The first real
-outcome-blind run is Task 14; it is now authorized, while holdout rows, outcomes, validation, and
-strategy work remain inaccessible and unstarted.
+and remotely checkpointed at `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. Task 14 has now run
+four immutable attempts. Bounded `PG-000004` completed as `DR-000704` with a rejected stability
+decision while holdout rows, outcomes, validation, and strategy work remained inaccessible.
 
 ## Task 14 real-program boundary
 
@@ -55,8 +55,11 @@ parameter changes, or strategy construction.
 Before matrix construction, factory-created `DiscoveryProvenance` authenticates the concrete snapshot
 manifest, derived feature publication, registry/dependency contract, fitted normalizer, selected
 feature order, split, clean code commit, and lockfile. Changed artefacts, rows, feature order,
-partitions, commit state, or hashes fail before PCA or clustering reads discovery values. This is a
-verified software boundary; no real source-backed discovery publication has yet exercised it.
+partitions, commit state, or hashes fail before PCA or clustering reads discovery values. Bounded
+`PG-000004` exercised this boundary. Its snapshot, feature/event publications, normaliser, receipt,
+and programme vector are recorded in
+[`TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md`](TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md). The
+detector was rejected and no frozen behaviour advanced.
 
 Before feature rows can be published for discovery, each registered field must carry the causal
 dependency contract and independent checksum-bound leakage evidence documented in
@@ -198,13 +201,13 @@ chronological walk-forward evaluation, asset holdouts where feasible, serial-dep
 uncertainty, multiple-testing controls, negative controls, and an untouched final holdout.
 Behaviour, interpretation, and hypothesis remain distinct from a validated edge.
 
-## Phase 4 hardening stop gate
+## Task 14 terminal result and Phase 5 boundary
 
 The original Task 7–12 software-hardening gate and the authorized Task 13 adversarial closure are
 recorded in [`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md). Together they verify and
 independently challenge deterministic provenance, structural stability, motif boundaries, frozen
 transition uncertainty, semantic leakage receipts, bounded work, holdout non-access, trial
-accounting, and byte-identical golden publication. The result remains synthetic software evidence
-only. Task 14 real discovery is authorized only after the final Task 13 evidence checkpoint is
-pushed and verified remotely. Outcome attachment, predictive validation, and strategy work remain
-blocked behind their later gates.
+accounting, and byte-identical golden publication. The Task 13 result remains synthetic software
+evidence; Task 14 separately added the first bounded real programme. `PG-000004` ended `rejected`,
+with no holdout access and no behaviour promoted to a hypothesis. Task 15 must freeze the separate
+validation plan before outcomes may be attached.

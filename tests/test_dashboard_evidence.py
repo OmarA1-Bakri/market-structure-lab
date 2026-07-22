@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import shutil
@@ -51,6 +52,25 @@ FIXTURES = Path(__file__).parent / "fixtures" / "phase4"
 
 def _sha(character: str) -> str:
     return character * 64
+
+
+def _task14_checkpoint_fixture() -> dict[str, object]:
+    return {
+        "schema_version": "task14-programme-checkpoint-v1",
+        "program_id": "PG-000004",
+        "run_id": "DR-000704",
+        "programme_conclusion": "rejected",
+        "scientific_status": "rejected_unstable",
+        "preregistration_sha256": _sha("1"),
+        "reliability_vector_sha256": _sha("2"),
+        "trial_receipt_sha256": _sha("3"),
+        "dataset_snapshot": {"id": "DS-000704", "sha256": _sha("4")},
+        "feature_publication": {"id": "FP-000704", "sha256": _sha("5")},
+        "event_publication": {"id": "EP-000704", "sha256": _sha("6")},
+        "normalizer": {"id": "NZ-000704", "sha256": _sha("7")},
+        "holdout_rows_accessed": False,
+        "outcomes_attached": False,
+    }
 
 
 def _freshness(root: Path) -> None:
@@ -356,12 +376,162 @@ def test_public_dashboard_evidence_uses_current_phase4_v4_manifest() -> None:
         artifact.read_text(encoding="utf-8")
     )
     assert evidence["phase_gate"] == {
-        "active_phase": "Phase B Task 13 deterministic hardening: complete",
-        "next_required_evidence": (
-            "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint"
-        ),
-        "status": "complete_task14_authorized",
+        "active_phase": "Phase C Task 14 outcome-blind discovery: complete",
+        "next_required_evidence": "execute the separate Task 15 Phase 5 validation plan",
+        "status": "complete_task15_authorized",
     }
+    accuracy = evidence["experiment_accuracy"]
+    counts = accuracy["verified_real_trial_artifacts"]
+    assert counts["total"] == 4
+    assert counts["by_mode"] == {
+        "discovery": 4,
+        "hypothesis": 0,
+        "validation": 0,
+        "strategy": 0,
+    }
+    assert counts["by_status"] == {
+        "failed": 2,
+        "inconclusive": 0,
+        "abandoned": 0,
+        "rejected": 2,
+        "completed": 0,
+    }
+    checkpoint = accuracy["task14_programme_checkpoint"]
+    assert checkpoint == {
+        "schema_version": "task14-programme-checkpoint-v1",
+        "program_id": "PG-000004",
+        "run_id": "DR-000704",
+        "programme_conclusion": "rejected",
+        "scientific_status": "rejected_unstable",
+        "preregistration_sha256": (
+            "ecc2807ea6ee97f9ae4a0c9cbec079059d0cf826217603dc1a78bb79da881b2a"
+        ),
+        "reliability_vector_sha256": (
+            "bb34e32608c79a5cd74d22abaab3dbc06530deda95f2eff9aceae59bb76664af"
+        ),
+        "trial_receipt_sha256": (
+            "26027e7efc10cd1faa8659230bc8927f539d210eeac423cd1d9696e02fb94366"
+        ),
+        "dataset_snapshot": {
+            "id": "DS-000704",
+            "sha256": "eb6c296a92b87ad9071749e18f01699a09ab3d8f71748bf50595f9e6db614905",
+        },
+        "feature_publication": {
+            "id": "FP-000704",
+            "sha256": "7002ab50b0274ec139eb6d8bdd85457ba5431ee3c9c3d1c31fd3b7c00e62b7cb",
+        },
+        "event_publication": {
+            "id": "EP-000704",
+            "sha256": "8a85487f7985993155efb6b61ff6aed2b6705a2294c0e219786190f81dda7684",
+        },
+        "normalizer": {
+            "id": "NZ-000704",
+            "sha256": "0f5459fa50e2c795e95838f70c07184e9d7e5b25ed8e362a9ea0a8e0e588a352",
+        },
+        "holdout_rows_accessed": False,
+        "outcomes_attached": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "replacement"),
+    [
+        ("discovery_metadata", "start", "2025-02-01T00:01:00Z"),
+        ("discovery_metadata", "end", "2025-02-01T08:01:00Z"),
+        ("development_metadata", "start", "2025-02-01T08:01:00Z"),
+        ("development_metadata", "end", "2025-02-01T16:01:00Z"),
+        ("holdout_metadata", "start", "2025-02-01T16:01:00Z"),
+        ("holdout_metadata", "end", "2025-02-02T00:01:00Z"),
+        ("holdout_metadata", "asset_holdouts", ["BTCUSDT"]),
+        ("motif_stability_policy", "max_windows", 511),
+    ],
+    ids=(
+        "discovery-start",
+        "discovery-end",
+        "development-start",
+        "development-end",
+        "holdout-start",
+        "holdout-end",
+        "asset-holdout",
+        "motif-window-cap",
+    ),
+)
+def test_task14_checkpoint_rejects_exact_boundary_and_cap_drift(
+    target: str,
+    field: str,
+    replacement: object,
+) -> None:
+    discovery = {
+        "role": "discovery",
+        "start": "2025-02-01T00:00:00Z",
+        "end": "2025-02-01T08:00:00Z",
+        "symbols": ["APTUSDT"],
+    }
+    development = {
+        "role": "development",
+        "start": "2025-02-01T08:00:00Z",
+        "end": "2025-02-01T16:00:00Z",
+        "symbols": ["APTUSDT"],
+    }
+    holdout = {
+        "role": "holdout",
+        "start": "2025-02-01T16:00:00Z",
+        "end": "2025-02-02T00:00:00Z",
+        "symbols": ["APTUSDT"],
+        "asset_holdouts": ["IMXUSDT"],
+    }
+    motif_policy = {"max_windows": 512}
+    split_sha256 = _sha("1")
+    preregistration = {
+        "discovery_metadata": discovery,
+        "development_metadata": development,
+        "holdout_metadata": holdout,
+        "feature_names": ["fixture_feature"],
+        "split_sha256": split_sha256,
+        "motif_policy_sha256": dashboard_evidence_module.canonical_policy_sha256(motif_policy),
+    }
+    universe = {
+        "schema_version": "selected-universe-v2",
+        "selection_id": "SU-000704",
+        "symbols": ["APTUSDT"],
+        "timeframe": "1m",
+        "start": discovery["start"],
+        "end": development["end"],
+    }
+    canonical_config = {
+        "run_id": "DR-000704",
+        "dataset_snapshot_id": "DS-000704",
+        "feature_set_id": "FS-000001",
+        "feature_names": ["fixture_feature"],
+        "max_rows": 480,
+        "split": {
+            "split_id": "task14-first-real-discovery-v4",
+            "sha256": split_sha256,
+            "discovery": discovery,
+            "development": development,
+            "holdout": {key: value for key, value in holdout.items() if key != "asset_holdouts"},
+            "asset_holdouts": ["IMXUSDT"],
+        },
+        "motif_stability_policy": motif_policy,
+    }
+    dashboard_evidence_module._validate_task14_preregistration_boundary(
+        preregistration,
+        universe,
+        canonical_config,
+    )
+    preregistration = copy.deepcopy(preregistration)
+    canonical_config = copy.deepcopy(canonical_config)
+    if target == "motif_stability_policy":
+        canonical_config[target][field] = replacement
+    else:
+        preregistration[target][field] = replacement
+
+    with pytest.raises(RuntimeError, match="Task 14 preregistration boundary"):
+        dashboard_evidence_module._validate_task14_preregistration_boundary(
+            preregistration,
+            universe,
+            canonical_config,
+        )
 
 
 def test_dashboard_counts_verified_real_trials_exactly_by_mode_and_status(tmp_path: Path) -> None:
@@ -399,6 +569,65 @@ def test_dashboard_counts_verified_real_trials_exactly_by_mode_and_status(tmp_pa
     assert counts["by_mode_and_status"]["validation"]["failed"] == 1
     assert counts["by_mode_and_status"]["validation"]["rejected"] == 1
     assert accuracy["status"] == "not_estimable"
+
+
+def test_dashboard_counts_bounded_grouped_task14_attempt_ledgers(tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    ledger = root / "data" / "exports" / "trials"
+    attempts = (
+        ("task14-PG-000001", "DR-000701", TerminalStatus.FAILED),
+        ("task14-PG-000002", "DR-000702", TerminalStatus.FAILED),
+        ("task14-PG-000003", "DR-000703", TerminalStatus.REJECTED),
+        ("task14-PG-000004", "DR-000704", TerminalStatus.REJECTED),
+    )
+    for group, run_id, status in attempts:
+        save_experiment_result(
+            config=_trial_config(run_id, ExperimentMode.DISCOVERY),
+            status=status,
+            metrics=({} if status is TerminalStatus.FAILED else {"observations": 1}),
+            conclusion="Immutable Task 14 attempt fixture.",
+            started_at=datetime(2026, 7, 22, 20, 0, tzinfo=UTC),
+            completed_at=datetime(2026, 7, 22, 20, 1, tzinfo=UTC),
+            root=ledger / group,
+        )
+
+    evidence = generate_lab_evidence(root, generated_at="2026-07-22T21:00:00Z")
+    counts = evidence["experiment_accuracy"]["verified_real_trial_artifacts"]
+
+    assert counts["total"] == 4
+    assert counts["by_mode"] == {
+        "discovery": 4,
+        "hypothesis": 0,
+        "validation": 0,
+        "strategy": 0,
+    }
+    assert counts["by_status"] == {
+        "failed": 2,
+        "inconclusive": 0,
+        "abandoned": 0,
+        "rejected": 2,
+        "completed": 0,
+    }
+
+
+def test_dashboard_grouped_trial_ledger_fails_closed_on_nested_staging_entry(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path)
+    ledger = root / "data" / "exports" / "trials"
+    save_experiment_result(
+        config=_trial_config("DR-000701", ExperimentMode.DISCOVERY),
+        status=TerminalStatus.FAILED,
+        metrics={},
+        conclusion="Immutable Task 14 attempt fixture.",
+        started_at=datetime(2026, 7, 22, 20, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 22, 20, 1, tzinfo=UTC),
+        root=ledger / "task14-PG-000001",
+    )
+    (ledger / "task14-PG-000002" / ".DR-000702.staging").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="staging"):
+        generate_lab_evidence(root, generated_at="2026-07-22T21:00:00Z")
 
 
 @pytest.mark.parametrize("malformation", ["artifact_tamper", "extra_file", "staging"])
@@ -597,6 +826,68 @@ def test_node_contract_rejects_malformed_trial_ledger_evidence(
     assert "trial ledger contract" in result.stderr
 
 
+def test_node_contract_rejects_tampered_task14_programme_checkpoint(tmp_path: Path) -> None:
+    evidence = generate_lab_evidence(
+        _repository(tmp_path / "repository"),
+        generated_at="2026-07-22T21:00:00Z",
+    )
+    checkpoint = _task14_checkpoint_fixture()
+    checkpoint["normalizer"] = {"id": "NZ-000704", "sha256": "not-a-sha"}
+    evidence["experiment_accuracy"]["task14_programme_checkpoint"] = checkpoint
+    artifact = tmp_path / "lab-evidence-v1.json"
+    artifact.write_text(json.dumps(evidence), encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", "dashboard/scripts/verify-lab-evidence.mjs", str(artifact)],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Task 14 programme checkpoint" in result.stderr
+
+
+def test_node_contract_allows_future_trials_after_frozen_task14_checkpoint(
+    tmp_path: Path,
+) -> None:
+    evidence = generate_lab_evidence(
+        _repository(tmp_path / "repository"),
+        generated_at="2026-07-22T21:00:00Z",
+    )
+    accuracy = evidence["experiment_accuracy"]
+    counts = accuracy["verified_real_trial_artifacts"]
+    accuracy["task14_programme_checkpoint"] = _task14_checkpoint_fixture()
+    accuracy["trial_ledger_status"] = "implemented_with_receipts"
+    counts["total"] = 5
+    counts["by_mode"]["discovery"] = 4
+    counts["by_mode"]["validation"] = 1
+    counts["by_status"]["failed"] = 2
+    counts["by_status"]["rejected"] = 2
+    counts["by_status"]["completed"] = 1
+    counts["by_mode_and_status"]["discovery"]["failed"] = 2
+    counts["by_mode_and_status"]["discovery"]["rejected"] = 2
+    counts["by_mode_and_status"]["validation"]["completed"] = 1
+    evidence["phase_gate"] = {
+        "active_phase": "Phase C Task 14 outcome-blind discovery: complete",
+        "next_required_evidence": "execute the separate Task 15 Phase 5 validation plan",
+        "status": "complete_task15_authorized",
+    }
+    artifact = tmp_path / "lab-evidence-v1.json"
+    artifact.write_text(json.dumps(evidence), encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", "dashboard/scripts/verify-lab-evidence.mjs", str(artifact)],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_node_contract_rejects_stale_phase4_approval_gate(tmp_path: Path) -> None:
     evidence = generate_lab_evidence(
         _repository(tmp_path / "repository"),
@@ -649,3 +940,15 @@ def test_overview_renders_trial_state_from_contract_without_hardcoded_empty_clai
     assert "Full-history reconciliation is complete but unpromoted" in source
     assert "implemented and empty" not in source
     assert "zero verified real receipts" not in source
+
+
+def test_discovery_page_renders_task14_checkpoint_without_claiming_validation() -> None:
+    source = (
+        Path(__file__).parents[1] / "dashboard" / "src" / "pages" / "discovery-page.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "task14_programme_checkpoint" in source
+    assert "programme_conclusion" in source
+    assert "holdout_rows_accessed" in source
+    assert "Task 14 closed; validation not yet executed" in source
+    assert "Phase 5 remains sealed" not in source

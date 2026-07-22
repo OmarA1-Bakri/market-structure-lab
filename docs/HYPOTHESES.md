@@ -1,24 +1,18 @@
-H001
+# Hypothesis Register
 
-Origin
+## Current state
 
-AI Discovery
-or
-Human Observation
+No discovery-derived hypothesis is registered. Task 14 `PG-000004` produced zero frozen behaviours
+after the detector was rejected by its preregistered stability policy. No narrative substitute was
+created.
 
-Status
+## Entry template
 
-Untested
-Testing
-Rejected
-Validated
-
-Description
-
-Objective Features
-
-Detection Algorithm
-
-Statistical Validation
-
-Notes
+- ID:
+- Origin: AI discovery / human observation / joint
+- Status: untested / testing / rejected / validated
+- Description:
+- Objective features:
+- Detection algorithm:
+- Statistical validation:
+- Notes:

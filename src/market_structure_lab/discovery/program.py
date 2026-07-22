@@ -1271,13 +1271,12 @@ def _aggregate_execution_classification(
     *,
     evidence_field: str,
 ) -> tuple[tuple[str, str], ...]:
-    completed = tuple(record for record in records if record.status == "completed")
     aggregate: list[tuple[str, str]] = []
     for name in declared:
-        executed = bool(completed) and all(
+        executed = bool(records) and all(
             isinstance((evidence := dict(record.evidence).get(evidence_field)), Mapping)
             and evidence.get(name) == "executed"
-            for record in completed
+            for record in records
         )
         aggregate.append((name, "executed" if executed else "unexecuted"))
     return tuple(aggregate)

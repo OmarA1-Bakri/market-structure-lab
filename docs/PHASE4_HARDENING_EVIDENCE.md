@@ -503,3 +503,11 @@ the Lore implementation checkpoint was pushed, and local/remote equality was ver
 `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. Empirical validity is not implied. Task 14 is now
 authorized; holdout rows/outcomes, outcome attachment, validation, and strategy work remain outside
 this completed gate.
+
+## Linked postscript — Task 14 empirical programme
+
+Task 14 later consumed its separate authorization and preserved all four immutable real attempts.
+Bounded `PG-000004` completed as `DR-000704` with a scientifically rejected stability conclusion,
+no holdout-row access, and no outcome attachment. This does not alter the historical Task 12/13
+software-hardening record. The separate runtime and review evidence is
+[`TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md`](TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md).

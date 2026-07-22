@@ -3,7 +3,7 @@
 ## Document control
 
 - **Status:** Canonical review baseline
-- **Assessment date:** 2026-07-18
+- **Assessment date:** 2026-07-22
 - **Scope:** Current data evidence, reconciliation state, experiment artifacts, discovery methodology, and the evidentiary basis for future experiment reliability
 - **Exclusions:** No final-holdout outcomes were inspected; no strategy, backtest, or live-trading claim is made
 - **Governing sources:** `docs/PRD.md`, `AGENTS.md`, checksum-bearing artifacts under `data/exports/`, and the current implementation/tests
@@ -12,7 +12,11 @@
 
 **The repository cannot currently support a defensible numeric estimate of the accuracy of future market experiments.**
 
-There are no completed real-market discovery trials, no completed Phase 5 validation trials, no cost-adjusted outcome results, and no empirical trial history from which to estimate a discovery or promotion rate. `docs/RESEARCH_LOG.md` contains no completed research session, `docs/HYPOTHESES.md` is an unpopulated template, and the only committed `DR-*` evidence is a synthetic golden replay. The immutable `trial-receipt-v2` ledger is now implemented, but the verified repository ledger is empty. The current empirical count is therefore `n = 0`; any single accuracy percentage would be invented.
+There are four checksum-verified real-market discovery receipts, but no completed Phase 5 validation
+trial, cost-adjusted outcome result, or empirical promotion history from which to estimate accuracy.
+The Task 14 ledger contains two failed and two rejected attempts; bounded `PG-000004` completed with
+a rejected detector and zero frozen behaviours. A discovery receipt count is not a predictive
+sample and cannot be converted into an accuracy percentage.
 
 The correct object is not classification accuracy. Future experiments must report a **reliability vector**:
 
@@ -78,23 +82,28 @@ pre-consumption sentinels, and 13 boundedness guards. The complete Windows-nativ
 and independent clean-root byte replay also passed (`docs/PHASE4_HARDENING_EVIDENCE.md`). This proves
 the software-fixture contract, not market recurrence or profitability.
 
-### 4. Real experiment evidence: absent
+### 4. Real outcome-blind experiment evidence: terminally rejected
 
-No real Phase 3 feature/event publication feeding discovery, real `DR-*` bundle, completed research-log entry, populated hypothesis record, Phase 5 outcome attachment, or cost-aware validation artifact exists. The only visible candle snapshot is a one-day, one-symbol XRPUSDT snapshot with 1,440 rows and a dirty commit identity (`data/exports/snapshots/dataset_version=phase0-xrpusdt-20180505-v1/manifest.json:1-23`).
+Task 14 created four immutable source-backed attempts. `PG-000001` and `PG-000002` failed under
+obsolete oversized scopes. Bounded `PG-000003` produced a rejected receipt before its programme
+vector exposed an overly strict projection-reservation check. Fresh bounded `PG-000004` produced
+`DR-000704`, checksum-bound snapshot/feature/event/normaliser identities, and a rejected reliability
+vector. No behaviour advanced to the hypothesis register.
 
-The absence is now machine-readable rather than inferred from optimistic UI defaults. The dashboard
-generator verifies the canonical ledger and reports exact mode/status counts: all four modes and all
-five terminal statuses are zero. It rejects malformed receipts, checksum drift, extra files, and
-interrupted staging, and it never counts the synthetic Phase 4 fixture as a real trial. Required
+The trial state is now machine-readable rather than inferred from optimistic UI defaults. The
+dashboard generator verifies grouped attempt ledgers and reports four discovery receipts: two
+`failed` and two `rejected`; every other mode/status count is zero. It rejects malformed receipts,
+checksum drift, extra files, and interrupted staging, and it never counts the synthetic Phase 4
+fixture as a real trial. Required
 snapshot, feature-publication, registry, and normalizer identities are receipt-bound assertions.
 The Phase 4 hardening work now verifies their concrete checksum-bearing derivation chain before PCA
-or clustering may read rows. No real market publication has exercised that chain yet.
+or clustering may read rows. `PG-000004` exercised that chain without holdout-row access.
 
 Consequently:
 
-- real detector stability is unknown;
-- effective independent event count is unknown;
-- transition support and interval width on market data are unknown;
+- this frozen detector's stability is rejected for the bounded pilot;
+- effective independent support is measured only for this narrow pilot and is inadequate;
+- every pilot transition estimate is rejected for low support, with additional width failures;
 - untouched temporal and asset-holdout performance is unknown;
 - net expectancy, cost stress, deflated Sharpe, and backtest-overfitting probability are unknown.
 
@@ -107,34 +116,35 @@ Consequently:
 | Full-universe temporal coverage | Weak and uneven | High | 7.739M minutes remain absent; 9 source conflicts; 12 provider-absent statuses |
 | Existing-row venue reconciliation | Complete, promoted | High | RR-000008 is active, receipt-bound, replay-idempotent, and publishes 67,632,983 verified canonical rows |
 | Outcome-blind access boundary | Structurally strong | High | Holdout rows are rejected and future/outcome feature classes are blocked |
-| End-to-end normalization provenance | Concrete software chain verified; real publication unexercised | High | factory-created `DiscoveryProvenance` authenticates snapshot, publication, registry/dependencies, normalizer, split, feature order, commit, and lock before matrix construction |
-| Immutable trial accounting | Implemented but empirically empty | High | Canonical terminal receipts are atomic, idempotent, fail closed, and counted by verified mode/status; repository count is `n=0` |
-| Real detector/cluster stability | Unknown | High | No real discovery run exists |
+| End-to-end normalization provenance | Concrete software and bounded real chain exercised | High | `PG-000004` binds snapshot, publication, registry/dependencies, normaliser, split, feature order, commit, and lock before matrix construction |
+| Immutable trial accounting | Implemented and exercised | High | Four canonical discovery receipts: two failed and two rejected; no validation or strategy receipt |
+| Real detector/cluster stability | Rejected for the frozen bounded pilot | High | `DR-000704` was rejected by the preregistered stability policy |
 | Motif stability and boundary safety | Structurally strong; empirical calibration absent | High | Boundary-safe multivariate motifs retain separate seed/tie, subsample, parameter, asset, period, and outcome-blind regime evidence |
 | Transition description | Structurally safe, frozen, and statistically descriptive | High | The public path dwell-compresses, freezes dependence-aware uncertainty inputs/diagnostics, and exposes no adjacent-binomial/BH inference API |
 | Predictive validity after costs | Not measured | High | Phase 5 and strategy validation have not run |
-| Future experiment success rate | Not estimable (`n=0`) | High | No completed real research trials |
+| Future experiment success rate | Not estimable | High | Four attempted discovery configurations and zero validation/promotions cannot estimate future yield |
 
 ## Ranked methodological blockers
 
-1. **No empirical experiment exists.** There is nothing from which to estimate predictive accuracy, false-discovery rate, or promotion yield.
-2. **A new research snapshot is still required.** RR-000008 provenance is established, but any
-   snapshot frozen before promotion may preserve known row-value errors and cannot be relabelled.
-3. **Research thresholds are uncalibrated.** Fixture thresholds prove deterministic pass/reject
-   policy plumbing, not justified market-research cutoffs. Every stability, support, interval-width,
-   and search-space threshold needs preregistration before a real run.
+1. **No predictive validation exists.** Four discovery attempts cannot estimate predictive
+   accuracy, false-discovery rate, promotion yield, or cost-adjusted expectancy.
+2. **A Phase 5 validation snapshot is still required.** The bounded Task 14 snapshot is real and
+   receipt-bound, but covers only 16 hours of APTUSDT. It cannot be relabelled as the longer-history,
+   multi-asset validation universe.
+3. **Threshold generality is unproved.** Task 14 froze its project-specific thresholds before its
+   bounded pilot, which was rejected. Those thresholds cannot be transferred to a different family
+   or validation design without a new preregistration and power/effective-support justification.
 4. **Semantic leakage still requires human review.** Dependency receipts, producer replay, negative
    tests, and pre-consumption guards are bound and verified, but arbitrary declarations and builder
    semantics cannot be proved mechanically.
-5. **Real cluster and motif stability is unknown.** The software measures the required axes, but no
-   market run establishes their support, cross-asset coverage, adjacent-period drift, or regime
-   consistency.
-6. **Real transition resolution is unknown.** The policy freezes horizon, block selection,
-   bootstrap work, confidence, support, interval-width rejection, and sensitivity diagnostics, but
-   no market observations establish adequate effective support or interval width.
+5. **The bounded detector failed stability.** `DR-000704` failed subsample, nearby-cluster-count,
+   and development asset-coverage criteria. One operational single-asset pilot cannot establish
+   broader cross-asset or regime stability.
+6. **The bounded transitions lack resolution.** All nine Task 14 estimates were rejected for
+   effective support below 50; several also failed interval width. They remain descriptive only.
 7. **Predictive validation and cost robustness do not exist.** Phase 5 outcome attachment,
-   multiplicity controls, holdout evaluation, execution costs, and strategy construction remain
-   separately approval-gated.
+   multiplicity controls, holdout evaluation, and execution costs remain behind the separate Task 15
+   plan and its bounded implementation. Strategy construction remains out of scope.
 
 ## Canonical gates for future accuracy claims
 
@@ -209,18 +219,19 @@ Record every successful, rejected, inconclusive, failed, and abandoned trial. Af
 
 Do not publish a single “accuracy” percentage for the laboratory. Publish the reliability vector and each gate's evidence. The only currently defensible global status is:
 
-> **Synthetic Phase 4 hardening verified; source data conditionally viable; full-history reconciliation promoted and receipt-bound; real detector stability unmeasured; predictive and cost-adjusted accuracy not yet estimable.**
+> **Synthetic Phase 4 hardening verified; full-history reconciliation promoted; four immutable real
+> discovery attempts retained; the bounded Task 14 detector rejected; predictive and cost-adjusted
+> accuracy not yet estimable.**
 
-The explicit RR-000008 promotion approval has been consumed, Phase 0 is closed, and deterministic
-Phase 4 software hardening is complete through the original Task 12 checkpoint. The authorized
-Task 13 residual-risk audit may challenge software evidence but does not itself authorize a real
-discovery run or Phase 5 validation. The latest instruction authorizes Phase C Task 14 only after
-Task 13 is committed, pushed, and verified against the remote branch; later empirical work remains
-sequentially gated.
+The explicit RR-000008 promotion approval has been consumed, Phase 0 and deterministic Phase 4
+hardening are closed, and Task 13 is remotely verified. Task 14 then completed its bounded real
+programme without holdout-row or outcome access. The 2026-07-22 downstream instruction authorizes
+Task 15 and its subsequent bounded implementation, but the separate plan must exist before any
+outcome attachment and no later research stage may be skipped.
 
 ## Terse review findings
 
-- `docs/RESEARCH_LOG.md:20-22: 🔴 blocker: no completed real research trial exists. Do not report experiment accuracy until trial artifacts exist.`
+- `docs/TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md: 🟡 empirical result: four attempts are retained; the bounded terminal detector was rejected and supplies no predictive accuracy claim.`
 - `docs/PHASE4_HARDENING_EVIDENCE.md: 🟢 closed: Phase 4 software contracts passed 1,100 Windows tests, focused safety suites, and independent every-byte clean-root replay.`
 - `data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json: 🟢 closed: all 1,583 units, 285 coverage intervals, candidate hashes, active view, and idempotent replay verify; a new research snapshot remains separately gated.`
 - `src/market_structure_lab/discovery/splits.py: 🟢 closed: concrete checksum-bearing snapshot, publication, registry/dependency, normalizer, split, commit, lock, and feature-order identities fail closed before matrix construction.`

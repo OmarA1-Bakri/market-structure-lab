@@ -1,16 +1,44 @@
 {
   "connection_mode": "deployment_snapshot",
   "experiment_accuracy": {
-    "claim": "The immutable ledger is implemented but contains zero verified real trials; numeric accuracy is not estimable.",
+    "claim": "Verified terminal receipts exist, but predictive accuracy remains not estimable.",
     "derivation_chain_verified": false,
     "fixture_trials_counted_as_real": false,
     "scope": "verified real-trial artifacts supplied to this dashboard contract",
     "status": "not_estimable",
-    "trial_ledger_status": "implemented_empty",
+    "task14_programme_checkpoint": {
+      "dataset_snapshot": {
+        "id": "DS-000704",
+        "sha256": "eb6c296a92b87ad9071749e18f01699a09ab3d8f71748bf50595f9e6db614905"
+      },
+      "event_publication": {
+        "id": "EP-000704",
+        "sha256": "8a85487f7985993155efb6b61ff6aed2b6705a2294c0e219786190f81dda7684"
+      },
+      "feature_publication": {
+        "id": "FP-000704",
+        "sha256": "7002ab50b0274ec139eb6d8bdd85457ba5431ee3c9c3d1c31fd3b7c00e62b7cb"
+      },
+      "holdout_rows_accessed": false,
+      "normalizer": {
+        "id": "NZ-000704",
+        "sha256": "0f5459fa50e2c795e95838f70c07184e9d7e5b25ed8e362a9ea0a8e0e588a352"
+      },
+      "outcomes_attached": false,
+      "preregistration_sha256": "ecc2807ea6ee97f9ae4a0c9cbec079059d0cf826217603dc1a78bb79da881b2a",
+      "program_id": "PG-000004",
+      "programme_conclusion": "rejected",
+      "reliability_vector_sha256": "bb34e32608c79a5cd74d22abaab3dbc06530deda95f2eff9aceae59bb76664af",
+      "run_id": "DR-000704",
+      "schema_version": "task14-programme-checkpoint-v1",
+      "scientific_status": "rejected_unstable",
+      "trial_receipt_sha256": "26027e7efc10cd1faa8659230bc8927f539d210eeac423cd1d9696e02fb94366"
+    },
+    "trial_ledger_status": "implemented_with_receipts",
     "trial_receipt_schema": "trial-receipt-v2",
     "verified_real_trial_artifacts": {
       "by_mode": {
-        "discovery": 0,
+        "discovery": 4,
         "hypothesis": 0,
         "strategy": 0,
         "validation": 0
@@ -19,9 +47,9 @@
         "discovery": {
           "abandoned": 0,
           "completed": 0,
-          "failed": 0,
+          "failed": 2,
           "inconclusive": 0,
-          "rejected": 0
+          "rejected": 2
         },
         "hypothesis": {
           "abandoned": 0,
@@ -48,11 +76,11 @@
       "by_status": {
         "abandoned": 0,
         "completed": 0,
-        "failed": 0,
+        "failed": 2,
         "inconclusive": 0,
-        "rejected": 0
+        "rejected": 2
       },
-      "total": 0
+      "total": 4
     }
   },
   "feature_registry": {
@@ -1003,11 +1031,11 @@
       }
     ]
   },
-  "generated_at": "2026-07-19T18:28:44Z",
+  "generated_at": "2026-07-22T08:15:04Z",
   "phase_gate": {
-    "active_phase": "Phase B Task 13 deterministic hardening: complete",
-    "next_required_evidence": "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint",
-    "status": "complete_task14_authorized"
+    "active_phase": "Phase C Task 14 outcome-blind discovery: complete",
+    "next_required_evidence": "execute the separate Task 15 Phase 5 validation plan",
+    "status": "complete_task15_authorized"
   },
   "reconciliation": {
     "bounded_audit": {

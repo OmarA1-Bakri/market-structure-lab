@@ -65,6 +65,23 @@ export interface ReconciliationEvidence {
   research_eligibility: string;
 }
 
+export interface Task14ProgrammeCheckpoint {
+  schema_version: "task14-programme-checkpoint-v1";
+  program_id: "PG-000004";
+  run_id: "DR-000704";
+  programme_conclusion: "rejected";
+  scientific_status: "rejected_unstable";
+  preregistration_sha256: string;
+  reliability_vector_sha256: string;
+  trial_receipt_sha256: string;
+  dataset_snapshot: { id: "DS-000704"; sha256: string };
+  feature_publication: { id: "FP-000704"; sha256: string };
+  event_publication: { id: "EP-000704"; sha256: string };
+  normalizer: { id: "NZ-000704"; sha256: string };
+  holdout_rows_accessed: false;
+  outcomes_attached: false;
+}
+
 export interface LabEvidence {
   schema_version: 1;
   generated_at: string;
@@ -166,12 +183,16 @@ export interface LabEvidence {
     trial_receipt_schema: "trial-receipt-v2";
     fixture_trials_counted_as_real: false;
     derivation_chain_verified: false;
+    task14_programme_checkpoint: Task14ProgrammeCheckpoint | null;
     scope: string;
     claim: string;
   };
   phase_gate: {
     active_phase: string;
-    status: "remediation_in_progress" | "complete_task14_authorized";
+    status:
+      | "remediation_in_progress"
+      | "complete_task14_authorized"
+      | "complete_task15_authorized";
     next_required_evidence: string;
   };
 }
@@ -204,6 +225,53 @@ function isNonNegative(value: unknown): value is number {
 
 function isCountMap(value: unknown): value is Record<string, number> {
   return isObject(value) && Object.values(value).every(isNonNegative);
+}
+
+function isArtifactIdentity(value: unknown, identifier: string): boolean {
+  return (
+    isObject(value) &&
+    hasExactKeys(value, ["id", "sha256"]) &&
+    value.id === identifier &&
+    isSha256(value.sha256)
+  );
+}
+
+function isTask14ProgrammeCheckpoint(
+  value: unknown,
+): value is Task14ProgrammeCheckpoint {
+  if (!isObject(value)) return false;
+  return (
+    hasExactKeys(value, [
+      "dataset_snapshot",
+      "event_publication",
+      "feature_publication",
+      "holdout_rows_accessed",
+      "normalizer",
+      "outcomes_attached",
+      "preregistration_sha256",
+      "programme_conclusion",
+      "program_id",
+      "reliability_vector_sha256",
+      "run_id",
+      "schema_version",
+      "scientific_status",
+      "trial_receipt_sha256",
+    ]) &&
+    value.schema_version === "task14-programme-checkpoint-v1" &&
+    value.program_id === "PG-000004" &&
+    value.run_id === "DR-000704" &&
+    value.programme_conclusion === "rejected" &&
+    value.scientific_status === "rejected_unstable" &&
+    isSha256(value.preregistration_sha256) &&
+    isSha256(value.reliability_vector_sha256) &&
+    isSha256(value.trial_receipt_sha256) &&
+    isArtifactIdentity(value.dataset_snapshot, "DS-000704") &&
+    isArtifactIdentity(value.feature_publication, "FP-000704") &&
+    isArtifactIdentity(value.event_publication, "EP-000704") &&
+    isArtifactIdentity(value.normalizer, "NZ-000704") &&
+    value.holdout_rows_accessed === false &&
+    value.outcomes_attached === false
+  );
 }
 
 function isLocalFilename(value: unknown): value is string {
@@ -538,6 +606,8 @@ export function isLabEvidence(value: unknown): value is LabEvidence {
     accuracy.trial_receipt_schema === "trial-receipt-v2" &&
     accuracy.fixture_trials_counted_as_real === false &&
     accuracy.derivation_chain_verified === false &&
+    (accuracy.task14_programme_checkpoint === null ||
+      isTask14ProgrammeCheckpoint(accuracy.task14_programme_checkpoint)) &&
     typeof accuracy.scope === "string" &&
     typeof accuracy.claim === "string" &&
     isObject(phase) &&
@@ -547,7 +617,13 @@ export function isLabEvidence(value: unknown): value is LabEvidence {
         phase.active_phase ===
           "Phase B Task 13 deterministic hardening: complete" &&
         phase.next_required_evidence ===
-          "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint")) &&
+          "run authorized Task 14 outcome-blind discovery after verified Task 13 remote checkpoint") ||
+      (phase.status === "complete_task15_authorized" &&
+        accuracy.task14_programme_checkpoint !== null &&
+        phase.active_phase ===
+          "Phase C Task 14 outcome-blind discovery: complete" &&
+        phase.next_required_evidence ===
+          "execute the separate Task 15 Phase 5 validation plan")) &&
     typeof phase.next_required_evidence === "string" &&
     phase.next_required_evidence.length > 0
   );

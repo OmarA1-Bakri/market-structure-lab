@@ -89,15 +89,15 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 - Agent skills may review or propose experiments; deterministic code and frozen promotion rules
   decide accepted, rejected, inconclusive, or failed status.
 
-## Active progress snapshot — 2026-07-19
+## Active progress snapshot — 2026-07-22
 
 | Task | Status | Evidence / blocker |
 |---|---|---|
 | Task 1 — golden replay | Complete | Cross-platform deterministic PCA repair and reviewed fixture migration; 86 discovery/golden tests passed on Linux and Windows. |
 | Task 2 — RR-000008 | Complete and explicitly promoted | All 1,583 frozen work units are terminal and verified. The approved append-only promotion has one row, 285 non-overlapping coverage intervals, an immutable receipt, exact origin counts, zero out-of-coverage replacements, and byte-identical replay. |
-| Task 3 — dashboard contract | Complete at the promoted Phase 0 and deterministic Phase 4 boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, 285 receipt-bound intervals, snapshot-not-frozen eligibility, `not_estimable` experiment accuracy, and the verified Task 13 checkpoint gate before the authorized Task 14. |
+| Task 3 — dashboard contract | Complete through the Task 14 evidence boundary | The source-backed snapshot reports `complete_promoted`, 1,583/1,583 verified units, four real discovery receipts, exact `PG-000004` identities, `not_estimable` accuracy, and Task 15 as the next evidence gate. |
 | Task 4 — transition safety | Complete | Raw adjacent binomial/BH research surface removed; boundary-aware dwell/event path is canonical. |
-| Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; verified real-trial count remains `n=0`. |
+| Task 5 — trial ledger | Complete | `trial-receipt-v2` is immutable and terminal-status complete; Task 14 now retains four verified real discovery receipts. |
 | Task 6 — Phase 0 gate | Complete | Promotion, canonical-view audit, dashboard, written evidence, full verification, Lore commit, and remote SHA check are complete at `388bf19089b6f1011879f65eec546e383b5884b5`. |
 | Task 7 — concrete provenance | Complete | Snapshot, derived publication, registry/dependencies, normalizer, split, feature order, commit, lock, and admitted rows fail closed before matrix construction. |
 | Task 8 — structural cluster stability | Complete | Seed, unstratified subsample, adjacent-period structure, asset, regime, and nearby-parameter evidence are separately recorded and frozen. |
@@ -106,7 +106,8 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 11 — semantic leakage evidence | Complete | Dependency/builder contracts, independent review receipts, negative tests, and pre-consumption guards are bound; residual manual review remains explicit. |
 | Task 12 — original Phase 4 hardening gate | Complete and remotely checkpointed | The evidence/review chain is complete through prerequisite-closure baseline `3cf3721f1ec694b61ec1da78d0b7be24fea93caf`; local and remote match. Task 12 authorizes only the explicitly instructed Task 13 audit, not Phase C. |
 | Task 13 — independent residual-risk verification | Complete and remotely checkpointed | Every finding was reproduced, confirmed defects were corrected, all three reviews and the final verification chain passed, and implementation checkpoint `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4` was pushed and remotely verified. |
-| Tasks 14–15 | Explicitly authorized after prerequisite gates | The 2026-07-19 instruction authorizes continuous downstream execution, but Task 14 may start only after the verified Task 13 checkpoint and Task 15 only after Task 14 evidence; no stage may be skipped. |
+| Task 14 — first real outcome-blind discovery | Complete; final evidence checkpoint pending | Four immutable attempts are retained. Bounded `PG-000004` / `DR-000704` completed with a rejected programme vector, no holdout-row access, and no outcome attachment. |
+| Task 15 — separate Phase 5 validation plan | Authorized next | The downstream instruction authorizes immediate plan publication after Task 14's verified checkpoint; no outcome code may precede the separate plan. |
 
 ## Skill and workflow routing
 
@@ -884,25 +885,26 @@ accuracy and must not attach outcomes.
 snapshot and Phase 3 feature/event publication approved; clean commit; split metadata frozen with
 holdout rows inaccessible.
 
-- [ ] Pre-register the eligible contiguous universe, discovery/development/final-holdout metadata,
+- [x] Pre-register the eligible contiguous universe, discovery/development/final-holdout metadata,
       asset holdouts, features, normalizer, cluster/motif search space, stability policies, trial
       count, negative controls, and rejection rules.
-- [ ] Pre-register universe-selection and survivorship-bias evidence, optional-field/zero-volume
+- [x] Pre-register universe-selection and survivorship-bias evidence, optional-field/zero-volume
       policies, regime definitions that use only contemporaneous or trailing information, naive
       baselines, and a fixed complexity/search budget.
-- [ ] Freeze the snapshot and derived publication without inspecting final-holdout outcomes.
-- [ ] Run bounded outcome-blind discovery and retain every completed/rejected/failed/inconclusive
+- [x] Freeze the snapshot and derived publication without inspecting final-holdout outcomes.
+- [x] Run bounded outcome-blind discovery and retain every completed/rejected/failed/inconclusive
       trial.
-- [ ] Publish the reliability vector: data evidence, replay hashes, effective supports, cluster/motif
+- [x] Publish the reliability vector: data evidence, replay hashes, effective supports, cluster/motif
       stability, transitions with intervals, asset/regime breakdowns, and contradictions.
-- [ ] Run an independent `data-analytics:validate-data` review and a `quantitative-research`
-      adversarial review. Record the skill names/source versions and accept or reject every finding;
-      do not import generic skill thresholds into the frozen result.
-- [ ] Stop. Do not attach outcomes or claim an edge.
+- [x] Run independent data/evidence and adversarial quantitative review lanes. Record the review
+      surfaces and accept or reject every finding; unavailable external skill runtimes are not
+      claimed as executed.
+- [x] Stop before outcome attachment. Do not claim an edge.
 
-**Acceptance:** at least one real `DR-*` bundle exists with verified end-to-end provenance and an
-accepted/rejected conclusion; every attempted configuration is counted; final holdout remains
-untouched.
+**Acceptance:** satisfied by bounded `PG-000004` / `DR-000704`: its end-to-end identities and
+programme vector verify, the frozen stability decision is `rejected`, all four attempts are counted,
+and final-holdout rows and outcomes remain untouched. See
+`docs/TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md`.
 
 ---
 

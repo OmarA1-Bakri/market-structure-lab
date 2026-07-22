@@ -81,6 +81,10 @@ DEFAULT_DERIVED_ROOT = Path("data/exports/derived/task14-PG-000004")
 DEFAULT_PROGRAM_ROOT = Path("data/exports/discovery-programs/PG-000004")
 DEFAULT_TRIAL_ROOT = Path("data/exports/trials/task14-PG-000004")
 AUCTION_CONFIG_VERSION = "task14-auction-v1"
+TASK14_TERMINAL_REJECTION_RULES = (
+    "missingness_policy_violation",
+    "stability_policy_rejection",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,11 +368,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         orchestration_parameters_sha256=_sha_json(orchestration_parameters),
         negative_controls=("seed_perturbation", "time_order_preserving_null"),
         naive_baselines=("single_cluster", "unconditional_recurrence"),
-        rejection_rules=(
-            "missingness_policy_violation",
-            "stability_policy_rejection",
-            "transition_interval_rejection",
-        ),
+        rejection_rules=TASK14_TERMINAL_REJECTION_RULES,
         code_commit=code_commit,
         lock_sha256=lock_sha256,
     )

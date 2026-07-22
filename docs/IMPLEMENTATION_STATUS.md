@@ -1,6 +1,6 @@
 # Implementation Status
 
-Evidence date: 2026-07-18
+Evidence date: 2026-07-22
 
 ## Scope
 
@@ -325,16 +325,15 @@ Repository-wide integrating verification completed after the live freshness work
   `1.0248` MiB peak traced memory, and replayed at `730.15` candles/second. Timing is not an
   acceptance threshold.
 
-The Phase 4 deterministic software-hardening gate now passes. Tasks 7–11 bind concrete
+The Phase 4 deterministic software-hardening gate passes. Tasks 7–11 bind concrete
 snapshot-to-discovery provenance, reject cluster structural drift, make motifs multivariate and
 boundary-safe with separate stability evidence, freeze dependence-aware transition uncertainty,
 and publish checksum-bound semantic-leakage receipts with an explicit manual-review limitation.
-Task 12 verified those contracts without running market discovery or opening the final holdout.
-The separately authorized Task 13 residual-risk audit now challenges that completed snapshot before
-the final Phase B gate. This is not a real-market experiment-readiness, prediction, validation,
-strategy, or edge gate. Task 14 real discovery is authorized only after the Task 13 evidence
-checkpoint is pushed and its remote SHA matches local `HEAD`; Phase 5 remains unstarted and
-separately gated.
+Task 12 verified those contracts without running market discovery or opening the final holdout, and
+Task 13 independently challenged and remotely checkpointed them. Task 14 then retained four real
+attempts and completed bounded `PG-000004` with a rejected detector, zero behaviours, and no
+holdout-row or outcome access. This remains neither a prediction, validation, strategy, nor edge
+gate. Task 15 is authorized next but must publish its separate Phase 5 plan before outcome code.
 
 ## RR-000008 full-history reconciliation: complete and promoted
 
@@ -382,9 +381,9 @@ and `10,057` Binance corrections, for `67,632,983` canonical rows. Zero replacem
 verified coverage. The `841,509` unavailable minutes remain absent and explicit.
 
 The dashboard evidence snapshot labels RR-000008 `complete_promoted`, reports all `1,583 / 1,583`
-verified work units and `285` promoted intervals, and still blocks research execution until a new
-checksum-bound research snapshot is frozen under the next approved phase. The repository has zero
-real experiment trials, so predictive and cost-adjusted accuracy remain `not_estimable`.
+verified work units and `285` promoted intervals. Task 14 subsequently froze its separate bounded
+snapshot and retained four real discovery receipts. None attaches outcomes, so predictive and
+cost-adjusted accuracy remain `not_estimable`.
 
 Detailed identities, residual coverage, verification commands, and the approval boundary are in
 [`PHASE0_REMEDIATION_EVIDENCE.md`](PHASE0_REMEDIATION_EVIDENCE.md).
@@ -452,48 +451,39 @@ Exact operator commands, paths, status meanings, resumption procedure, compatibi
 deliberate snapshot policy are documented in
 [`DAILY_CANDLE_FRESHNESS.md`](DAILY_CANDLE_FRESHNESS.md).
 
-## Phase 4 hardening: Task 13 remotely complete, Task 14 authorized
+## Phase 4 hardening: Task 14 real pilot complete and rejected
 
-The Phase 4 implementation remains synthetic software-fixture evidence only. The hardening work is
-complete at the software boundary, and the explicitly authorized Task 14 may now create the first
-real outcome-blind discovery evidence without accessing holdout rows or outcomes:
+The deterministic software gate is now joined by one terminal real, source-backed outcome-blind
+programme. Four immutable Task 14 attempts are counted: `PG-000001` and `PG-000002` failed under
+their obsolete oversized scopes, `PG-000003` produced a rejected detector receipt before exposing
+an overly strict programme-vector reservation check, and fresh bounded `PG-000004` completed with
+`DR-000704` and a scientifically `rejected` reliability vector.
 
-- Task 14 now has a test-first operational path: promotion-bound universe selection, optional
-  research snapshot identity, exact gap binding, scoped freshness publication, frozen search-grid
-  and programme budgets, deterministic Phase 3 feature/event publication, discovery-only
-  normalization, immutable terminal trial linkage, and bounded reliability-vector publication.
-- `msl-run-discovery-program` is the thin non-interactive entry point. Its default pilot scope
-  materializes APTUSDT discovery/development rows only; IMXUSDT and the later temporal interval are
-  frozen as metadata-only holdouts.
-- The real `DR-*` evidence and final Task 14 review/checkpoint remain pending until this code is
-  committed and executed from the clean committed identity required by the runtime provenance gate.
+- `msl-run-discovery-program` froze promotion-bound universe selection, exact gap and snapshot
+  identities, the search grid, programme and run budgets, Phase 3 publications, discovery-only
+  normalisation, terminal receipts, and a bounded reliability vector.
+- The bounded programme used 960 APTUSDT snapshots across eight discovery and eight development
+  hours, a 512-window motif cap, and 8,628 aggregate feature cells. The later temporal interval and
+  IMXUSDT remained metadata-only holdouts.
+- `DR-000704` retained 460 complete-case discovery rows and 480 development rows, executed without
+  holdout-row access, and was rejected by the frozen stability policy. No behaviour or hypothesis
+  advanced.
+- `PG-000003` was not changed after its programme-vector verification incident. The corrected
+  reservation semantics and every active attempt identity were checkpointed at
+  `6f49407c3cef96e5753dd26ef81ce9c793116a31` before `PG-000004` ran.
+- Exact identities, incident history, reviews, and verification are recorded in
+  [`TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md`](TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md).
 
-- concrete snapshot, publication, registry, normalizer, split, commit, and lock identities are
-  verified before matrix construction;
-- cluster evidence covers adjacent frequency, centroid, within-cluster scale, margin drift, and
-  explicit event support without stratifying every subsample by the base clusters;
-- motif sequences cannot bridge null-removal gaps, time gaps, session, symbol, timeframe, segment,
-  duplicate, out-of-order, or information-cutoff boundaries, and have separate multi-axis stability;
-- transition horizon, bootstrap, block, confidence, support, width, and sensitivity settings are
-  frozen and remain descriptive conditional-recurrence evidence; and
-- feature dependency/cutoff contracts and independent negative-test receipts are hash-bound while
-  retaining mandatory manual review.
-
-Fresh Task 12 evidence includes `414` Phase B targeted tests, `50` trial-accounting tests, `10`
-holdout/leakage pre-consumption sentinels, `13` bounded-work tests, `1,100` passed Windows-native
-tests with `8` explicit database skips, Mypy across `78` source files, Ruff across `144` Python
-files, package and dashboard builds, Compose validation, and independent clean-root byte comparison
-of stable, rejected, and interpretation publications. Exact commands, log hashes, artefact hashes,
-limitations, and the stop decision are in
-[`PHASE4_HARDENING_EVIDENCE.md`](PHASE4_HARDENING_EVIDENCE.md).
+The Phase 4 deterministic contracts remain in force: provenance is checked before matrix
+construction; cluster, motif, missingness, transition, work-budget, and semantic-leakage evidence is
+frozen; transitions remain descriptive and dependence-aware; and manual semantic review remains
+mandatory.
 
 Task 13 used completed and remotely verified baseline
 `3cf3721f1ec694b61ec1da78d0b7be24fea93caf` and is remotely checkpointed at
-`59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. Its audit did not run discovery, inspect holdout rows
-or outcomes, attach outcomes, or estimate accuracy. Task 14 is now authorized under those same
-outcome-blind boundaries.
+`59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. It did not run discovery or inspect outcomes. Task 14
+then consumed its separate authorization under the same outcome-blind boundaries.
 
-The committed golden data remain software-verification fixtures, not market evidence, a validated
-signal, or an edge. The repository still contains zero verified real trials. A new research
-snapshot, empirical thresholds, and the first real outcome-blind discovery are the active Phase C
-Task 14 work. Outcome attachment remains a later, separately controlled gate.
+The ignored runtime ledger now contains four checksum-verified real discovery receipts: two failed
+and two rejected. This is not a validated signal, predictive estimate, or edge. Task 15 is the next
+gate and must publish the separate Phase 5 validation plan before any outcome attachment.

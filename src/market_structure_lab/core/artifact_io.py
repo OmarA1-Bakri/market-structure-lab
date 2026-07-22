@@ -98,11 +98,17 @@ def bounded_regular_files(root: Path, *, maximum: int) -> tuple[str, ...]:
 def read_bounded_regular(path: Path, maximum: int) -> bytes:
     """Read at most ``maximum`` bytes from a non-symlink regular file."""
 
-    with _open_regular(path) as handle:
-        payload = handle.read(maximum + 1)
-    if len(payload) > maximum:
+    if maximum < 0:
         raise RuntimeError("artifact file exceeds the bounded size limit")
-    return payload
+    chunks: list[bytes] = []
+    total = 0
+    with _open_regular(path) as handle:
+        while chunk := handle.read(min(_CHUNK_SIZE, maximum - total + 1)):
+            total += len(chunk)
+            if total > maximum:
+                raise RuntimeError("artifact file exceeds the bounded size limit")
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def iter_bounded_regular_lines(

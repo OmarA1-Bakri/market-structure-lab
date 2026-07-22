@@ -27,6 +27,7 @@ export function DiscoveryPage() {
     );
   }
   const replay = evidence.data.software_replay;
+  const task14 = evidence.data.experiment_accuracy.task14_programme_checkpoint;
   const run = replay.runs[runKey];
   const metrics = run.metrics as {
     behaviours: number;
@@ -89,6 +90,38 @@ export function DiscoveryPage() {
           </AlertDescription>
         </Alert>
       </section>
+
+      {task14 ? (
+        <section className="rounded-[1.7rem] border border-primary/18 bg-primary/[0.045] p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <Badge
+                variant="outline"
+                className="rounded-md border-primary/25 bg-primary/8 font-mono text-[0.65rem] text-primary"
+              >
+                OUTCOME-BLIND REAL PILOT
+              </Badge>
+              <h2 className="mt-3 text-xl font-semibold">
+                Task 14 programme checkpoint
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                {task14.program_id} / {task14.run_id} closed as{" "}
+                {task14.programme_conclusion}; the detector status was{" "}
+                {task14.scientific_status}. This is rejection evidence, not a
+                predictive validation result.
+              </p>
+            </div>
+            <div className="font-mono text-[0.65rem] text-muted-foreground">
+              <span className="block">
+                receipt · {task14.trial_receipt_sha256.slice(0, 12)}…
+              </span>
+              <span className="mt-1 block">
+                holdout rows accessed · {String(task14.holdout_rows_accessed)}
+              </span>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex w-fit gap-1 rounded-xl border border-border bg-card/45 p-1">
@@ -199,11 +232,15 @@ export function DiscoveryPage() {
         <div className="flex gap-3">
           <LockKeyIcon size={20} className="text-primary" />
           <div>
-            <p className="font-medium">Phase 5 remains sealed</p>
+            <p className="font-medium">
+              {task14
+                ? "Task 14 closed; validation not yet executed"
+                : "Task 14 remains pending"}
+            </p>
             <p className="mt-2 text-sm text-muted-foreground">
-              Linked fixture hashes prove contract identity only; they do not
-              prove replay execution, market recurrence, prediction, or
-              profitability.
+              {task14
+                ? "The separate Task 15 plan is the next gate. No outcomes, accuracy, edge, strategy, or profitability claim is present here."
+                : "Linked fixture hashes prove contract identity only; they do not prove replay execution, market recurrence, prediction, or profitability."}
             </p>
           </div>
         </div>
