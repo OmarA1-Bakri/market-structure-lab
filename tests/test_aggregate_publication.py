@@ -17,7 +17,9 @@ from market_structure_lab.data.aggregate_bars import source_rows_sha256
 from market_structure_lab.data.aggregate_publication import (
     AGGREGATE_MANIFEST_NAME,
     AggregatePublicationManifest,
+    VerifiedAggregateSeries,
     publish_aggregate_bars,
+    read_verified_aggregate_series,
     read_aggregate_publication_manifest,
     verify_aggregate_publication,
 )
@@ -156,6 +158,35 @@ def tree_bytes(root: Path) -> dict[str, bytes]:
 
 def published_directory(root: Path) -> Path:
     return root / "symbol=SOLUSDT" / "timeframe=1h" / "segment=0"
+
+
+def test_verified_aggregate_series_is_read_only_from_exact_publication_bytes(
+    tmp_path: Path,
+) -> None:
+    frame = minute_frame(120)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    manifest = publish(
+        [frame],
+        output_root=tmp_path / "aggregate",
+        parent_directory=parent_directory,
+        parent_manifest=source_manifest,
+    )
+    directory = published_directory(tmp_path / "aggregate")
+
+    series = read_verified_aggregate_series(directory, manifest)
+
+    assert isinstance(series, VerifiedAggregateSeries)
+    assert len(series.bars) == 2
+    assert series.ordered_row_sha256 == tuple(bar.row_sha256 for bar in series.bars)
+    assert series.publication_sha256 == manifest.publication_sha256
+    changed = replace(series.bars[0], high=series.bars[0].high + 1.0, row_sha256="")
+    with pytest.raises((TypeError, ValueError), match="verified|capability|seal"):
+        replace(series, bars=(changed, *series.bars[1:]))
+
+    partition = directory / manifest.partitions[0].path
+    partition.write_bytes(partition.read_bytes() + b"tamper")
+    with pytest.raises(ValueError, match="checksum|bytes"):
+        read_verified_aggregate_series(directory, manifest)
 
 
 def test_clean_root_publication_is_byte_identical_across_source_chunking(tmp_path: Path) -> None:

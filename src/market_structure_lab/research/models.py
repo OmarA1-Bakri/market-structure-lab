@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import InitVar, dataclass, field
+from datetime import datetime, timedelta
 from enum import StrEnum
 from math import isfinite
 import re
@@ -23,6 +23,7 @@ _IMPLEMENTATION_PLAN_EVIDENCE = "6da307a0d4756c61ddcabdf01f00d828afb55d7e"
 _IMPLEMENTATION_PLAN_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111"
 _GIT_SHA = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_CANDIDATE_SIGNAL_SEAL = object()
 
 
 def _require_sha256(value: object, label: str) -> None:
@@ -618,18 +619,23 @@ class CandidateDefinition:
 
     slot: ValidationSlot
     source_publication_sha256: str
+    source_series_sha256: str
     source_segment_id: int
     aggregate_config_version: str
     a_selector_grid: tuple[str, ...]
     origin: str = "human_origin"
     profile_bin_step: float | None = None
     profile_definition_id: str | None = None
+    profile_stream_sha256: str | None = None
+    parent_a_candidate_id: str | None = None
+    parent_a_slot_id: str | None = None
     candidate_id: str = field(init=False)
 
     def __post_init__(self) -> None:
         if self.slot not in VALIDATION_SLOT_ROSTER:
             raise ValueError("candidate slot must belong to the frozen validation roster")
         _require_sha256(self.source_publication_sha256, "source_publication_sha256")
+        _require_sha256(self.source_series_sha256, "source_series_sha256")
         if (
             isinstance(self.source_segment_id, bool)
             or not isinstance(self.source_segment_id, int)
@@ -671,8 +677,20 @@ class CandidateDefinition:
             )
             if self.profile_definition_id != expected_profile:
                 raise ValueError("family B profile definition does not match its frozen parameters")
+            if self.profile_stream_sha256 is None:
+                raise ValueError("family B requires a verified profile stream identity")
+            _require_sha256(self.profile_stream_sha256, "profile_stream_sha256")
         elif self.profile_bin_step is not None or self.profile_definition_id is not None:
             raise ValueError("profile configuration belongs only to family B")
+        elif self.profile_stream_sha256 is not None:
+            raise ValueError("profile stream identity belongs only to family B")
+        if self.slot.family in ("B", "E"):
+            if self.parent_a_candidate_id is None or self.parent_a_slot_id is None:
+                raise ValueError("B/E candidates require an exact registered parent A candidate")
+            if not self.parent_a_candidate_id.startswith("HC-"):
+                raise ValueError("parent A candidate identity is invalid")
+        elif self.parent_a_candidate_id is not None or self.parent_a_slot_id is not None:
+            raise ValueError("only B/E candidates bind an A opportunity parent")
         object.__setattr__(
             self,
             "candidate_id",
@@ -689,7 +707,23 @@ class CandidateDefinition:
 
     @property
     def role(self) -> str:
+        return self.detector_role
+
+    @property
+    def evaluation_role(self) -> str:
         return self.slot.role
+
+    @property
+    def detector_role(self) -> str:
+        if self.slot.kind is not ValidationSlotKind.PERTURBATION:
+            return self.slot.role
+        parent = next(
+            (item for item in VALIDATION_SLOT_ROSTER if item.slot_id == self.slot.parent_slot_id),
+            None,
+        )
+        if parent is None or not parent.primary or parent.kind is not ValidationSlotKind.CORE:
+            raise ValueError("adjacent-lookback candidate requires its frozen primary parent slot")
+        return parent.role
 
     @property
     def timeframe(self) -> str:
@@ -714,11 +748,17 @@ class CandidateDefinition:
             "family_order": self.family_order,
             "slot": self.slot.to_dict(),
             "source_publication_sha256": self.source_publication_sha256,
+            "source_series_sha256": self.source_series_sha256,
             "source_segment_id": self.source_segment_id,
             "aggregate_config_version": self.aggregate_config_version,
             "a_selector_grid": list(self.a_selector_grid),
             "profile_bin_step": self.profile_bin_step,
             "profile_definition_id": self.profile_definition_id,
+            "profile_stream_sha256": self.profile_stream_sha256,
+            "evaluation_role": self.evaluation_role,
+            "detector_role": self.detector_role,
+            "parent_a_candidate_id": self.parent_a_candidate_id,
+            "parent_a_slot_id": self.parent_a_slot_id,
             "task14_closeout_commit": _TASK14_CLOSEOUT,
             "task14_evidence_commit": _TASK14_EVIDENCE,
             "task15_plan_commit": _TASK15_PLAN,
@@ -740,9 +780,14 @@ class CandidateSignal:
     information_cutoff: datetime
     legal_entry: datetime
     source_publication_sha256: str
+    source_series_sha256: str
     segment_id: int
+    candidate_slot_id: str
+    seal: InitVar[object]
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, seal: object) -> None:
+        if seal is not _CANDIDATE_SIGNAL_SEAL:
+            raise TypeError("CandidateSignal requires the verified detector emission seal")
         if not self.candidate_id.startswith("HC-"):
             raise ValueError("candidate_id must identify a human-origin candidate")
         if self.family not in EXPECTED_FAMILIES:
@@ -761,6 +806,7 @@ class CandidateSignal:
         if self.legal_entry < self.information_cutoff:
             raise ValueError("legal_entry cannot precede the information cutoff")
         _require_sha256(self.source_publication_sha256, "source_publication_sha256")
+        _require_sha256(self.source_series_sha256, "source_series_sha256")
         if isinstance(self.segment_id, bool) or self.segment_id < 0:
             raise ValueError("segment_id must be a non-negative integer")
         object.__setattr__(
@@ -780,8 +826,60 @@ class CandidateSignal:
             "information_cutoff": self.information_cutoff,
             "legal_entry": self.legal_entry,
             "source_publication_sha256": self.source_publication_sha256,
+            "source_series_sha256": self.source_series_sha256,
             "segment_id": self.segment_id,
+            "candidate_slot_id": self.candidate_slot_id,
         }
+
+
+def emit_candidate_signal(
+    definition: CandidateDefinition,
+    series: object,
+    *,
+    symbol: str,
+    feature_start: datetime,
+    information_cutoff: datetime,
+    legal_entry: datetime,
+) -> CandidateSignal:
+    """Issue a signal only for an exact verified series and registered candidate definition."""
+
+    from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
+
+    if not isinstance(series, VerifiedAggregateSeries):
+        raise TypeError("candidate signal emission requires a VerifiedAggregateSeries capability")
+    if (
+        definition.source_publication_sha256 != series.publication_sha256
+        or definition.source_series_sha256 != series.series_sha256
+        or definition.source_segment_id != series.segment_id
+    ):
+        raise ValueError("candidate definition is not registered to the verified aggregate series")
+    if symbol != series.symbol:
+        raise ValueError("candidate signal symbol differs from its verified aggregate series")
+    first_bar = series.bars[0]
+    bar_duration = first_bar.bar_close - first_bar.timestamp
+    cutoff_offset = information_cutoff - first_bar.bar_close
+    cutoff_index = cutoff_offset // bar_duration
+    if (
+        cutoff_offset < timedelta(0)
+        or cutoff_offset % bar_duration != timedelta(0)
+        or cutoff_index >= len(series.bars)
+    ):
+        raise ValueError("candidate information cutoff is not a completed verified aggregate bar")
+    return CandidateSignal(
+        candidate_id=definition.candidate_id,
+        family=definition.family,
+        symbol=symbol,
+        timeframe=definition.timeframe,
+        direction=definition.direction,
+        feature_start=feature_start,
+        information_cutoff=information_cutoff,
+        legal_entry=legal_entry,
+        source_publication_sha256=definition.source_publication_sha256,
+        source_series_sha256=definition.source_series_sha256,
+        segment_id=definition.source_segment_id,
+        candidate_slot_id=definition.slot.slot_id,
+        seal=_CANDIDATE_SIGNAL_SEAL,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -904,6 +1002,7 @@ __all__ = [
     "ValidationWorkBudget",
     "ValidationWorkBudgetViolation",
     "ValidationWorkDemand",
+    "emit_candidate_signal",
     "evaluation_id_for_slot",
     "freeze_validation_slot_roster",
     "validation_roster_sha256",

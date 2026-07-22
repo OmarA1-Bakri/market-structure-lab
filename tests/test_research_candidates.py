@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from collections import Counter
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
+import hashlib
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+import polars as pl
 import pytest
 
 from market_structure_lab.core.identity import hash_json
@@ -11,6 +17,15 @@ from market_structure_lab.data.aggregate_bars import (
     CanonicalAggregateBar,
     source_rows_sha256,
 )
+from market_structure_lab.data.aggregate_publication import (
+    AGGREGATE_MANIFEST_NAME,
+    AGGREGATE_SUCCESS_NAME,
+    AggregatePublicationManifest,
+    AggregateSourceSelectionReceipt,
+    VerifiedAggregateSeries,
+    read_verified_aggregate_series,
+)
+from market_structure_lab.data.export import PartitionRecord, SnapshotIdentity
 from market_structure_lab.profiles import (
     Candle,
     FixedStepBins,
@@ -20,9 +35,11 @@ from market_structure_lab.profiles import (
 from market_structure_lab.research.candidates import (
     A_SELECTOR_GRID,
     FrozenProfile,
+    VerifiedProfileStream,
     candidate_definition_for_slot,
     detect_candidate_signals,
     target_bars,
+    verify_profile_stream,
 )
 from market_structure_lab.research.models import (
     VALIDATION_SLOT_ROSTER,
@@ -32,22 +49,10 @@ from market_structure_lab.research.models import (
     ValidationSlotKind,
 )
 
-PUBLICATION = "a" * 64
 PARENT = "b" * 64
+PROFILE_CONFIG = "c" * 64
+BIN_METADATA = "d" * 64
 START = datetime(2025, 1, 1, tzinfo=UTC)
-
-
-@dataclass(frozen=True)
-class Receipt:
-    publication_sha256: str
-    symbol: str
-    target_timeframe: str
-    segment_id: int
-    aggregate_bar_count: int
-    min_timestamp: str
-    max_timestamp: str
-    source_sha256: str
-    parent_snapshot_sha256: str
 
 
 def _slot(
@@ -127,11 +132,13 @@ def _bars(
     *,
     timeframe: str = "1h",
     volumes: list[float] | None = None,
+    segment: int = 7,
 ) -> tuple[CanonicalAggregateBar, ...]:
     return tuple(
         _bar(
             index,
             timeframe=timeframe,
+            segment=segment,
             open_=close,
             high=close + 1.0,
             low=close - 1.0,
@@ -142,26 +149,145 @@ def _bars(
     )
 
 
-def _receipt(bars: tuple[CanonicalAggregateBar, ...], sha: str = PUBLICATION) -> Receipt:
-    return Receipt(
-        publication_sha256=sha,
+def _iso(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _series(bars: tuple[CanonicalAggregateBar, ...]) -> VerifiedAggregateSeries:
+    if not bars:
+        raise ValueError("test publication requires bars")
+    rows = [bar.to_dict() for bar in bars]
+    frame = pl.DataFrame(rows)
+    buffer = BytesIO()
+    frame.write_parquet(buffer, compression="zstd", statistics=True)
+    partition_bytes = buffer.getvalue()
+    partition_sha = hashlib.sha256(partition_bytes).hexdigest()
+    partition = PartitionRecord(
+        path="part.parquet",
+        sha256=partition_sha,
+        row_count=len(bars),
+        min_timestamp=_iso(bars[0].timestamp),
+        max_timestamp=_iso(bars[-1].timestamp),
+    )
+    source_sha = source_rows_sha256(
+        (source_id for bar in bars for source_id in bar.source_row_ids), identities=True
+    )
+    source_count = sum(bar.source_row_count for bar in bars)
+    source_minimum = bars[0].timestamp
+    source_maximum = bars[-1].bar_close - timedelta(minutes=1)
+    parent_bindings = (("source-partition.parquet", "e" * 64),)
+    selection = AggregateSourceSelectionReceipt(
+        parent_snapshot_sha256=PARENT,
         symbol=bars[0].symbol,
+        source_timeframe="1m",
+        segment_id=bars[0].segment_id,
+        source_row_count=source_count,
+        source_bytes=1,
+        source_sha256=source_sha,
+        source_min_timestamp=_iso(source_minimum),
+        source_max_timestamp=_iso(source_maximum),
+        parent_partition_bindings=parent_bindings,
+    )
+    identity = SnapshotIdentity(
+        dataset_version="DS-CANDIDATE-TEST",
+        dump_sha256="1" * 64,
+        recovery_sha256="2" * 64,
+        mapping_version="canonical-test-v1",
+        config_version="canonical-test-v1",
+        code_commit="3" * 40,
+    )
+    manifest = AggregatePublicationManifest(
+        schema_version=1,
+        parent_snapshot_identity=identity,
+        parent_snapshot_sha256=PARENT,
+        symbol=bars[0].symbol,
+        source_timeframe="1m",
         target_timeframe=bars[0].target_timeframe,
         segment_id=bars[0].segment_id,
+        continuity=CONTINUITY_ID,
+        config_version="aggregate-config-v1",
+        work_budget_sha256="4" * 64,
+        work_demand_sha256="5" * 64,
+        parent_source_selection_sha256=selection.sha256,
+        parent_partition_bindings=parent_bindings,
+        source_row_count=source_count,
+        source_bytes=1,
+        source_sha256=source_sha,
+        source_min_timestamp=_iso(source_minimum),
+        source_max_timestamp=_iso(source_maximum),
         aggregate_bar_count=len(bars),
-        min_timestamp=bars[0].timestamp.isoformat().replace("+00:00", "Z"),
-        max_timestamp=bars[-1].timestamp.isoformat().replace("+00:00", "Z"),
-        source_sha256=source_rows_sha256(
-            (source_id for bar in bars for source_id in bar.source_row_ids), identities=True
-        ),
-        parent_snapshot_sha256=PARENT,
+        min_timestamp=_iso(bars[0].timestamp),
+        max_timestamp=_iso(bars[-1].timestamp),
+        artifact_scope="aggregate-parquet-partitions-v1",
+        max_rows_per_partition=256,
+        artifact_count_limit=1,
+        artifact_byte_limit=16 * 1024 * 1024,
+        declared_artifact_count=1,
+        declared_artifact_bytes=16 * 1024 * 1024,
+        actual_artifact_count=1,
+        actual_artifact_bytes=len(partition_bytes),
+        partitions=(partition,),
+    )
+    with TemporaryDirectory(prefix="candidate-series-test-") as temporary:
+        root = Path(temporary)
+        (root / partition.path).write_bytes(partition_bytes)
+        (root / AGGREGATE_MANIFEST_NAME).write_text(manifest.to_json(), encoding="utf-8")
+        (root / AGGREGATE_SUCCESS_NAME).write_text(
+            f"{manifest.publication_sha256}\n", encoding="utf-8"
+        )
+        return read_verified_aggregate_series(root, manifest)
+
+
+def _effective_bars(slot: ValidationSlot, parameter: str) -> int:
+    values = dict(slot.parameters)
+    if (
+        slot.kind is ValidationSlotKind.PERTURBATION
+        and values.get("perturbed_parameter") == parameter
+    ):
+        return int(values["candidate_bars"])
+    return target_bars(int(values[parameter]), slot.timeframe)
+
+
+def _parent_a_slot(slot: ValidationSlot) -> ValidationSlot:
+    if slot.family == "B":
+        return _slot(
+            "A", "moving_average_crossover", timeframe=slot.timeframe, direction=slot.direction
+        )
+    required = _effective_bars(slot, "donchian_hours")
+    for candidate in VALIDATION_SLOT_ROSTER:
+        if (
+            candidate.family == "A"
+            and candidate.timeframe == slot.timeframe
+            and candidate.direction == slot.direction
+            and dict(candidate.parameters).get("detector") == "donchian_breakout"
+            and candidate.kind in (ValidationSlotKind.CORE, ValidationSlotKind.PERTURBATION)
+            and _effective_bars(candidate, "lookback_hours") == required
+        ):
+            return candidate
+    raise AssertionError("matching parent A Donchian slot not found")
+
+
+def _empty_profile_stream(series: VerifiedAggregateSeries) -> VerifiedProfileStream:
+    return verify_profile_stream(
+        series,
+        (),
+        source_minute_publication_sha256=PARENT,
+        profile_config_sha256=PROFILE_CONFIG,
+        bin_metadata_sha256=BIN_METADATA,
+        bin_step=1.0,
     )
 
 
-def _definition(slot: ValidationSlot, receipt: Receipt, **kwargs: object) -> CandidateDefinition:
-    if slot.family == "B" and "profile_bin_step" not in kwargs:
-        kwargs["profile_bin_step"] = 1.0
-    return candidate_definition_for_slot(slot, receipt, **kwargs)  # type: ignore[arg-type]
+def _definition(
+    slot: ValidationSlot,
+    series: VerifiedAggregateSeries,
+    **kwargs: object,
+) -> CandidateDefinition:
+    if slot.family in ("B", "E") and "parent_a_candidate" not in kwargs:
+        kwargs["parent_a_candidate"] = _definition(_parent_a_slot(slot), series)
+    if slot.family == "B" and "profile_stream" not in kwargs:
+        kwargs["profile_stream"] = _empty_profile_stream(series)
+    return candidate_definition_for_slot(slot, series, **kwargs)  # type: ignore[arg-type]
 
 
 def _detect(
@@ -169,15 +295,15 @@ def _detect(
     bars: tuple[CanonicalAggregateBar, ...],
     **kwargs: object,
 ) -> tuple[CandidateSignal, ...]:
-    receipt = _receipt(bars)
-    return detect_candidate_signals(_definition(slot, receipt), bars, receipt, **kwargs)
+    series = _series(bars)
+    return detect_candidate_signals(_definition(slot, series), series, **kwargs)
 
 
 def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin() -> None:
     bars = _bars([100.0] * 24 + [102.1])
-    receipt = _receipt(bars)
-    definition = _definition(_slot("A", "donchian_breakout", lookback=24), receipt)
-    [signal] = detect_candidate_signals(definition, bars, receipt)
+    series = _series(bars)
+    definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+    [signal] = detect_candidate_signals(definition, series)
 
     assert definition.origin == "human_origin"
     assert definition.candidate_id.startswith("HC-")
@@ -187,51 +313,85 @@ def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin()
     assert signal.information_cutoff == bars[-1].bar_close
     assert signal.legal_entry == bars[-1].bar_close
     assert signal.feature_start == bars[0].timestamp
-    assert signal.source_publication_sha256 == PUBLICATION
+    assert signal.source_publication_sha256 == series.publication_sha256
+    assert signal.source_series_sha256 == series.series_sha256
     assert not (
         {"outcome", "return", "mfe", "mae", "label"} & {item.name for item in fields(signal)}
     )
     assert not hasattr(definition, "behaviour_id")
-    assert replace(signal, direction=-1).signal_id != signal.signal_id
+    with pytest.raises((TypeError, ValueError), match="seal"):
+        replace(signal, direction=-1)
     with pytest.raises(Exception):
         signal.direction = -1  # type: ignore[misc]
 
 
 def test_candidate_identity_binds_publication_segment_role_parameters_and_full_a_grid() -> None:
     bars = _bars([100.0] * 25)
-    receipt = _receipt(bars)
+    series = _series(bars)
     slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
-    original = _definition(slot, receipt)
+    original = _definition(slot, series)
 
     assert original.a_selector_grid == A_SELECTOR_GRID
-    assert _definition(slot, replace(receipt, publication_sha256="c" * 64)).candidate_id != (
-        original.candidate_id
-    )
-    assert _definition(slot, replace(receipt, segment_id=8)).candidate_id != original.candidate_id
+    changed_series = _series((*bars[:-1], replace(bars[-1], close=100.5, row_sha256="")))
+    assert _definition(slot, changed_series).candidate_id != original.candidate_id
+    segment_series = _series(_bars([100.0] * 25, segment=8))
+    assert _definition(slot, segment_series).candidate_id != original.candidate_id
     structure_slot = _slot("B", "value_migration_acceptance", role="structure_only", lookback=24)
-    assert _definition(structure_slot, receipt).candidate_id != (original.candidate_id)
-    assert _definition(slot, receipt, profile_bin_step=0.5).candidate_id != original.candidate_id
+    assert _definition(structure_slot, series).candidate_id != (original.candidate_id)
+    half_step = verify_profile_stream(
+        series,
+        (),
+        source_minute_publication_sha256=PARENT,
+        profile_config_sha256=PROFILE_CONFIG,
+        bin_metadata_sha256=BIN_METADATA,
+        bin_step=0.5,
+    )
+    assert _definition(slot, series, profile_stream=half_step).candidate_id != original.candidate_id
     with pytest.raises(ValueError, match="A selector grid"):
-        _definition(slot, receipt, a_selector_grid=A_SELECTOR_GRID[:-1])
+        _definition(slot, series, a_selector_grid=A_SELECTOR_GRID[:-1])
     with pytest.raises(TypeError):
-        candidate_definition_for_slot(slot, receipt, behaviour_id="DR-INVENTED")  # type: ignore[call-arg]
+        candidate_definition_for_slot(slot, series, behaviour_id="DR-INVENTED")  # type: ignore[call-arg]
 
 
 def test_all_184_adjacent_lookback_slots_have_unique_bound_candidate_identities() -> None:
-    bars = _bars([100.0] * 2)
-    receipt = _receipt(bars)
+    series_by_timeframe = {
+        timeframe: _series(_bars([100.0] * 2, timeframe=timeframe)) for timeframe in ("1h", "4h")
+    }
     perturbed = tuple(
         slot for slot in VALIDATION_SLOT_ROSTER if slot.kind is ValidationSlotKind.PERTURBATION
     )
-    identities = {
-        _definition(
-            slot, receipt, profile_bin_step=1.0 if slot.family == "B" else None
-        ).candidate_id
-        for slot in perturbed
-    }
+    identities: set[str] = set()
+    roles: Counter[tuple[str, str]] = Counter()
+    for slot in perturbed:
+        series = series_by_timeframe[slot.timeframe]
+        profile_stream = _empty_profile_stream(series) if slot.family == "B" else None
+        definition = _definition(slot, series, profile_stream=profile_stream)
+        identities.add(definition.candidate_id)
+        roles[(slot.family, definition.detector_role)] += 1
+        assert definition.evaluation_role == "adjacent_lookback"
+        assert (
+            detect_candidate_signals(
+                definition,
+                series,
+                profile_stream=profile_stream,
+            )
+            == ()
+        )
 
     assert len(perturbed) == 184
     assert len(identities) == 184
+    assert roles == Counter(
+        {
+            ("A", "moving_average_crossover"): 16,
+            ("A", "donchian_breakout"): 16,
+            ("A", "atr_breakout"): 8,
+            ("A", "time_series_momentum"): 16,
+            ("B", "combined_primary"): 16,
+            ("G", "candidate_primary"): 48,
+            ("E", "volume_filtered_primary"): 32,
+            ("D", "candidate_primary"): 32,
+        }
+    )
 
 
 @pytest.mark.parametrize(
@@ -306,12 +466,12 @@ def test_warmup_gap_and_series_changes_do_not_leak_state_across_boundaries() -> 
         bar_close=bars[-1].bar_close + timedelta(hours=1),
         row_sha256="",
     )
-    receipt = _receipt(tuple(bars))
-    assert detect_candidate_signals(_definition(slot, receipt), tuple(bars), receipt) == ()
+    with pytest.raises(ValueError, match="contiguous|range"):
+        _series(tuple(bars))
 
 
 def _profile(cutoff: datetime, prices: list[float], *, window: int = 24) -> FrozenProfile:
-    binning = FixedStepBins(step=1.0, provenance="verified-price-precision-v1")
+    binning = FixedStepBins(step=1.0, provenance=f"verified-price-precision:{BIN_METADATA}")
     allocation = UniformAllocation()
     snapshot = calculate_profile(
         [
@@ -327,7 +487,9 @@ def _profile(cutoff: datetime, prices: list[float], *, window: int = 24) -> Froz
     return FrozenProfile(
         information_cutoff=cutoff,
         window_hours=window,
-        source_publication_sha256=PUBLICATION,
+        source_minute_publication_sha256=PARENT,
+        profile_config_sha256=PROFILE_CONFIG,
+        bin_metadata_sha256=BIN_METADATA,
         segment_id=7,
         policy="rolling",
         snapshot=snapshot,
@@ -336,65 +498,167 @@ def _profile(cutoff: datetime, prices: list[float], *, window: int = 24) -> Froz
 
 def test_b_uses_t_minus_2_t_minus_1_profiles_and_same_a_cutoff_and_entry() -> None:
     bars = _bars([100.0] * 24 + [102.0])
-    receipt = _receipt(bars)
+    series = _series(bars)
     a_slot = _slot("A", "donchian_breakout", lookback=24)
-    [a_signal] = detect_candidate_signals(_definition(a_slot, receipt), bars, receipt)
+    a_definition = _definition(a_slot, series)
+    [a_signal] = detect_candidate_signals(a_definition, series)
     profiles = (
         _profile(bars[-3].bar_close, [98.0, 99.0, 100.0]),
         _profile(bars[-2].bar_close, [100.0, 101.0, 102.0]),
     )
+    profile_stream = verify_profile_stream(
+        series,
+        profiles,
+        source_minute_publication_sha256=PARENT,
+        profile_config_sha256=PROFILE_CONFIG,
+        bin_metadata_sha256=BIN_METADATA,
+        bin_step=1.0,
+    )
     b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    b_definition = _definition(
+        b_slot,
+        series,
+        parent_a_candidate=a_definition,
+        profile_stream=profile_stream,
+    )
     [b_signal] = detect_candidate_signals(
-        _definition(b_slot, receipt), bars, receipt, a_opportunities=(a_signal,), profiles=profiles
+        b_definition,
+        series,
+        a_opportunities=(a_signal,),
+        profile_stream=profile_stream,
     )
 
     assert b_signal.information_cutoff == a_signal.information_cutoff
     assert b_signal.legal_entry == a_signal.legal_entry
     assert b_signal.direction == a_signal.direction
+    assert b_signal.feature_start == profiles[0].feature_start
+    partial_stream = verify_profile_stream(
+        series,
+        profiles[:1],
+        source_minute_publication_sha256=PARENT,
+        profile_config_sha256=PROFILE_CONFIG,
+        bin_metadata_sha256=BIN_METADATA,
+        bin_step=1.0,
+    )
+    partial_definition = _definition(
+        b_slot,
+        series,
+        parent_a_candidate=a_definition,
+        profile_stream=partial_stream,
+    )
     assert (
         detect_candidate_signals(
-            _definition(b_slot, receipt),
-            bars,
-            receipt,
+            partial_definition,
+            series,
             a_opportunities=(a_signal,),
-            profiles=profiles[:1],
+            profile_stream=partial_stream,
         )
         == ()
     )
+
+
+def test_profile_stream_rejects_duplicate_cutoffs_arbitrary_provenance_and_tamper() -> None:
+    series = _series(_bars([100.0] * 25))
+    profile = _profile(series.bars[-2].bar_close, [100.0, 101.0, 102.0])
+    with pytest.raises(ValueError, match="unique"):
+        verify_profile_stream(
+            series,
+            (profile, profile),
+            source_minute_publication_sha256=PARENT,
+            profile_config_sha256=PROFILE_CONFIG,
+            bin_metadata_sha256=BIN_METADATA,
+            bin_step=1.0,
+        )
+    with pytest.raises(ValueError, match="precision metadata"):
+        replace(
+            profile,
+            snapshot=replace(
+                profile.snapshot,
+                binning=FixedStepBins(step=1.0, provenance="source=arbitrary"),
+            ),
+        )
+    stream = verify_profile_stream(
+        series,
+        (profile,),
+        source_minute_publication_sha256=PARENT,
+        profile_config_sha256=PROFILE_CONFIG,
+        bin_metadata_sha256=BIN_METADATA,
+        bin_step=1.0,
+    )
+    with pytest.raises((TypeError, ValueError), match="seal"):
+        replace(stream, ordered_profile_ids=("f" * 64,))
 
 
 def test_e_filters_a_donchian_opportunities_with_strict_prior_volume_median() -> None:
     volumes = [10.0] * 24 + [11.0]
     bars = _bars([100.0] * 24 + [102.0], volumes=volumes)
-    receipt = _receipt(bars)
+    series = _series(bars)
     a_slot = _slot("A", "donchian_breakout", lookback=24)
-    [opportunity] = detect_candidate_signals(_definition(a_slot, receipt), bars, receipt)
+    a_definition = _definition(a_slot, series)
+    [opportunity] = detect_candidate_signals(a_definition, series)
     filtered = _slot("E", "volume_confirmation", role="volume_filtered_primary", lookback=24)
+    e_definition = _definition(filtered, series, parent_a_candidate=a_definition)
 
-    assert (
-        len(
-            detect_candidate_signals(
-                _definition(filtered, receipt), bars, receipt, a_opportunities=(opportunity,)
-            )
-        )
-        == 1
-    )
+    assert len(detect_candidate_signals(e_definition, series, a_opportunities=(opportunity,))) == 1
     tied = (*bars[:-1], replace(bars[-1], volume=10.0, row_sha256=""))
-    tied_receipt = _receipt(tied)
-    tied_opportunity = replace(
-        opportunity,
-        candidate_id=_definition(a_slot, tied_receipt).candidate_id,
-        source_publication_sha256=PUBLICATION,
-    )
+    tied_series = _series(tied)
+    tied_a_definition = _definition(a_slot, tied_series)
+    [tied_opportunity] = detect_candidate_signals(tied_a_definition, tied_series)
+    tied_e_definition = _definition(filtered, tied_series, parent_a_candidate=tied_a_definition)
     assert (
         detect_candidate_signals(
-            _definition(filtered, tied_receipt),
-            tied,
-            tied_receipt,
+            tied_e_definition,
+            tied_series,
             a_opportunities=(tied_opportunity,),
         )
         == ()
     )
+
+
+def test_subordinate_candidates_reject_flat_or_wrong_registered_a_opportunities() -> None:
+    bars = _bars([100.0] * 25 + [103.0])
+    series = _series(bars)
+    donchian_slot = _slot("A", "donchian_breakout", lookback=24)
+    atr_slot = _slot("A", "atr_breakout")
+    donchian_definition = _definition(donchian_slot, series)
+    atr_definition = _definition(atr_slot, series)
+    [atr_signal] = detect_candidate_signals(atr_definition, series)
+    with pytest.raises(TypeError, match="seal"):
+        CandidateSignal(  # type: ignore[call-arg]
+            candidate_id=donchian_definition.candidate_id,
+            family="A",
+            symbol=series.symbol,
+            timeframe="1h",
+            direction=1,
+            feature_start=bars[0].timestamp,
+            information_cutoff=bars[-1].bar_close,
+            legal_entry=bars[-1].bar_close,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            segment_id=series.segment_id,
+            candidate_slot_id=donchian_definition.slot.slot_id,
+        )
+
+    e_slot = _slot("E", "volume_confirmation", role="volume_filtered_primary", lookback=24)
+    e_definition = _definition(e_slot, series, parent_a_candidate=donchian_definition)
+    with pytest.raises(ValueError, match="exact registered parent"):
+        detect_candidate_signals(e_definition, series, a_opportunities=(atr_signal,))
+
+    profile_stream = _empty_profile_stream(series)
+    b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    b_definition = _definition(
+        b_slot,
+        series,
+        parent_a_candidate=donchian_definition,
+        profile_stream=profile_stream,
+    )
+    with pytest.raises(ValueError, match="exact registered parent"):
+        detect_candidate_signals(
+            b_definition,
+            series,
+            a_opportunities=(atr_signal,),
+            profile_stream=profile_stream,
+        )
 
 
 def test_g_exact_candidate_and_controls_use_same_next_bar_clock() -> None:
@@ -412,6 +676,18 @@ def test_g_exact_candidate_and_controls_use_same_next_bar_clock() -> None:
     assert len(candidate_signals) == 1
     assert _detect(atr, bars_tuple)[0].legal_entry == candidate_signals[0].legal_entry
     assert _detect(donchian, bars_tuple)[0].legal_entry == candidate_signals[0].legal_entry
+
+
+def test_g_controls_enumerate_every_legal_event_before_frozen_horizon_suppression() -> None:
+    closes = [100.0] * 24 + [102.0 + 2.0 * index for index in range(10)]
+    control = _slot("G", "compression_expansion", role="donchian_only_control", horizon=8)
+
+    signals = _detect(control, _bars(closes))
+
+    assert [signal.information_cutoff for signal in signals] == [
+        START + timedelta(hours=25),
+        START + timedelta(hours=33),
+    ]
 
 
 def test_d_requires_separate_confirmation_and_uses_t_plus_2_for_candidate_and_control() -> None:
@@ -466,14 +742,16 @@ def test_d_pseudo_level_is_frozen_at_exact_prior_utc_week_and_never_crosses_miss
     assert _detect(slot, tuple(bars[-26:])) == ()
 
 
-def test_wrong_publication_or_receipt_shape_is_rejected_before_signal_emission() -> None:
+def test_wrong_series_or_arbitrary_rows_are_rejected_before_signal_emission() -> None:
     bars = _bars([100.0] * 24 + [102.0])
-    receipt = _receipt(bars)
-    definition = _definition(_slot("A", "donchian_breakout", lookback=24), receipt)
+    series = _series(bars)
+    definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
 
-    with pytest.raises(ValueError, match="publication"):
-        detect_candidate_signals(definition, bars, replace(receipt, publication_sha256="f" * 64))
-    with pytest.raises(ValueError, match="count|range"):
-        detect_candidate_signals(definition, bars, replace(receipt, aggregate_bar_count=24))
-    with pytest.raises(ValueError, match="source digest"):
-        detect_candidate_signals(definition, bars, replace(receipt, source_sha256="e" * 64))
+    with pytest.raises(TypeError, match="VerifiedAggregateSeries"):
+        detect_candidate_signals(definition, bars)  # type: ignore[arg-type]
+    changed = (*bars[:-1], replace(bars[-1], high=104.0, close=103.0, row_sha256=""))
+    changed_series = _series(changed)
+    with pytest.raises(ValueError, match="does not own"):
+        detect_candidate_signals(definition, changed_series)
+    with pytest.raises((TypeError, ValueError), match="seal"):
+        replace(series, bars=changed)

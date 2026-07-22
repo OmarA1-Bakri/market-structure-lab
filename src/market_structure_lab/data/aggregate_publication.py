@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import InitVar, asdict, dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
 from io import BytesIO
@@ -39,6 +39,7 @@ from market_structure_lab.data.aggregate_bars import (
     canonical_source_row_identity,
     canonical_source_row_payload,
     iter_complete_aggregate_bars,
+    source_rows_sha256,
     spool_complete_aggregate_bars,
     target_timeframe_minutes,
 )
@@ -96,6 +97,7 @@ _PARQUET_PARTITION_OVERHEAD_UPPER_BYTES = 256 * 1024
 _ARTIFACT_SCOPE = "aggregate-parquet-partitions-v1"
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_VERIFIED_AGGREGATE_SERIES_SEAL = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +426,61 @@ class AggregatePublicationManifest:
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedAggregateSeries:
+    """Exact ordered aggregate rows read from verified immutable publication bytes."""
+
+    manifest: AggregatePublicationManifest
+    bars: tuple[CanonicalAggregateBar, ...]
+    ordered_row_sha256: tuple[str, ...]
+    artifact_bindings: tuple[tuple[str, str], ...]
+    series_sha256: str
+    seal: InitVar[object]
+
+    def __post_init__(self, seal: object) -> None:
+        if seal is not _VERIFIED_AGGREGATE_SERIES_SEAL:
+            raise TypeError(
+                "VerifiedAggregateSeries requires the publication verifier capability seal"
+            )
+        if len(self.bars) != self.manifest.aggregate_bar_count:
+            raise ValueError("verified aggregate series count differs from its manifest")
+        if self.ordered_row_sha256 != tuple(bar.row_sha256 for bar in self.bars):
+            raise ValueError(
+                "verified aggregate series row identities differ from exact row content"
+            )
+        expected_bindings = tuple(
+            (partition.path, partition.sha256) for partition in self.manifest.partitions
+        )
+        if self.artifact_bindings != expected_bindings:
+            raise ValueError("verified aggregate series artifact bindings differ from its manifest")
+        expected_series = hash_json(
+            "verified-aggregate-series-v1",
+            {
+                "publication_sha256": self.manifest.publication_sha256,
+                "artifact_bindings": self.artifact_bindings,
+                "ordered_row_sha256": self.ordered_row_sha256,
+            },
+        )
+        if self.series_sha256 != expected_series:
+            raise ValueError("verified aggregate series capability identity mismatch")
+
+    @property
+    def publication_sha256(self) -> str:
+        return self.manifest.publication_sha256
+
+    @property
+    def symbol(self) -> str:
+        return self.manifest.symbol
+
+    @property
+    def target_timeframe(self) -> str:
+        return self.manifest.target_timeframe
+
+    @property
+    def segment_id(self) -> int:
+        return self.manifest.segment_id
 
 
 def publish_aggregate_bars(
@@ -825,6 +882,81 @@ def verify_aggregate_publication(
         or actual_artifact_bytes > active.artifact_byte_limit
     ):
         raise ValueError("aggregate actual artifacts exceed declared or frozen limits")
+
+
+def read_verified_aggregate_series(
+    directory: str | Path,
+    manifest: AggregatePublicationManifest | None = None,
+) -> VerifiedAggregateSeries:
+    """Read exact rows only after authenticating manifest, marker, and partition bytes."""
+
+    root = Path(directory)
+    verify_aggregate_publication(root, manifest)
+    active = read_aggregate_publication_manifest(root / AGGREGATE_MANIFEST_NAME)
+    if manifest is not None and active != manifest:
+        raise ValueError("aggregate publication manifest changed after verification")
+    bars: list[CanonicalAggregateBar] = []
+    expected_schema = _aggregate_frame_schema()
+    for partition in active.partitions:
+        content = read_bounded_regular(root / partition.path, active.artifact_byte_limit)
+        if hashlib.sha256(content).hexdigest() != partition.sha256:
+            raise ValueError(
+                f"aggregate partition bytes differ after verification: {partition.path}"
+            )
+        frame = pl.read_parquet(BytesIO(content))
+        if frame.schema != expected_schema:
+            raise ValueError("verified aggregate partition schema is invalid")
+        if frame.height != partition.row_count:
+            raise ValueError("verified aggregate partition row count is invalid")
+        partition_bars = tuple(
+            CanonicalAggregateBar.from_mapping(row) for row in frame.iter_rows(named=True)
+        )
+        if not partition_bars:
+            raise ValueError("verified aggregate partition cannot be empty")
+        if (
+            _iso_utc(partition_bars[0].timestamp) != partition.min_timestamp
+            or _iso_utc(partition_bars[-1].timestamp) != partition.max_timestamp
+        ):
+            raise ValueError("verified aggregate partition timestamp bounds are invalid")
+        bars.extend(partition_bars)
+    frozen = tuple(bars)
+    if len(frozen) != active.aggregate_bar_count:
+        raise ValueError("verified aggregate publication row count mismatch")
+    target_delta = timedelta(minutes=target_timeframe_minutes(active.target_timeframe))
+    for index, bar in enumerate(frozen):
+        if (
+            bar.symbol != active.symbol
+            or bar.target_timeframe != active.target_timeframe
+            or bar.segment_id != active.segment_id
+            or bar.parent_snapshot_sha256 != active.parent_snapshot_sha256
+        ):
+            raise ValueError("verified aggregate row lineage differs from its publication")
+        if index and bar.timestamp != frozen[index - 1].timestamp + target_delta:
+            raise ValueError("verified aggregate rows are not exactly ordered and contiguous")
+    observed_source = source_rows_sha256(
+        (source_row_id for bar in frozen for source_row_id in bar.source_row_ids),
+        identities=True,
+    )
+    if observed_source != active.source_sha256:
+        raise ValueError("verified aggregate rows differ from publication source identity")
+    ordered = tuple(bar.row_sha256 for bar in frozen)
+    bindings = tuple((partition.path, partition.sha256) for partition in active.partitions)
+    series_sha256 = hash_json(
+        "verified-aggregate-series-v1",
+        {
+            "publication_sha256": active.publication_sha256,
+            "artifact_bindings": bindings,
+            "ordered_row_sha256": ordered,
+        },
+    )
+    return VerifiedAggregateSeries(
+        manifest=active,
+        bars=frozen,
+        ordered_row_sha256=ordered,
+        artifact_bindings=bindings,
+        series_sha256=series_sha256,
+        seal=_VERIFIED_AGGREGATE_SERIES_SEAL,
+    )
 
 
 def verify_failed_aggregate_publication(directory: str | Path) -> AggregatePublicationFailure:
@@ -1539,8 +1671,10 @@ __all__ = [
     "AggregatePublicationManifest",
     "AggregatePublicationFailure",
     "AggregateSourceSelectionReceipt",
+    "VerifiedAggregateSeries",
     "publish_aggregate_bars",
     "read_aggregate_publication_manifest",
+    "read_verified_aggregate_series",
     "verify_aggregate_publication",
     "verify_failed_aggregate_publication",
 ]

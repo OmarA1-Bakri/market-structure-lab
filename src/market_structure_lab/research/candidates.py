@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from dataclasses import InitVar, dataclass, field
+from datetime import datetime, timedelta
 from math import fsum
 from statistics import median
-from typing import Protocol, cast
+from typing import cast
 
 from market_structure_lab.core.identity import hash_json
-from market_structure_lab.data.aggregate_bars import CanonicalAggregateBar, source_rows_sha256
+from market_structure_lab.data.aggregate_bars import CanonicalAggregateBar
+from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
+from market_structure_lab.profiles.binning import FixedStepBins
 from market_structure_lab.profiles.models import ProfileSnapshot
 from market_structure_lab.research.models import (
     FROZEN_A_SELECTOR_GRID,
@@ -18,6 +20,7 @@ from market_structure_lab.research.models import (
     CandidateSignal,
     ValidationSlot,
     ValidationSlotKind,
+    emit_candidate_signal,
 )
 from market_structure_lab.structure.value_migration import (
     ValueMigrationDirection,
@@ -26,18 +29,7 @@ from market_structure_lab.structure.value_migration import (
 
 _SHA256_LENGTH = 64
 _TIMEFRAME_HOURS = {"1h": 1, "4h": 4}
-
-
-class AggregatePublicationReceipt(Protocol):
-    publication_sha256: str
-    symbol: str
-    target_timeframe: str
-    segment_id: int
-    aggregate_bar_count: int
-    min_timestamp: str
-    max_timestamp: str
-    source_sha256: str
-    parent_snapshot_sha256: str
+_VERIFIED_PROFILE_STREAM_SEAL = object()
 
 
 A_SELECTOR_GRID = FROZEN_A_SELECTOR_GRID
@@ -49,11 +41,14 @@ class FrozenProfile:
 
     information_cutoff: datetime
     window_hours: int
-    source_publication_sha256: str
+    source_minute_publication_sha256: str
+    profile_config_sha256: str
+    bin_metadata_sha256: str
     segment_id: int
     policy: str
     snapshot: ProfileSnapshot
     source_timeframe: str = "1m"
+    profile_id: str = field(init=False)
 
     def __post_init__(self) -> None:
         offset = self.information_cutoff.utcoffset()
@@ -61,7 +56,9 @@ class FrozenProfile:
             raise ValueError("profile cutoff must be UTC-aware")
         if isinstance(self.window_hours, bool) or self.window_hours < 1:
             raise ValueError("profile window_hours must be positive")
-        _require_sha256(self.source_publication_sha256, "profile source publication")
+        _require_sha256(self.source_minute_publication_sha256, "profile source minute publication")
+        _require_sha256(self.profile_config_sha256, "profile config")
+        _require_sha256(self.bin_metadata_sha256, "profile bin metadata")
         if isinstance(self.segment_id, bool) or self.segment_id < 0:
             raise ValueError("profile segment_id must be non-negative")
         if self.policy != "rolling":
@@ -72,6 +69,134 @@ class FrozenProfile:
             raise ValueError("candidate profiles require uniform-touched-v1 allocation")
         if self.snapshot.value_area_fraction != 0.70:
             raise ValueError("candidate profiles require the frozen 70% value area")
+        if not isinstance(self.snapshot.binning, FixedStepBins):
+            raise ValueError("candidate profiles require fixed-step integer bins")
+        if self.snapshot.binning.provenance != (
+            f"verified-price-precision:{self.bin_metadata_sha256}"
+        ):
+            raise ValueError("candidate profile binning lacks exact verified precision metadata")
+        object.__setattr__(
+            self,
+            "profile_id",
+            hash_json(
+                "frozen-candidate-profile-v1",
+                {
+                    "information_cutoff": self.information_cutoff,
+                    "feature_start": self.feature_start,
+                    "window_hours": self.window_hours,
+                    "source_minute_publication_sha256": self.source_minute_publication_sha256,
+                    "profile_config_sha256": self.profile_config_sha256,
+                    "bin_metadata_sha256": self.bin_metadata_sha256,
+                    "segment_id": self.segment_id,
+                    "policy": self.policy,
+                    "source_timeframe": self.source_timeframe,
+                    "snapshot": _profile_payload(self.snapshot),
+                },
+            ),
+        )
+
+    @property
+    def feature_start(self) -> datetime:
+        return self.information_cutoff - timedelta(hours=self.window_hours)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedProfileStream:
+    """Unique ordered content receipt for deterministic rolling one-minute profiles."""
+
+    aggregate_series_sha256: str
+    source_minute_publication_sha256: str
+    profile_config_sha256: str
+    bin_metadata_sha256: str
+    bin_step: float
+    profiles: tuple[FrozenProfile, ...]
+    ordered_profile_ids: tuple[str, ...]
+    stream_sha256: str
+    seal: InitVar[object]
+
+    def __post_init__(self, seal: object) -> None:
+        if seal is not _VERIFIED_PROFILE_STREAM_SEAL:
+            raise TypeError("VerifiedProfileStream requires its verifier capability seal")
+        for name in (
+            "aggregate_series_sha256",
+            "source_minute_publication_sha256",
+            "profile_config_sha256",
+            "bin_metadata_sha256",
+        ):
+            _require_sha256(getattr(self, name), name)
+        cutoffs = tuple(profile.information_cutoff for profile in self.profiles)
+        if cutoffs != tuple(sorted(cutoffs)) or len(cutoffs) != len(set(cutoffs)):
+            raise ValueError("verified profile stream cutoffs must be unique and ordered")
+        if self.ordered_profile_ids != tuple(profile.profile_id for profile in self.profiles):
+            raise ValueError("verified profile stream identities differ from profile content")
+        for profile in self.profiles:
+            if (
+                profile.source_minute_publication_sha256 != self.source_minute_publication_sha256
+                or profile.profile_config_sha256 != self.profile_config_sha256
+                or profile.bin_metadata_sha256 != self.bin_metadata_sha256
+                or getattr(profile.snapshot.binning, "step", None) != self.bin_step
+            ):
+                raise ValueError("profile content differs from the verified stream receipt")
+        expected = hash_json(
+            "verified-candidate-profile-stream-v1",
+            {
+                "aggregate_series_sha256": self.aggregate_series_sha256,
+                "source_minute_publication_sha256": self.source_minute_publication_sha256,
+                "profile_config_sha256": self.profile_config_sha256,
+                "bin_metadata_sha256": self.bin_metadata_sha256,
+                "bin_step": self.bin_step,
+                "ordered_profile_ids": self.ordered_profile_ids,
+            },
+        )
+        if self.stream_sha256 != expected:
+            raise ValueError("verified profile stream identity mismatch")
+
+
+def verify_profile_stream(
+    series: VerifiedAggregateSeries,
+    profiles: Sequence[FrozenProfile],
+    *,
+    source_minute_publication_sha256: str,
+    profile_config_sha256: str,
+    bin_metadata_sha256: str,
+    bin_step: float,
+) -> VerifiedProfileStream:
+    """Verify unique profile content and bind it to source/config/bin metadata."""
+
+    if not isinstance(series, VerifiedAggregateSeries):
+        raise TypeError("profile verification requires a VerifiedAggregateSeries capability")
+    if source_minute_publication_sha256 != series.manifest.parent_snapshot_sha256:
+        raise ValueError("profile source publication differs from aggregate parent minute lineage")
+    frozen = tuple(profiles)
+    legal_cutoffs = {bar.bar_close for bar in series.bars}
+    if any(
+        profile.information_cutoff not in legal_cutoffs or profile.segment_id != series.segment_id
+        for profile in frozen
+    ):
+        raise ValueError("profile cutoff or segment differs from the verified aggregate series")
+    ordered = tuple(profile.profile_id for profile in frozen)
+    stream_sha256 = hash_json(
+        "verified-candidate-profile-stream-v1",
+        {
+            "aggregate_series_sha256": series.series_sha256,
+            "source_minute_publication_sha256": source_minute_publication_sha256,
+            "profile_config_sha256": profile_config_sha256,
+            "bin_metadata_sha256": bin_metadata_sha256,
+            "bin_step": bin_step,
+            "ordered_profile_ids": ordered,
+        },
+    )
+    return VerifiedProfileStream(
+        aggregate_series_sha256=series.series_sha256,
+        source_minute_publication_sha256=source_minute_publication_sha256,
+        profile_config_sha256=profile_config_sha256,
+        bin_metadata_sha256=bin_metadata_sha256,
+        bin_step=bin_step,
+        profiles=frozen,
+        ordered_profile_ids=ordered,
+        stream_sha256=stream_sha256,
+        seal=_VERIFIED_PROFILE_STREAM_SEAL,
+    )
 
 
 def target_bars(hours: int, timeframe: str) -> int:
@@ -87,98 +212,108 @@ def target_bars(hours: int, timeframe: str) -> int:
 
 def candidate_definition_for_slot(
     slot: ValidationSlot,
-    receipt: AggregatePublicationReceipt,
+    series: VerifiedAggregateSeries,
     *,
-    profile_bin_step: float | None = None,
+    parent_a_candidate: CandidateDefinition | None = None,
+    profile_stream: VerifiedProfileStream | None = None,
     a_selector_grid: tuple[str, ...] = A_SELECTOR_GRID,
 ) -> CandidateDefinition:
     """Freeze a roster slot against one authenticated aggregate publication."""
 
-    _validate_receipt_shape(receipt)
+    if not isinstance(series, VerifiedAggregateSeries):
+        raise TypeError("candidate definition requires a VerifiedAggregateSeries capability")
     selector_grid = () if slot.family == "A" else a_selector_grid
     if slot.family != "A" and selector_grid != A_SELECTOR_GRID:
         raise ValueError(
             "subordinate candidate A selector grid does not match the frozen full grid"
         )
     profile_definition_id = None
+    profile_bin_step = None
+    profile_stream_sha256 = None
     if slot.family == "B":
-        if profile_bin_step is None or profile_bin_step <= 0:
-            raise ValueError("family B requires a verified positive profile_bin_step")
+        if profile_stream is None or profile_stream.aggregate_series_sha256 != series.series_sha256:
+            raise ValueError("family B requires a matching verified profile stream")
+        profile_bin_step = profile_stream.bin_step
+        profile_stream_sha256 = profile_stream.stream_sha256
         profile_bars = _parameter_bars(slot, "profile_hours")
         window_hours = profile_bars * _TIMEFRAME_HOURS[slot.timeframe]
         profile_definition_id = (
             "rolling-1m:uniform-touched-v1:value-area=0.70:"
             f"window-hours={window_hours}:fixed-step={profile_bin_step}:"
-            f"source-config={getattr(receipt, 'config_version', 'aggregate-config-v1')}"
+            f"source-config={series.manifest.config_version}"
         )
-    elif profile_bin_step is not None:
-        raise ValueError("profile_bin_step is valid only for family B")
+    elif profile_stream is not None:
+        raise ValueError("profile stream is valid only for family B")
+    parent_id = None
+    parent_slot_id = None
+    if slot.family in ("B", "E"):
+        _validate_parent_definition(slot, series, parent_a_candidate)
+        assert parent_a_candidate is not None
+        parent_id = parent_a_candidate.candidate_id
+        parent_slot_id = parent_a_candidate.slot.slot_id
     return CandidateDefinition(
         slot=slot,
-        source_publication_sha256=receipt.publication_sha256,
-        source_segment_id=receipt.segment_id,
-        aggregate_config_version=getattr(receipt, "config_version", "aggregate-config-v1"),
+        source_publication_sha256=series.publication_sha256,
+        source_series_sha256=series.series_sha256,
+        source_segment_id=series.segment_id,
+        aggregate_config_version=series.manifest.config_version,
         a_selector_grid=selector_grid,
         profile_bin_step=profile_bin_step,
         profile_definition_id=profile_definition_id,
+        profile_stream_sha256=profile_stream_sha256,
+        parent_a_candidate_id=parent_id,
+        parent_a_slot_id=parent_slot_id,
     )
 
 
 def detect_candidate_signals(
     definition: CandidateDefinition,
-    bars: Sequence[CanonicalAggregateBar],
-    receipt: AggregatePublicationReceipt,
+    series: VerifiedAggregateSeries,
     *,
     a_opportunities: Sequence[CandidateSignal] = (),
-    profiles: Sequence[FrozenProfile] = (),
+    profile_stream: VerifiedProfileStream | None = None,
 ) -> tuple[CandidateSignal, ...]:
     """Detect one frozen candidate/comparator over authenticated complete aggregate bars."""
 
-    _validate_inputs(definition, bars, receipt)
+    _validate_series(definition, series)
+    bars = series.bars
     if not bars:
         return ()
-    emitted: list[CandidateSignal] = []
-    offset = 0
-    for run in _contiguous_runs(bars):
-        opportunities = tuple(
-            signal
-            for signal in a_opportunities
-            if run[0].timestamp < signal.information_cutoff <= run[-1].bar_close
-        )
-        if definition.family == "A":
-            detected = _detect_a(definition, run)
-        elif definition.family == "B":
-            detected = _detect_b(definition, run, opportunities, profiles)
-        elif definition.family == "G":
-            detected = _detect_g(definition, run)
-        elif definition.family == "E":
-            detected = _detect_e(definition, run, opportunities)
-        else:
-            detected = _detect_d(definition, run)
-        emitted.extend(detected)
-        offset += len(run)
-    del offset
-    return tuple(emitted)
+    if definition.family == "A":
+        return _detect_a(definition, series)
+    if definition.family == "B":
+        if (
+            profile_stream is None
+            or profile_stream.stream_sha256 != definition.profile_stream_sha256
+        ):
+            raise ValueError("family B detection requires its exact verified profile stream")
+        return _detect_b(definition, series, a_opportunities, profile_stream)
+    if definition.family == "G":
+        return _detect_g(definition, series)
+    if definition.family == "E":
+        return _detect_e(definition, series, a_opportunities)
+    return _detect_d(definition, series)
 
 
 def _detect_a(
-    definition: CandidateDefinition, bars: Sequence[CanonicalAggregateBar]
+    definition: CandidateDefinition, series: VerifiedAggregateSeries
 ) -> tuple[CandidateSignal, ...]:
     detector = dict(definition.parameters)["detector"]
     if detector == "moving_average_crossover":
-        return _detect_a_sma(definition, bars)
+        return _detect_a_sma(definition, series)
     if detector == "donchian_breakout":
-        return _detect_a_donchian(definition, bars)
+        return _detect_a_donchian(definition, series)
     if detector == "atr_breakout":
-        return _detect_a_atr(definition, bars)
+        return _detect_a_atr(definition, series)
     if detector == "time_series_momentum":
-        return _detect_a_momentum(definition, bars)
+        return _detect_a_momentum(definition, series)
     raise ValueError("unsupported family A detector")
 
 
 def _detect_a_sma(
-    definition: CandidateDefinition, bars: Sequence[CanonicalAggregateBar]
+    definition: CandidateDefinition, series: VerifiedAggregateSeries
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     fast = _parameter_bars(definition.slot, "fast_hours")
     slow = _parameter_bars(definition.slot, "slow_hours")
     states: list[int | None] = [None] * len(bars)
@@ -192,12 +327,13 @@ def _detect_a_sma(
         previous = states[index - 1]
         if state == definition.direction and state != 0 and state != previous:
             events.append((index, index - slow + 1, index))
-    return _signals(definition, bars, events)
+    return _signals(definition, series, events)
 
 
 def _detect_a_donchian(
-    definition: CandidateDefinition, bars: Sequence[CanonicalAggregateBar]
+    definition: CandidateDefinition, series: VerifiedAggregateSeries
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     lookback = _parameter_bars(definition.slot, "lookback_hours")
     armed = True
     events: list[tuple[int, int, int]] = []
@@ -211,12 +347,13 @@ def _detect_a_donchian(
             armed = False
         elif not armed and lower <= bars[index].close <= upper:
             armed = True
-    return _signals(definition, bars, events)
+    return _signals(definition, series, events)
 
 
 def _detect_a_atr(
-    definition: CandidateDefinition, bars: Sequence[CanonicalAggregateBar]
+    definition: CandidateDefinition, series: VerifiedAggregateSeries
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     count = _parameter_bars(definition.slot, "atr_hours")
     true_ranges = _true_ranges(bars)
     armed = True
@@ -236,12 +373,13 @@ def _detect_a_atr(
             armed = False
         elif not condition:
             armed = True
-    return _signals(definition, bars, events)
+    return _signals(definition, series, events)
 
 
 def _detect_a_momentum(
-    definition: CandidateDefinition, bars: Sequence[CanonicalAggregateBar]
+    definition: CandidateDefinition, series: VerifiedAggregateSeries
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     lookback = _parameter_bars(definition.slot, "momentum_hours")
     states: list[int | None] = [None] * len(bars)
     for index in range(lookback, len(bars)):
@@ -251,22 +389,23 @@ def _detect_a_momentum(
         state = states[index]
         if state == definition.direction and state != 0 and state != states[index - 1]:
             events.append((index, index - lookback, index))
-    return _signals(definition, bars, events)
+    return _signals(definition, series, events)
 
 
 def _detect_b(
     definition: CandidateDefinition,
-    bars: Sequence[CanonicalAggregateBar],
+    series: VerifiedAggregateSeries,
     opportunities: Sequence[CandidateSignal],
-    profiles: Sequence[FrozenProfile],
+    profile_stream: VerifiedProfileStream,
 ) -> tuple[CandidateSignal, ...]:
-    by_cutoff = {profile.information_cutoff: profile for profile in profiles}
+    bars = series.bars
+    by_cutoff = {profile.information_cutoff: profile for profile in profile_stream.profiles}
     selected: list[tuple[CandidateSignal, int]] = []
     window_bars = _parameter_bars(definition.slot, "profile_hours")
     window_hours = window_bars * _TIMEFRAME_HOURS[definition.timeframe]
     by_bar_cutoff = {bar.bar_close: index for index, bar in enumerate(bars)}
     for opportunity in opportunities:
-        _validate_opportunity(definition, opportunity)
+        _validate_opportunity(definition, series, opportunity)
         index = by_bar_cutoff.get(opportunity.information_cutoff)
         if index is None or index < 2:
             continue
@@ -326,13 +465,14 @@ def _detect_b(
     signals = tuple(
         _signal_from_opportunity(
             definition,
+            series,
             opportunity,
             bars[index],
             feature_start=(
                 opportunity.feature_start
                 if role == "price_baseline"
                 else min(
-                    opportunity.feature_start, bars[index].bar_close - timedelta(hours=window_hours)
+                    opportunity.feature_start, by_cutoff[bars[index - 2].bar_close].feature_start
                 )
             ),
         )
@@ -343,15 +483,16 @@ def _detect_b(
 
 def _detect_e(
     definition: CandidateDefinition,
-    bars: Sequence[CanonicalAggregateBar],
+    series: VerifiedAggregateSeries,
     opportunities: Sequence[CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     count = _parameter_bars(definition.slot, "volume_median_hours")
     by_cutoff = {bar.bar_close: index for index, bar in enumerate(bars)}
     eligible: list[tuple[CandidateSignal, int]] = []
     selected: list[tuple[CandidateSignal, int]] = []
     for opportunity in opportunities:
-        _validate_opportunity(definition, opportunity)
+        _validate_opportunity(definition, series, opportunity)
         index = by_cutoff.get(opportunity.information_cutoff)
         if index is None or index < count:
             continue
@@ -370,6 +511,7 @@ def _detect_e(
     signals = tuple(
         _signal_from_opportunity(
             definition,
+            series,
             opportunity,
             bars[index],
             feature_start=min(opportunity.feature_start, bars[index - count].timestamp),
@@ -380,8 +522,9 @@ def _detect_e(
 
 
 def _detect_g(
-    definition: CandidateDefinition, bars: Sequence[CanonicalAggregateBar]
+    definition: CandidateDefinition, series: VerifiedAggregateSeries
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     n8 = _parameter_bars(definition.slot, "atr_short_hours")
     n24 = _parameter_bars(definition.slot, "atr_long_hours")
     donchian = _parameter_bars(definition.slot, "donchian_hours")
@@ -423,22 +566,25 @@ def _detect_g(
             condition = breakout
         else:
             condition = breakout
-        if condition and armed:
+        emit = condition and (armed if definition.role == "candidate_primary" else True)
+        if emit:
             feature_start = {
                 "candidate_primary": index - n24 - 3,
                 "atr_only_control": index - n24 - 1,
                 "donchian_only_control": index - donchian,
             }[definition.role]
             events.append((index, feature_start, index))
-            armed = False
-        elif not condition:
+            if definition.role == "candidate_primary":
+                armed = False
+        elif definition.role == "candidate_primary" and not condition:
             armed = True
-    return _signals(definition, bars, events)
+    return _signals(definition, series, events)
 
 
 def _detect_d(
-    definition: CandidateDefinition, bars: Sequence[CanonicalAggregateBar]
+    definition: CandidateDefinition, series: VerifiedAggregateSeries
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     lookback = _parameter_bars(definition.slot, "level_hours")
     week = target_bars(24 * 7, definition.timeframe)
     pseudo = definition.role == "pseudo_level_control"
@@ -460,14 +606,15 @@ def _detect_d(
             armed = False
         elif not breach:
             armed = True
-    return _signals(definition, bars, events)
+    return _signals(definition, series, events)
 
 
 def _signals(
     definition: CandidateDefinition,
-    bars: Sequence[CanonicalAggregateBar],
+    series: VerifiedAggregateSeries,
     events: Sequence[tuple[int, int, int]],
 ) -> tuple[CandidateSignal, ...]:
+    bars = series.bars
     output: list[CandidateSignal] = []
     frozen_until: datetime | None = None
     for signal_index, start_index, cutoff_index in events:
@@ -476,17 +623,13 @@ def _signals(
         if frozen_until is not None and legal_entry < frozen_until:
             continue
         output.append(
-            CandidateSignal(
-                candidate_id=definition.candidate_id,
-                family=definition.family,
+            emit_candidate_signal(
+                definition,
+                series,
                 symbol=bars[signal_index].symbol,
-                timeframe=definition.timeframe,
-                direction=definition.direction,
                 feature_start=bars[start_index].timestamp,
                 information_cutoff=cutoff,
                 legal_entry=legal_entry,
-                source_publication_sha256=definition.source_publication_sha256,
-                segment_id=definition.source_segment_id,
             )
         )
         frozen_until = legal_entry + timedelta(hours=definition.horizon_hours)
@@ -495,22 +638,19 @@ def _signals(
 
 def _signal_from_opportunity(
     definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
     opportunity: CandidateSignal,
     bar: CanonicalAggregateBar,
     *,
     feature_start: datetime,
 ) -> CandidateSignal:
-    return CandidateSignal(
-        candidate_id=definition.candidate_id,
-        family=definition.family,
+    return emit_candidate_signal(
+        definition,
+        series,
         symbol=bar.symbol,
-        timeframe=definition.timeframe,
-        direction=definition.direction,
         feature_start=feature_start,
         information_cutoff=opportunity.information_cutoff,
         legal_entry=opportunity.legal_entry,
-        source_publication_sha256=definition.source_publication_sha256,
-        segment_id=definition.source_segment_id,
     )
 
 
@@ -547,24 +687,86 @@ def _valid_profile(
 ) -> bool:
     if (
         profile.window_hours != window_hours
-        or profile.source_publication_sha256 != definition.source_publication_sha256
         or profile.segment_id != definition.source_segment_id
         or getattr(profile.snapshot.binning, "step", None) != definition.profile_bin_step
     ):
         return False
-    return "source=" in profile.snapshot.binning.definition_id
+    return isinstance(profile.snapshot.binning, FixedStepBins)
 
 
-def _validate_opportunity(definition: CandidateDefinition, signal: CandidateSignal) -> None:
+def _validate_opportunity(
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    signal: CandidateSignal,
+) -> None:
     if signal.family != "A":
         raise ValueError("subordinate candidates require family A opportunities")
     if (
-        signal.source_publication_sha256 != definition.source_publication_sha256
+        signal.candidate_id != definition.parent_a_candidate_id
+        or signal.candidate_slot_id != definition.parent_a_slot_id
+        or signal.source_series_sha256 != series.series_sha256
+        or signal.source_publication_sha256 != definition.source_publication_sha256
         or signal.segment_id != definition.source_segment_id
         or signal.timeframe != definition.timeframe
         or signal.direction != definition.direction
     ):
-        raise ValueError("A opportunity lineage does not match the subordinate candidate")
+        raise ValueError("A opportunity is not the exact registered parent of this candidate")
+
+
+def _validate_parent_definition(
+    slot: ValidationSlot,
+    series: VerifiedAggregateSeries,
+    parent: CandidateDefinition | None,
+) -> None:
+    if parent is None or parent.family != "A":
+        raise ValueError("B/E candidates require a registered parent family A candidate")
+    if (
+        parent.source_series_sha256 != series.series_sha256
+        or parent.source_publication_sha256 != series.publication_sha256
+        or parent.source_segment_id != series.segment_id
+        or parent.timeframe != slot.timeframe
+        or parent.slot.direction != slot.direction
+    ):
+        raise ValueError("parent A candidate does not match the subordinate source series/grid")
+    if slot.family == "E":
+        parameters = dict(parent.parameters)
+        if parameters.get("detector") != "donchian_breakout":
+            raise ValueError("family E requires an exact A Donchian opportunity parent")
+        if _parameter_bars(parent.slot, "lookback_hours") != _parameter_bars(
+            slot, "donchian_hours"
+        ):
+            raise ValueError(
+                "family E parent Donchian lookback does not match its opportunity grid"
+            )
+    elif hash_json("A-selector-grid-entry-v1", parent.slot.to_dict()) not in A_SELECTOR_GRID:
+        raise ValueError("family B parent must be one exact registered A selector-grid candidate")
+
+
+def _validate_series(definition: CandidateDefinition, series: VerifiedAggregateSeries) -> None:
+    if not isinstance(series, VerifiedAggregateSeries):
+        raise TypeError("candidate detection requires a VerifiedAggregateSeries capability")
+    if (
+        definition.source_series_sha256 != series.series_sha256
+        or definition.source_publication_sha256 != series.publication_sha256
+        or definition.source_segment_id != series.segment_id
+        or definition.timeframe != series.target_timeframe
+    ):
+        raise ValueError("candidate definition does not own this verified aggregate series")
+
+
+def _profile_payload(snapshot: ProfileSnapshot) -> dict[str, object]:
+    return {
+        "bin_volumes": [[index, volume] for index, volume in sorted(snapshot.bin_volumes.items())],
+        "total_volume": snapshot.total_volume,
+        "poc_index": snapshot.poc_index,
+        "value_area_low_index": snapshot.value_area_low_index,
+        "value_area_high_index": snapshot.value_area_high_index,
+        "vwap": snapshot.vwap,
+        "binning_id": snapshot.binning_id,
+        "allocation_id": snapshot.allocation_id,
+        "value_area_fraction": snapshot.value_area_fraction,
+        "work_budget_id": snapshot.work_budget_id,
+    }
 
 
 def _parameter_bars(slot: ValidationSlot, name: str) -> int:
@@ -611,79 +813,6 @@ def _strict_sign(value: float) -> int:
     return 1 if value > 0 else -1 if value < 0 else 0
 
 
-def _contiguous_runs(
-    bars: Sequence[CanonicalAggregateBar],
-) -> tuple[tuple[CanonicalAggregateBar, ...], ...]:
-    if not bars:
-        return ()
-    runs: list[list[CanonicalAggregateBar]] = [[bars[0]]]
-    for bar in bars[1:]:
-        previous = runs[-1][-1]
-        if (
-            bar.timestamp != previous.bar_close
-            or bar.symbol != previous.symbol
-            or bar.target_timeframe != previous.target_timeframe
-            or bar.segment_id != previous.segment_id
-        ):
-            runs.append([bar])
-        else:
-            runs[-1].append(bar)
-    return tuple(tuple(run) for run in runs)
-
-
-def _validate_inputs(
-    definition: CandidateDefinition,
-    bars: Sequence[CanonicalAggregateBar],
-    receipt: AggregatePublicationReceipt,
-) -> None:
-    _validate_receipt_shape(receipt)
-    if definition.source_publication_sha256 != receipt.publication_sha256:
-        raise ValueError("candidate source publication does not match the receipt")
-    if definition.source_segment_id != receipt.segment_id:
-        raise ValueError("candidate source segment does not match the receipt")
-    if definition.timeframe != receipt.target_timeframe:
-        raise ValueError("candidate timeframe does not match the receipt")
-    if len(bars) != receipt.aggregate_bar_count:
-        raise ValueError("aggregate receipt count does not match supplied bars")
-    if not bars:
-        return
-    expected_min = _parse_utc(receipt.min_timestamp)
-    expected_max = _parse_utc(receipt.max_timestamp)
-    if bars[0].timestamp != expected_min or bars[-1].timestamp != expected_max:
-        raise ValueError("aggregate receipt range does not match supplied bars")
-    for bar in bars:
-        if not isinstance(bar, CanonicalAggregateBar):
-            raise TypeError("candidate inputs must be authenticated CanonicalAggregateBar rows")
-        if (
-            bar.symbol != receipt.symbol
-            or bar.target_timeframe != receipt.target_timeframe
-            or bar.segment_id != receipt.segment_id
-        ):
-            raise ValueError("aggregate row identity does not match publication receipt")
-        if bar.parent_snapshot_sha256 != receipt.parent_snapshot_sha256:
-            raise ValueError("aggregate row parent snapshot does not match publication receipt")
-    observed_source = source_rows_sha256(
-        (source_row_id for bar in bars for source_row_id in bar.source_row_ids),
-        identities=True,
-    )
-    if observed_source != receipt.source_sha256:
-        raise ValueError("aggregate rows do not match the authenticated publication source digest")
-
-
-def _validate_receipt_shape(receipt: AggregatePublicationReceipt) -> None:
-    _require_sha256(receipt.publication_sha256, "aggregate publication")
-    _require_sha256(receipt.source_sha256, "aggregate publication source")
-    _require_sha256(receipt.parent_snapshot_sha256, "aggregate parent snapshot")
-    if receipt.target_timeframe not in _TIMEFRAME_HOURS:
-        raise ValueError("aggregate receipt timeframe must be 1h or 4h")
-    if isinstance(receipt.segment_id, bool) or receipt.segment_id < 0:
-        raise ValueError("aggregate receipt segment_id must be non-negative")
-    if isinstance(receipt.aggregate_bar_count, bool) or receipt.aggregate_bar_count < 0:
-        raise ValueError("aggregate receipt count must be non-negative")
-    _parse_utc(receipt.min_timestamp)
-    _parse_utc(receipt.max_timestamp)
-
-
 def _require_sha256(value: object, label: str) -> None:
     if (
         not isinstance(value, str)
@@ -693,17 +822,12 @@ def _require_sha256(value: object, label: str) -> None:
         raise ValueError(f"{label} must be a lower-case SHA-256")
 
 
-def _parse_utc(value: str) -> datetime:
-    timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if timestamp.tzinfo is None or timestamp.utcoffset() != timedelta(0):
-        raise ValueError("aggregate receipt timestamp must be UTC-aware")
-    return timestamp.astimezone(UTC)
-
-
 __all__ = [
     "A_SELECTOR_GRID",
     "FrozenProfile",
+    "VerifiedProfileStream",
     "candidate_definition_for_slot",
     "detect_candidate_signals",
     "target_bars",
+    "verify_profile_stream",
 ]
