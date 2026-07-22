@@ -1,5 +1,14 @@
 """Data truth, recovery, and canonical market-data boundaries."""
 
+from market_structure_lab.data.aggregate_bars import (
+    CanonicalAggregateBar,
+    iter_complete_aggregate_bars,
+)
+from market_structure_lab.data.aggregate_publication import (
+    AggregatePublicationManifest,
+    publish_aggregate_bars,
+    verify_aggregate_publication,
+)
 from market_structure_lab.data.freshness import (
     CanonicalSeriesState,
     FreshnessManifest,
@@ -46,9 +55,11 @@ from market_structure_lab.data.segments import (
 )
 
 __all__ = [
+    "AggregatePublicationManifest",
     "CandidateMapping",
     "CandleQuality",
     "CanonicalSeriesState",
+    "CanonicalAggregateBar",
     "ColumnInspection",
     "DatabaseInspectionError",
     "FreshnessManifest",
@@ -69,9 +80,11 @@ __all__ = [
     "inspect_configured_database",
     "inspect_database",
     "iter_candle_batches",
+    "iter_complete_aggregate_bars",
     "load_candles",
     "load_canonical_gap_boundaries",
     "publish_freshness_snapshot",
+    "publish_aggregate_bars",
     "render_human",
     "render_json",
     "report_to_dict",
@@ -81,5 +94,6 @@ __all__ = [
     "read_freshness_manifest",
     "resolve_freshness_cutoff",
     "verify_snapshot",
+    "verify_aggregate_publication",
     "write_freshness_manifest",
 ]
