@@ -48,32 +48,51 @@ class SnapshotResearchBinding:
     promotion_receipt_artifact_sha256: str
     promotion_canonical_logical_sha256: str
     gap_boundaries_sha256: str
-    eligibility_audit_sha256: str
+    eligibility_audit_sha256: str | None = None
+    schema_version: str = "research-snapshot-binding-v2"
 
     def __post_init__(self) -> None:
+        if self.schema_version not in {
+            "research-snapshot-binding-v1",
+            "research-snapshot-binding-v2",
+        }:
+            raise ValueError("unsupported research snapshot binding schema")
+        if self.schema_version == "research-snapshot-binding-v2" and (
+            self.eligibility_audit_sha256 is None
+        ):
+            raise ValueError("v2 research identity requires eligibility audit evidence")
         for field in (
             "selected_universe_sha256",
             "promotion_receipt_content_sha256",
             "promotion_receipt_artifact_sha256",
             "promotion_canonical_logical_sha256",
             "gap_boundaries_sha256",
-            "eligibility_audit_sha256",
         ):
             value = getattr(self, field)
             if not isinstance(value, str) or not _SHA256.fullmatch(value):
                 raise ValueError("research identity hashes must be SHA-256 hex digests")
             object.__setattr__(self, field, value.lower())
+        if self.eligibility_audit_sha256 is not None:
+            if not _SHA256.fullmatch(self.eligibility_audit_sha256):
+                raise ValueError("research identity hashes must be SHA-256 hex digests")
+            object.__setattr__(
+                self,
+                "eligibility_audit_sha256",
+                self.eligibility_audit_sha256.lower(),
+            )
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "schema_version": "research-snapshot-binding-v1",
+        payload: dict[str, object] = {
+            "schema_version": self.schema_version,
             "selected_universe_sha256": self.selected_universe_sha256,
             "promotion_receipt_content_sha256": self.promotion_receipt_content_sha256,
             "promotion_receipt_artifact_sha256": self.promotion_receipt_artifact_sha256,
             "promotion_canonical_logical_sha256": self.promotion_canonical_logical_sha256,
             "gap_boundaries_sha256": self.gap_boundaries_sha256,
-            "eligibility_audit_sha256": self.eligibility_audit_sha256,
         }
+        if self.eligibility_audit_sha256 is not None:
+            payload["eligibility_audit_sha256"] = self.eligibility_audit_sha256
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,24 +166,37 @@ class SnapshotIdentity:
                 raise ValueError("unsupported freshness snapshot publication policy")
         if isinstance(self.research_binding, Mapping):
             payload = dict(self.research_binding)
-            if payload.pop("schema_version", None) != "research-snapshot-binding-v1":
+            schema_version = payload.pop("schema_version", None)
+            if schema_version not in {
+                "research-snapshot-binding-v1",
+                "research-snapshot-binding-v2",
+            }:
                 raise ValueError("unsupported research snapshot binding schema")
-            expected = {
+            required = {
                 "selected_universe_sha256",
                 "promotion_receipt_content_sha256",
                 "promotion_receipt_artifact_sha256",
                 "promotion_canonical_logical_sha256",
                 "gap_boundaries_sha256",
-                "eligibility_audit_sha256",
             }
-            if set(payload) != expected or any(
-                not isinstance(value, str) for value in payload.values()
+            allowed = required | {"eligibility_audit_sha256"}
+            if (
+                not required.issubset(payload)
+                or not set(payload).issubset(allowed)
+                or (
+                    schema_version == "research-snapshot-binding-v2"
+                    and "eligibility_audit_sha256" not in payload
+                )
+                or any(not isinstance(value, str) for value in payload.values())
             ):
                 raise ValueError("research snapshot binding fields are invalid")
             object.__setattr__(
                 self,
                 "research_binding",
-                SnapshotResearchBinding(**cast(dict[str, str], payload)),
+                SnapshotResearchBinding(
+                    **cast(dict[str, str], payload),
+                    schema_version=cast(str, schema_version),
+                ),
             )
         elif self.research_binding is not None and not isinstance(
             self.research_binding, SnapshotResearchBinding

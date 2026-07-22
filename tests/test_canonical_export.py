@@ -84,6 +84,49 @@ def test_snapshot_identity_without_research_binding_preserves_legacy_shape() -> 
     }
 
 
+@pytest.mark.parametrize("include_eligibility", [False, True])
+def test_snapshot_identity_round_trips_legacy_research_binding_shapes(
+    include_eligibility: bool,
+) -> None:
+    binding: dict[str, object] = {
+        "schema_version": "research-snapshot-binding-v1",
+        "selected_universe_sha256": "c" * 64,
+        "promotion_receipt_content_sha256": "d" * 64,
+        "promotion_receipt_artifact_sha256": "e" * 64,
+        "promotion_canonical_logical_sha256": "f" * 64,
+        "gap_boundaries_sha256": hashlib.sha256(b"[]").hexdigest(),
+    }
+    if include_eligibility:
+        binding["eligibility_audit_sha256"] = "1" * 64
+
+    identity = SnapshotIdentity(
+        dataset_version="legacy-research-v1",
+        dump_sha256="a" * 64,
+        recovery_sha256="b" * 64,
+        mapping_version="candles-v1",
+        config_version="config-v1",
+        code_commit="0123456789abcdef",
+        research_binding=binding,
+    )
+
+    assert identity.to_dict()["research_binding"] == binding
+
+
+def test_new_research_binding_writer_requires_and_emits_eligibility_evidence() -> None:
+    binding = research_snapshot_identity().to_dict()["research_binding"]
+
+    assert binding["schema_version"] == "research-snapshot-binding-v2"
+    assert binding["eligibility_audit_sha256"] == "1" * 64
+    with pytest.raises(ValueError, match="eligibility audit"):
+        SnapshotResearchBinding(
+            selected_universe_sha256="c" * 64,
+            promotion_receipt_content_sha256="d" * 64,
+            promotion_receipt_artifact_sha256="e" * 64,
+            promotion_canonical_logical_sha256="f" * 64,
+            gap_boundaries_sha256=hashlib.sha256(b"[]").hexdigest(),
+        )
+
+
 def test_unresolved_gap_creates_hard_segment_boundary() -> None:
     gap = GapRange.create(
         symbol="BTCUSDT",

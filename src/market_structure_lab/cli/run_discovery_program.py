@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -47,6 +48,7 @@ from market_structure_lab.discovery.program import (
     freeze_selected_universe,
     publish_reliability_vector,
 )
+from market_structure_lab.discovery.reliability import reliability_algorithm_versions
 from market_structure_lab.discovery.runs import (
     DiscoveryRunConfig,
     DiscoveryWorkBudget,
@@ -75,10 +77,115 @@ DEFAULT_PROMOTION_RECEIPT = Path(
     "data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json"
 )
 DEFAULT_SNAPSHOT_ROOT = Path("data/exports/snapshots")
-DEFAULT_DERIVED_ROOT = Path("data/exports/derived/task14-PG-000002")
-DEFAULT_PROGRAM_ROOT = Path("data/exports/discovery-programs/PG-000002")
-DEFAULT_TRIAL_ROOT = Path("data/exports/trials/task14-PG-000002")
+DEFAULT_DERIVED_ROOT = Path("data/exports/derived/task14-PG-000003")
+DEFAULT_PROGRAM_ROOT = Path("data/exports/discovery-programs/PG-000003")
+DEFAULT_TRIAL_ROOT = Path("data/exports/trials/task14-PG-000003")
 AUCTION_CONFIG_VERSION = "task14-auction-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class Task14PilotConfiguration:
+    selection_id: str
+    preregistration_id: str
+    split_id: str
+    run_id: str
+    dataset_snapshot_id: str
+    feature_publication_id: str
+    event_publication_id: str
+    normalizer_id: str
+    regime_assignment_contract_id: str
+    start: datetime
+    discovery_end: datetime
+    development_end: datetime
+    holdout_end: datetime
+    feature_names: tuple[str, ...]
+    motif_policy: MotifStabilityPolicy
+    program_budget: DiscoveryProgramBudget
+    phase3_execution: Phase3ExecutionContract
+    work_budget: DiscoveryWorkBudget
+    run_max_rows: int
+    started_at: datetime
+    completed_at: datetime
+
+
+def _pilot_configuration() -> Task14PilotConfiguration:
+    """Return the frozen metadata-only PG-000003 pilot contract without external access."""
+    feature_names = (
+        "poc_distance_close",
+        "poc_volume_share",
+        "range_close_fraction",
+        "value_width_close",
+        "volume_relative_median_20",
+        "vwap_distance_close",
+    )
+    return Task14PilotConfiguration(
+        selection_id="SU-000703",
+        preregistration_id="PG-000003",
+        split_id="task14-first-real-discovery-v3",
+        run_id="DR-000703",
+        dataset_snapshot_id="DS-000703",
+        feature_publication_id="FP-000703",
+        event_publication_id="EP-000703",
+        normalizer_id="NZ-000703",
+        regime_assignment_contract_id="task14-contemporaneous-regimes-v3",
+        start=datetime(2025, 2, 1, tzinfo=UTC),
+        discovery_end=datetime(2025, 2, 1, 8, 0, tzinfo=UTC),
+        development_end=datetime(2025, 2, 1, 16, 0, tzinfo=UTC),
+        holdout_end=datetime(2025, 2, 2, tzinfo=UTC),
+        feature_names=feature_names,
+        motif_policy=MotifStabilityPolicy(
+            policy_id="task14-motif-research-v2",
+            policy_purpose="research",
+            window_lengths=(3, 5),
+            exclusion_zones=(2,),
+            tie_seeds=(7, 11),
+            tie_policies=("canonical", "seeded_hash"),
+            subsample_fraction=0.75,
+            distance_multipliers=(0.9, 1.0, 1.1),
+            maximum_distance=1.5,
+            max_windows=512,
+            top_k=20,
+            minimum_seed_rank_agreement=0.60,
+            minimum_subsample_agreement=0.50,
+            minimum_parameter_agreement=0.50,
+            minimum_recurrence_support=2,
+            minimum_asset_support=1,
+            minimum_period_support=2,
+            minimum_regime_support=1,
+        ),
+        program_budget=DiscoveryProgramBudget(
+            budget_id="task14-program-budget-v3",
+            maximum_trials=1,
+            maximum_total_stability_fits=8,
+            maximum_serialized_evidence_bytes=64 * 1024 * 1024,
+        ),
+        phase3_execution=Phase3ExecutionContract(
+            config_version=AUCTION_CONFIG_VERSION,
+            bin_step=0.001,
+            rolling_bars=1_440,
+            event_width=1,
+            maximum_rows=960,
+        ),
+        work_budget=DiscoveryWorkBudget(
+            budget_id="task14-run-budget-v4",
+            maximum_materialized_rows=959,
+            maximum_feature_cells=8_628,
+            maximum_pca_rows=480,
+            maximum_pca_features=len(feature_names),
+            maximum_pca_cells=2_880,
+            maximum_reliability_control_projection_cells=1_437,
+            maximum_aggregate_projection_cells=4_317,
+            maximum_clusters=3,
+            maximum_seeds=3,
+            maximum_kmeans_iterations=100,
+            maximum_total_stability_fits=8,
+            maximum_serialized_evidence_bytes=64 * 1024 * 1024,
+            maximum_bundle_entries=100,
+        ),
+        run_max_rows=480,
+        started_at=datetime(2026, 7, 22, 16, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 22, 16, 1, tzinfo=UTC),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -106,10 +213,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(str(error), file=sys.stderr)
         return 1
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0
+    return _summary_exit_code(summary)
+
+
+def _summary_exit_code(summary: dict[str, object]) -> int:
+    terminal_pair = (summary.get("run_status"), summary.get("reliability_conclusion"))
+    return (
+        0
+        if terminal_pair
+        in {
+            ("completed", "accepted"),
+            ("rejected", "rejected"),
+            ("rejected_unstable", "rejected"),
+        }
+        else 1
+    )
 
 
 def _execute(args: argparse.Namespace) -> dict[str, object]:
+    pilot = _pilot_configuration()
     code_commit = _git("rev-parse", "HEAD")
     lockfile_bytes = Path("uv.lock").read_bytes()
     verify_runtime_code_identity(code_commit=code_commit, lockfile_bytes=lockfile_bytes)
@@ -123,13 +245,13 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         eligibility_audit_sha256,
     )
     registry = builtin_feature_registry()
-    start = datetime(2025, 2, 1, tzinfo=UTC)
-    discovery_end = datetime(2025, 2, 8, tzinfo=UTC)
-    development_end = datetime(2025, 2, 15, tzinfo=UTC)
-    holdout_end = datetime(2025, 2, 22, tzinfo=UTC)
+    start = pilot.start
+    discovery_end = pilot.discovery_end
+    development_end = pilot.development_end
+    holdout_end = pilot.holdout_end
     boundaries = _selected_boundaries(report, "APTUSDT", start, development_end)
     selected = freeze_selected_universe(
-        selection_id="SU-000702",
+        selection_id=pilot.selection_id,
         promotion_receipt_path=args.promotion_receipt,
         symbols=("APTUSDT",),
         timeframe="1m",
@@ -142,7 +264,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         eligibility_audit_sha256=eligibility_audit_sha256,
     )
     split = freeze_split(
-        split_id="task14-first-real-discovery-v2",
+        split_id=pilot.split_id,
         discovery=TimePartition(PartitionRole.DISCOVERY, start, discovery_end, selected.symbols),
         development=TimePartition(
             PartitionRole.DEVELOPMENT,
@@ -173,26 +295,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         maximum_assignment_margin_drift=2.0,
         minimum_cluster_event_support=50,
     )
-    motif = MotifStabilityPolicy(
-        policy_id="task14-motif-research-v1",
-        policy_purpose="research",
-        window_lengths=(3, 5),
-        exclusion_zones=(2,),
-        tie_seeds=(7, 11),
-        tie_policies=("canonical", "seeded_hash"),
-        subsample_fraction=0.75,
-        distance_multipliers=(0.9, 1.0, 1.1),
-        maximum_distance=1.5,
-        max_windows=256,
-        top_k=20,
-        minimum_seed_rank_agreement=0.60,
-        minimum_subsample_agreement=0.50,
-        minimum_parameter_agreement=0.50,
-        minimum_recurrence_support=2,
-        minimum_asset_support=1,
-        minimum_period_support=2,
-        minimum_regime_support=1,
-    )
+    motif = pilot.motif_policy
     transition = TransitionUncertaintyPolicy(
         policy_id="task14-transition-research-v1",
         policy_purpose="research",
@@ -214,22 +317,10 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         maximum_per_feature_drop_fraction=0.05,
         maximum_evidence_groups=1_000,
     )
-    feature_names = (
-        "poc_distance_close",
-        "poc_volume_share",
-        "range_close_fraction",
-        "value_width_close",
-        "volume_relative_median_20",
-        "vwap_distance_close",
-    )
-    program_budget = DiscoveryProgramBudget(
-        budget_id="task14-program-budget-v2",
-        maximum_trials=1,
-        maximum_total_stability_fits=8,
-        maximum_serialized_evidence_bytes=64 * 1024 * 1024,
-    )
+    feature_names = pilot.feature_names
+    program_budget = pilot.program_budget
     trials = build_preregistered_trial_grid(
-        run_ids=("DR-000702",),
+        run_ids=(pilot.run_id,),
         pca_components=(3,),
         cluster_counts=(3,),
         seed_sets=((7, 11, 13),),
@@ -240,37 +331,19 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         "information_policy": "contemporaneous",
         "regime_universe": ["all_observed"],
     }
-    phase3_execution = Phase3ExecutionContract(
-        config_version=AUCTION_CONFIG_VERSION,
-        bin_step=0.001,
-        rolling_bars=1_440,
-        event_width=1,
-        maximum_rows=25_000,
-    )
-    work_budget = DiscoveryWorkBudget(
-        budget_id="task14-run-budget-v2",
-        maximum_materialized_rows=50_000,
-        maximum_feature_cells=300_000,
-        maximum_pca_rows=25_000,
-        maximum_pca_features=len(feature_names),
-        maximum_pca_cells=150_000,
-        maximum_clusters=3,
-        maximum_seeds=3,
-        maximum_kmeans_iterations=100,
-        maximum_total_stability_fits=8,
-        maximum_serialized_evidence_bytes=64 * 1024 * 1024,
-        maximum_bundle_entries=100,
-    )
+    phase3_execution = pilot.phase3_execution
+    work_budget = pilot.work_budget
     orchestration_parameters = {
         "subsample_fraction": 0.75,
         "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
         "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
+        "reliability_evidence_algorithms": reliability_algorithm_versions(),
     }
     preregistration = freeze_discovery_preregistration(
-        preregistration_id="PG-000002",
+        preregistration_id=pilot.preregistration_id,
         selected_universe=selected,
         split=split,
-        dataset_snapshot_id="DS-000702",
+        dataset_snapshot_id=pilot.dataset_snapshot_id,
         feature_set_id=registry.feature_set_id,
         registry_sha256=registry.sha256,
         normalizer_policy_id="robust-discovery-fit-only-v1",
@@ -279,7 +352,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         budget=program_budget,
         phase3_execution=phase3_execution,
         run_work_budget=work_budget,
-        run_max_rows=25_000,
+        run_max_rows=pilot.run_max_rows,
         run_max_iterations=100,
         run_tolerance=1e-12,
         stability_policy_sha256=canonical_policy_sha256(stability),
@@ -374,7 +447,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     )
     selected_ids = {_row_id(row) for row in selected_rows}
     regimes = freeze_motif_regime_assignments(
-        contract_id="task14-contemporaneous-regimes-v2",
+        contract_id=pilot.regime_assignment_contract_id,
         algorithm_version="constant-contemporaneous-regime-v1",
         information_policy="contemporaneous",
         outcome_policy="outcome_blind",
@@ -427,18 +500,18 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         transition_uncertainty_policy=transition,
         missingness_policy=missingness,
         work_budget=preregistration.run_work_budget,
-        event_publication_id="EP-000702",
+        event_publication_id=pilot.event_publication_id,
         event_publication_sha256=phase3.event_manifest.publication_sha256,
         code_commit=code_commit,
         lock_sha256=lock_sha256,
-        feature_publication_id="FP-000702",
+        feature_publication_id=pilot.feature_publication_id,
         feature_publication_sha256=phase3.feature_manifest.publication_sha256,
-        normalizer_id="NZ-000702",
+        normalizer_id=pilot.normalizer_id,
         normalizer_sha256=phase3.normalizer.artifact_sha256,
         provenance=provenance,
         preregistration_sha256=preregistration.sha256,
-        started_at=datetime(2026, 7, 22, 12, 0, tzinfo=UTC),
-        completed_at=datetime(2026, 7, 22, 12, 1, tzinfo=UTC),
+        started_at=pilot.started_at,
+        completed_at=pilot.completed_at,
     )
     manifest = None
     execution_error_type: str | None = None

@@ -634,8 +634,11 @@ def _config_payload(config: FrozenFixtureRunConfig) -> dict[str, object]:
             "sha256": config.missingness_policy.sha256,
         },
         "work_budget": {
-            **asdict(config.work_budget),
-            "sha256": config.work_budget.sha256,
+            **{
+                key: value
+                for key, value in config.work_budget.to_dict().items()
+                if key != "schema_version"
+            },
         },
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,

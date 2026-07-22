@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 import polars as pl
 
+import market_structure_lab.discovery.program as discovery_program
 from market_structure_lab.data.canonical import CANONICAL_SCHEMA
 from market_structure_lab.data.derived import LeakageAuditApproval, LeakageNegativePattern
 from market_structure_lab.data.export import SnapshotIdentity, export_partitioned_snapshot
@@ -22,6 +23,11 @@ from market_structure_lab.discovery.program import (
     freeze_discovery_preregistration,
     freeze_selected_universe,
     publish_reliability_vector,
+)
+from market_structure_lab.discovery.reliability import (
+    ReliabilityEvidence,
+    expected_reliability_contract,
+    reliability_algorithm_versions,
 )
 from market_structure_lab.discovery.runs import DiscoveryWorkBudget
 from market_structure_lab.discovery.splits import (
@@ -223,6 +229,8 @@ def _run_budget() -> DiscoveryWorkBudget:
         maximum_pca_rows=100,
         maximum_pca_features=10,
         maximum_pca_cells=1_000,
+        maximum_reliability_control_projection_cells=1_000,
+        maximum_aggregate_projection_cells=2_000,
         maximum_clusters=5,
         maximum_seeds=5,
         maximum_kmeans_iterations=100,
@@ -230,6 +238,123 @@ def _run_budget() -> DiscoveryWorkBudget:
         maximum_serialized_evidence_bytes=4 * 1024 * 1024,
         maximum_bundle_entries=100,
     )
+
+
+def _projection_work_evidence(budget: DiscoveryWorkBudget) -> dict[str, object]:
+    return {
+        "budget_sha256": budget.sha256,
+        "maximum_partition_pca_cells": 6,
+        "maximum_partition_pca_cells_limit": budget.maximum_pca_cells,
+        "reliability_control_projection_cells": 6,
+        "maximum_reliability_control_projection_cells": (
+            budget.maximum_reliability_control_projection_cells
+        ),
+        "aggregate_projection_cells": 12,
+        "maximum_aggregate_projection_cells": budget.maximum_aggregate_projection_cells,
+    }
+
+
+def _discovery_manifest_identity(
+    matrix_sha256: str,
+    work_evidence: dict[str, object],
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "discovery-run-manifest-v3",
+        "run_id": "DR-000701",
+        "status": "completed",
+        "identity_sha256": _sha("1"),
+        "config_sha256": _sha("2"),
+        "artifact_sha256": {},
+        "behaviour_ids": [],
+        "transition_matrix": {},
+        "discovery_matrix_sha256": matrix_sha256,
+        "work_preflight_sha256": canonical_policy_sha256(work_evidence),
+    }
+    return {**payload, "manifest_sha256": canonical_policy_sha256(payload)}
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "source_matrix",
+        "work_budget_sha256",
+        "partition_observed",
+        "partition_limit",
+        "control_observed",
+        "control_limit",
+        "aggregate_limit",
+    ),
+)
+def test_control_execution_binds_null_projection_evidence_to_manifest_and_budget(
+    tamper: str,
+) -> None:
+    budget = _run_budget()
+    matrix_sha256 = _sha("b")
+    work_evidence = _projection_work_evidence(budget)
+    result: dict[str, object] = {
+        "row_count": 3,
+        "feature_count": 2,
+        "sequence_count": 1,
+        "sequences": [{"row_start": 0, "row_count": 3, "column_offsets": [1, 2]}],
+        "transformed_matrix_sha256": _sha("c"),
+        "mean_absolute_change": 0.5,
+        "projection_sha256": _sha("d"),
+        "frozen_centroids_sha256": _sha("e"),
+        "projected_null_sha256": _sha("f"),
+        "null_assignment_counts": {"0": 2, "1": 1},
+        "primary_inertia": 1.0,
+        "null_inertia": 1.5,
+        "inertia_delta": 0.5,
+        "work_budget_sha256": budget.sha256,
+        "partition_projection_cells": 6,
+        "maximum_partition_projection_cells": budget.maximum_pca_cells,
+        "reliability_control_projection_cells": 6,
+        "maximum_reliability_control_projection_cells": (
+            budget.maximum_reliability_control_projection_cells
+        ),
+        "aggregate_projection_cells": 12,
+        "maximum_aggregate_projection_cells": budget.maximum_aggregate_projection_cells,
+    }
+    evidence_matrix_sha256 = matrix_sha256
+    if tamper == "source_matrix":
+        evidence_matrix_sha256 = _sha("a")
+    elif tamper == "work_budget_sha256":
+        result["work_budget_sha256"] = _sha("a")
+    elif tamper == "partition_observed":
+        result["partition_projection_cells"] = 5
+        result["aggregate_projection_cells"] = 11
+    elif tamper == "partition_limit":
+        result["maximum_partition_projection_cells"] = 999
+    elif tamper == "control_observed":
+        result["reliability_control_projection_cells"] = 5
+        result["aggregate_projection_cells"] = 11
+    elif tamper == "control_limit":
+        result["maximum_reliability_control_projection_cells"] = 999
+    elif tamper == "aggregate_limit":
+        result["maximum_aggregate_projection_cells"] = 1_999
+    contract = expected_reliability_contract("time_order_preserving_null")
+    evidence = ReliabilityEvidence.create(
+        name=contract.name,
+        kind=contract.kind,
+        algorithm_version=contract.algorithm_version,
+        input_sha256=_sha("9"),
+        source_matrix_sha256=evidence_matrix_sha256,
+        result=result,
+    )
+    metrics = {
+        "discovery_matrix_sha256": evidence_matrix_sha256,
+        "work_budget": work_evidence,
+        "negative_controls": {contract.name: evidence.to_dict()},
+    }
+
+    with pytest.raises(RuntimeError, match="(matrix|work budget|projection)"):
+        discovery_program._execution_classification(
+            metrics,
+            declared=(contract.name,),
+            metrics_field="negative_controls",
+            work_budget=budget,
+            discovery_manifest=_discovery_manifest_identity(matrix_sha256, work_evidence),
+        )
 
 
 def test_trial_grid_is_exact_deterministic_and_bounded() -> None:
@@ -324,6 +449,9 @@ def test_preregistration_binds_outcome_blind_policy_and_exact_trials(tmp_path: P
 
     payload = preregistration.to_dict()
     encoded = json.dumps(payload, sort_keys=True)
+    assert selected.to_dict()["schema_version"] == "selected-universe-v2"
+    assert payload["schema_version"] == "discovery-preregistration-v2"
+    assert payload["selected_timeframe"] == "1m"
     assert payload["trial_count"] == 1
     assert payload["holdout_metadata"]["start"] == "2025-06-01T00:00:00Z"
     assert payload["holdout_metadata"]["asset_holdouts"] == ["IMXUSDT"]
@@ -415,8 +543,8 @@ def test_phase3_publications_bind_snapshot_features_normalizer_and_events(
         missingness_policy_sha256=_sha("5"),
         regime_contract_sha256=_sha("6"),
         orchestration_parameters_sha256=_sha("a"),
-        negative_controls=("seed_perturbation",),
-        naive_baselines=("single_cluster",),
+        negative_controls=("seed_perturbation", "time_order_preserving_null"),
+        naive_baselines=("single_cluster", "unconditional_recurrence"),
         rejection_rules=("stability_policy_rejection",),
         code_commit="2e2501be5bb531deabd8bb5790150464167c3e34",
         lock_sha256=hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest(),
@@ -530,7 +658,10 @@ def test_phase3_publications_bind_snapshot_features_normalizer_and_events(
         )
 
 
-def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: Path) -> None:
+def test_reliability_vector_reconciles_exact_terminal_trial_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     selected = _freeze(_write_promotion_receipt(tmp_path / "receipt.json"))
     budget = _program_budget(maximum_trials=1)
     trials = build_preregistered_trial_grid(
@@ -578,8 +709,8 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
         missingness_policy_sha256=canonical_policy_sha256(missingness),
         regime_contract_sha256=canonical_policy_sha256(regime),
         orchestration_parameters_sha256=canonical_policy_sha256(orchestration),
-        negative_controls=("seed_perturbation",),
-        naive_baselines=("single_cluster",),
+        negative_controls=("seed_perturbation", "time_order_preserving_null"),
+        naive_baselines=("single_cluster", "unconditional_recurrence"),
         rejection_rules=("stability_policy_rejection",),
         code_commit="2e2501be5bb531deabd8bb5790150464167c3e34",
         lock_sha256=_sha("7"),
@@ -621,11 +752,7 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
             "transition_uncertainty_policy": transition,
             "missingness_policy": missingness,
             "motif_regime_assignments": {**regime, "assignments": []},
-            "work_budget": {
-                "schema_version": "discovery-work-budget-v1",
-                **asdict(preregistration.run_work_budget),
-                "sha256": preregistration.run_work_budget.sha256,
-            },
+            "work_budget": preregistration.run_work_budget.to_dict(),
             "orchestration_parameters": orchestration,
             "code_commit": preregistration.code_commit,
             "lock_sha256": preregistration.lock_sha256,
@@ -663,6 +790,66 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
             trial_root=tmp_path / "bad-trials",
             destination=tmp_path / "bad-reliability-vector.json",
         )
+    for suffix, work_budget in (
+        (
+            "schema",
+            {
+                **preregistration.run_work_budget.to_dict(),
+                "schema_version": "discovery-work-budget-v1",
+            },
+        ),
+        (
+            "sha",
+            {**preregistration.run_work_budget.to_dict(), "sha256": _sha("f")},
+        ),
+    ):
+        tampered_config = replace(
+            config,
+            canonical_config={**config.canonical_config, "work_budget": work_budget},
+        )
+        root = tmp_path / f"tampered-{suffix}-budget-trials"
+        save_experiment_result(
+            config=tampered_config,
+            status=TerminalStatus.REJECTED,
+            metrics={"status": "rejected_unstable"},
+            conclusion="Tampered work-budget identity must not count.",
+            started_at=datetime(2026, 7, 22, tzinfo=UTC),
+            completed_at=datetime(2026, 7, 22, 0, 1, tzinfo=UTC),
+            root=root,
+        )
+        with pytest.raises(ValueError, match="work budget"):
+            publish_reliability_vector(
+                preregistration=preregistration,
+                trial_root=root,
+                destination=tmp_path / f"tampered-{suffix}-budget-vector.json",
+            )
+    wrong_timeframe_config = replace(
+        config,
+        timeframes=("5m",),
+        ranges=(
+            TrialRange(
+                "APTUSDT",
+                "5m",
+                "2025-02-01T00:00:00Z",
+                "2025-06-01T00:00:00Z",
+            ),
+        ),
+    )
+    save_experiment_result(
+        config=wrong_timeframe_config,
+        status=TerminalStatus.REJECTED,
+        metrics={"status": "rejected_unstable"},
+        conclusion="Mismatched timeframe must not count.",
+        started_at=datetime(2026, 7, 22, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 22, 0, 1, tzinfo=UTC),
+        root=tmp_path / "wrong-timeframe-trials",
+    )
+    with pytest.raises(ValueError, match="timeframe"):
+        publish_reliability_vector(
+            preregistration=preregistration,
+            trial_root=tmp_path / "wrong-timeframe-trials",
+            destination=tmp_path / "wrong-timeframe-reliability-vector.json",
+        )
     save_experiment_result(
         config=config,
         status=TerminalStatus.REJECTED,
@@ -672,6 +859,22 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
         completed_at=datetime(2026, 7, 22, 0, 1, tzinfo=UTC),
         root=tmp_path / "trials",
     )
+
+    original_read = discovery_program.read_bounded_regular
+
+    def tampered_evidence_read(path: Path, maximum_bytes: int) -> bytes:
+        if path.name == "metrics.json":
+            return b'{"status":"tampered"}\n'
+        return original_read(path, maximum_bytes)
+
+    monkeypatch.setattr(discovery_program, "read_bounded_regular", tampered_evidence_read)
+    with pytest.raises(RuntimeError, match="artifact hash"):
+        publish_reliability_vector(
+            preregistration=preregistration,
+            trial_root=tmp_path / "trials",
+            destination=tmp_path / "tampered-reliability-vector.json",
+        )
+    monkeypatch.setattr(discovery_program, "read_bounded_regular", original_read)
 
     vector = publish_reliability_vector(
         preregistration=preregistration,
@@ -683,6 +886,277 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
     assert vector.status_counts == (("rejected", 1),)
     assert vector.conclusion == "rejected"
     assert vector.trials[0].run_id == "DR-000701"
+    assert vector.negative_control_execution == (
+        ("seed_perturbation", "unexecuted"),
+        ("time_order_preserving_null", "unexecuted"),
+    )
+    assert vector.naive_baseline_execution == (
+        ("single_cluster", "unexecuted"),
+        ("unconditional_recurrence", "unexecuted"),
+    )
     encoded = (tmp_path / "reliability-vector.json").read_text(encoding="utf-8")
     assert "outcome" not in encoded
     assert "accuracy" not in encoded
+
+
+@pytest.mark.parametrize("controls_executed", [False, True])
+def test_completed_reliability_requires_executed_controls_and_baselines(
+    tmp_path: Path,
+    controls_executed: bool,
+) -> None:
+    selected = _freeze(_write_promotion_receipt(tmp_path / "receipt.json"))
+    budget = _program_budget(maximum_trials=1)
+    trials = build_preregistered_trial_grid(
+        run_ids=("DR-000701",),
+        pca_components=(2,),
+        cluster_counts=(3,),
+        seed_sets=((7, 11),),
+        budget=budget,
+    )
+    policies = {
+        name: {"policy_id": f"{name}-test-v1"}
+        for name in ("stability", "adjacent", "motif", "transition", "missingness")
+    }
+    regime = {
+        "algorithm_version": "regime-test-v1",
+        "information_policy": "contemporaneous",
+        "regime_universe": ["all_observed"],
+    }
+    orchestration = {
+        "subsample_fraction": 0.75,
+        "stability_algorithm_version": "stability-test-v1",
+        "motif_algorithm_version": "motif-test-v1",
+    }
+    preregistration = freeze_discovery_preregistration(
+        preregistration_id="PG-000001",
+        selected_universe=selected,
+        split=_split(),
+        dataset_snapshot_id="DS-000701",
+        feature_set_id="FS-000701",
+        registry_sha256=_sha("1"),
+        normalizer_policy_id="robust-discovery-fit-only-v1",
+        feature_names=("auction_location", "poc_migration_bins"),
+        trials=trials,
+        budget=budget,
+        phase3_execution=_phase3_contract(),
+        run_work_budget=_run_budget(),
+        run_max_rows=100,
+        run_max_iterations=100,
+        run_tolerance=1e-12,
+        stability_policy_sha256=canonical_policy_sha256(policies["stability"]),
+        adjacent_period_policy_sha256=canonical_policy_sha256(policies["adjacent"]),
+        motif_policy_sha256=canonical_policy_sha256(policies["motif"]),
+        transition_policy_sha256=canonical_policy_sha256(policies["transition"]),
+        missingness_policy_sha256=canonical_policy_sha256(policies["missingness"]),
+        regime_contract_sha256=canonical_policy_sha256(regime),
+        orchestration_parameters_sha256=canonical_policy_sha256(orchestration),
+        negative_controls=("seed_perturbation", "time_order_preserving_null"),
+        naive_baselines=("single_cluster", "unconditional_recurrence"),
+        rejection_rules=("stability_policy_rejection",),
+        code_commit="2e2501be5bb531deabd8bb5790150464167c3e34",
+        lock_sha256=_sha("7"),
+    )
+    identity = ArtifactIdentity("artifact-v1", _sha("8"))
+    input_sha256 = _sha("b")
+    negative_contract = expected_reliability_contract("seed_perturbation")
+    null_contract = expected_reliability_contract("time_order_preserving_null")
+    baseline_contract = expected_reliability_contract("single_cluster")
+    recurrence_contract = expected_reliability_contract("unconditional_recurrence")
+    config = ExperimentConfig(
+        run_id="DR-000701",
+        mode=ExperimentMode.DISCOVERY,
+        dataset_snapshot=ArtifactIdentity(preregistration.dataset_snapshot_id, _sha("8")),
+        feature_publication=identity,
+        feature_registry=ArtifactIdentity("registry-v1", preregistration.registry_sha256),
+        normalizer=identity,
+        frozen_split={"sha256": preregistration.split.sha256},
+        detector_version="task14-detector-v1",
+        candidate_id=None,
+        candidate_version=None,
+        code_commit=preregistration.code_commit,
+        lock_sha256=preregistration.lock_sha256,
+        canonical_config={
+            "preregistration_sha256": preregistration.sha256,
+            "run_id": "DR-000701",
+            "dataset_snapshot_id": preregistration.dataset_snapshot_id,
+            "feature_set_id": preregistration.feature_set_id,
+            "registry_sha256": preregistration.registry_sha256,
+            "config_version": preregistration.phase3_execution.config_version,
+            "split": {"sha256": preregistration.split.sha256},
+            "feature_names": list(preregistration.feature_names),
+            "pca_components": trials[0].pca_components,
+            "clusters": trials[0].clusters,
+            "seeds": list(trials[0].seeds),
+            "max_rows": preregistration.run_max_rows,
+            "max_iterations": preregistration.run_max_iterations,
+            "tolerance": preregistration.run_tolerance,
+            "stability_policy": policies["stability"],
+            "adjacent_period_stability_policy": policies["adjacent"],
+            "motif_stability_policy": policies["motif"],
+            "transition_uncertainty_policy": policies["transition"],
+            "missingness_policy": policies["missingness"],
+            "motif_regime_assignments": {**regime, "assignments": []},
+            "work_budget": preregistration.run_work_budget.to_dict(),
+            "orchestration_parameters": orchestration,
+            **(
+                {"reliability_evidence_algorithms": reliability_algorithm_versions()}
+                if controls_executed
+                else {}
+            ),
+            "code_commit": preregistration.code_commit,
+            "lock_sha256": preregistration.lock_sha256,
+        },
+        seed=7,
+        symbols=("APTUSDT",),
+        timeframes=("1m",),
+        ranges=(TrialRange("APTUSDT", "1m", "2025-02-01T00:00:00Z", "2025-06-01T00:00:00Z"),),
+        parent_ids=(),
+        metrics_schema=(
+            {
+                "status": "string",
+                "discovery_matrix_sha256": "string",
+                "work_budget": "object",
+                "negative_controls": "object",
+                "naive_baselines": "object",
+            }
+            if controls_executed
+            else {"status": "string"}
+        ),
+    )
+    metrics: dict[str, object] = {"status": "completed"}
+    artifacts: dict[str, bytes] = {}
+    if controls_executed:
+        work_evidence = _projection_work_evidence(preregistration.run_work_budget)
+        metrics.update(
+            {
+                "discovery_matrix_sha256": input_sha256,
+                "work_budget": work_evidence,
+                "negative_controls": {
+                    "seed_perturbation": ReliabilityEvidence.create(
+                        name=negative_contract.name,
+                        kind=negative_contract.kind,
+                        algorithm_version=negative_contract.algorithm_version,
+                        input_sha256=input_sha256,
+                        source_matrix_sha256=input_sha256,
+                        result={
+                            "seed_count": 2,
+                            "seed_ari": [1.0, 0.9],
+                            "minimum_seed_ari": 0.9,
+                        },
+                    ).to_dict(),
+                    "time_order_preserving_null": ReliabilityEvidence.create(
+                        name=null_contract.name,
+                        kind=null_contract.kind,
+                        algorithm_version=null_contract.algorithm_version,
+                        input_sha256=_sha("c"),
+                        source_matrix_sha256=input_sha256,
+                        result={
+                            "row_count": 3,
+                            "feature_count": 2,
+                            "sequence_count": 1,
+                            "sequences": [
+                                {"row_start": 0, "row_count": 3, "column_offsets": [1, 2]}
+                            ],
+                            "transformed_matrix_sha256": _sha("d"),
+                            "mean_absolute_change": 0.5,
+                            "projection_sha256": _sha("e"),
+                            "frozen_centroids_sha256": _sha("f"),
+                            "projected_null_sha256": _sha("0"),
+                            "null_assignment_counts": {"0": 2, "1": 1},
+                            "primary_inertia": 1.0,
+                            "null_inertia": 1.5,
+                            "inertia_delta": 0.5,
+                            "work_budget_sha256": preregistration.run_work_budget.sha256,
+                            "partition_projection_cells": 6,
+                            "maximum_partition_projection_cells": 1_000,
+                            "reliability_control_projection_cells": 6,
+                            "maximum_reliability_control_projection_cells": 1_000,
+                            "aggregate_projection_cells": 12,
+                            "maximum_aggregate_projection_cells": 2_000,
+                        },
+                    ).to_dict(),
+                },
+                "naive_baselines": {
+                    "single_cluster": ReliabilityEvidence.create(
+                        name=baseline_contract.name,
+                        kind=baseline_contract.kind,
+                        algorithm_version=baseline_contract.algorithm_version,
+                        input_sha256=input_sha256,
+                        source_matrix_sha256=input_sha256,
+                        result={
+                            "row_count": 3,
+                            "feature_count": 2,
+                            "centroid": [0.0, 1.0],
+                            "within_cluster_sum_squares": 2.0,
+                        },
+                    ).to_dict(),
+                    "unconditional_recurrence": ReliabilityEvidence.create(
+                        name=recurrence_contract.name,
+                        kind=recurrence_contract.kind,
+                        algorithm_version=recurrence_contract.algorithm_version,
+                        input_sha256=input_sha256,
+                        source_matrix_sha256=input_sha256,
+                        result={
+                            "row_count": 3,
+                            "state_count": 2,
+                            "state_counts": {"0": 2, "1": 1},
+                            "state_probabilities": {"0": 2 / 3, "1": 1 / 3},
+                            "maximum_probability": 2 / 3,
+                        },
+                    ).to_dict(),
+                },
+            }
+        )
+        discovery_manifest = _discovery_manifest_identity(input_sha256, work_evidence)
+        artifacts["manifest.json"] = (
+            json.dumps(discovery_manifest, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        save_experiment_result(
+            config=config,
+            status=TerminalStatus.COMPLETED,
+            metrics={
+                "status": "completed",
+                "discovery_matrix_sha256": input_sha256,
+                "work_budget": work_evidence,
+                "negative_controls": {"seed_perturbation": {"status": "executed"}},
+                "naive_baselines": {"single_cluster": {"status": "executed"}},
+            },
+            conclusion="Status-only evidence must not count.",
+            started_at=datetime(2026, 7, 22, tzinfo=UTC),
+            completed_at=datetime(2026, 7, 22, 0, 1, tzinfo=UTC),
+            root=tmp_path / "status-only-trials",
+        )
+        with pytest.raises(ValueError, match="schema"):
+            publish_reliability_vector(
+                preregistration=preregistration,
+                trial_root=tmp_path / "status-only-trials",
+                destination=tmp_path / "status-only-vector.json",
+            )
+    save_experiment_result(
+        config=config,
+        status=TerminalStatus.COMPLETED,
+        metrics=metrics,
+        conclusion="Completed outcome-blind fixture.",
+        started_at=datetime(2026, 7, 22, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 22, 0, 1, tzinfo=UTC),
+        artifacts=artifacts,
+        root=tmp_path / "completed-trials",
+    )
+
+    vector = publish_reliability_vector(
+        preregistration=preregistration,
+        trial_root=tmp_path / "completed-trials",
+        destination=tmp_path / "completed-reliability-vector.json",
+    )
+
+    expected = "accepted" if controls_executed else "inconclusive"
+    assert vector.conclusion == expected
+    expected_status = "executed" if controls_executed else "unexecuted"
+    assert vector.negative_control_execution == (
+        ("seed_perturbation", expected_status),
+        ("time_order_preserving_null", expected_status),
+    )
+    assert vector.naive_baseline_execution == (
+        ("single_cluster", expected_status),
+        ("unconditional_recurrence", expected_status),
+    )

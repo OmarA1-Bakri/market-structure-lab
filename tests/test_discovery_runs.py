@@ -52,6 +52,7 @@ from market_structure_lab.discovery import (
     run_discovery,
 )
 from market_structure_lab.discovery.splits import freeze_discovery_provenance
+from market_structure_lab.discovery.reliability import ReliabilityEvidence
 from market_structure_lab.discovery.transitions import TransitionUncertaintyPolicy
 from market_structure_lab.features.normalization import (
     PartitionRole as NormalizerPartitionRole,
@@ -564,6 +565,8 @@ def _fixture(
                 maximum_pca_rows=20,
                 maximum_pca_features=2,
                 maximum_pca_cells=40,
+                maximum_reliability_control_projection_cells=12,
+                maximum_aggregate_projection_cells=36,
                 maximum_clusters=2,
                 maximum_seeds=2,
                 maximum_kmeans_iterations=100,
@@ -683,7 +686,7 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
         (tmp_path / first.run_id / "metrics.json").read_text(encoding="utf-8")
     )
     published_summary = (tmp_path / first.run_id / "summary.md").read_text(encoding="utf-8")
-    assert published_manifest["schema_version"] == "discovery-run-manifest-v2"
+    assert published_manifest["schema_version"] == "discovery-run-manifest-v3"
     assert published_manifest["transition_matrix"] == published_transitions
     assert published_transitions["estimate_semantics"] == ("conditional_recurrence_estimate")
     assert (
@@ -878,6 +881,8 @@ def test_every_discovery_work_budget_field_changes_frozen_config_identity(tmp_pa
         "maximum_pca_rows": 19,
         "maximum_pca_features": 3,
         "maximum_pca_cells": 39,
+        "maximum_reliability_control_projection_cells": 11,
+        "maximum_aggregate_projection_cells": 35,
         "maximum_clusters": 3,
         "maximum_seeds": 3,
         "maximum_kmeans_iterations": 101,
@@ -902,12 +907,19 @@ def test_every_discovery_work_budget_field_changes_frozen_config_identity(tmp_pa
 
 
 @pytest.mark.parametrize(
-    ("field_name", "limit", "message"),
+    ("field_name", "limit", "message", "expected_observed"),
     [
-        ("maximum_materialized_rows", 19, "materialized rows"),
-        ("maximum_feature_cells", 39, "feature cells"),
-        ("maximum_pca_rows", 11, "PCA rows"),
-        ("maximum_pca_cells", 23, "PCA cells"),
+        ("maximum_materialized_rows", 19, "materialized rows", 20),
+        ("maximum_feature_cells", 39, "feature cells", 64),
+        ("maximum_pca_rows", 11, "PCA rows", 12),
+        ("maximum_pca_cells", 23, "PCA cells", 24),
+        (
+            "maximum_reliability_control_projection_cells",
+            11,
+            "reliability-control projection cells",
+            12,
+        ),
+        ("maximum_aggregate_projection_cells", 35, "aggregate projection cells", 36),
     ],
 )
 def test_discovery_work_budget_rejects_before_matrix_construction(
@@ -916,6 +928,7 @@ def test_discovery_work_budget_rejects_before_matrix_construction(
     field_name: str,
     limit: int,
     message: str,
+    expected_observed: int,
 ) -> None:
     arguments = _fixture(tmp_path)
     arguments["config"] = replace(
@@ -935,14 +948,142 @@ def test_discovery_work_budget_rejects_before_matrix_construction(
         "_verify_artifact_provenance",
         provenance_work_was_reached,
     )
-    with pytest.raises(DiscoveryWorkBudgetViolation, match=message):
+    with pytest.raises(DiscoveryWorkBudgetViolation, match=message) as captured:
         _run(arguments)
+
+    assert captured.value.observed == expected_observed
+    assert captured.value.limit == limit
 
     receipt = verify_trial_receipt(tmp_path / "DR-000501")
     assert receipt.status is TerminalStatus.REJECTED
     metrics = json.loads((tmp_path / "DR-000501" / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["status"] == "rejected_work_budget"
     assert metrics["work_budget"]["stage"] == "run_preflight"
+
+
+def test_discovery_work_budget_serializes_exact_versioned_identity(tmp_path) -> None:
+    budget = _fixture(tmp_path)["config"].work_budget
+
+    versioned = budget.to_dict()
+    assert versioned["schema_version"] == "discovery-work-budget-v2"
+    assert versioned["sha256"] == budget.sha256
+    assert versioned["maximum_reliability_control_projection_cells"] == 12
+    assert versioned["maximum_aggregate_projection_cells"] == 36
+
+    legacy = replace(
+        budget,
+        budget_id="software-test-run-work-legacy-v1",
+        maximum_reliability_control_projection_cells=None,
+        maximum_aggregate_projection_cells=None,
+    )
+    legacy_payload = legacy.to_dict()
+    assert legacy_payload["schema_version"] == "discovery-work-budget-v1"
+    assert legacy_payload["sha256"] == legacy.sha256
+    assert "maximum_reliability_control_projection_cells" not in legacy_payload
+    assert "maximum_aggregate_projection_cells" not in legacy_payload
+
+
+def test_motif_window_budget_rejects_before_provenance_or_matrix_construction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arguments = _fixture(tmp_path)
+    arguments["config"] = replace(
+        arguments["config"],
+        motif_stability_policy=replace(
+            arguments["config"].motif_stability_policy,
+            max_windows=9,
+        ),
+    )
+
+    def matrix_work_was_reached(*args, **kwargs):
+        raise AssertionError("motif-window rejection reached matrix construction")
+
+    def provenance_work_was_reached(*args, **kwargs):
+        raise AssertionError("motif-window rejection reached provenance scans")
+
+    monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_work_was_reached)
+    monkeypatch.setattr(
+        discovery_runs,
+        "_verify_artifact_provenance",
+        provenance_work_was_reached,
+    )
+
+    with pytest.raises(DiscoveryWorkBudgetViolation, match="motif windows") as captured:
+        _run(arguments)
+
+    assert captured.value.stage == "run_preflight"
+    assert captured.value.observed == 10
+    assert captured.value.limit == 9
+    receipt = verify_trial_receipt(tmp_path / "DR-000501")
+    assert receipt.status is TerminalStatus.REJECTED
+
+
+def test_discovery_publishes_replayable_control_and_baseline_evidence(tmp_path) -> None:
+    arguments = _fixture(tmp_path)
+
+    _run(arguments)
+
+    metrics = json.loads((tmp_path / "DR-000501" / "metrics.json").read_text(encoding="utf-8"))
+    config = json.loads((tmp_path / "DR-000501" / "config.json").read_text(encoding="utf-8"))
+    stability = json.loads((tmp_path / "DR-000501" / "stability.json").read_text(encoding="utf-8"))
+    assert set(metrics["negative_controls"]) == {
+        "seed_perturbation",
+        "time_order_preserving_null",
+    }
+    assert set(metrics["naive_baselines"]) == {
+        "single_cluster",
+        "unconditional_recurrence",
+    }
+    evidence = {
+        name: ReliabilityEvidence.from_dict(payload)
+        for group in (metrics["negative_controls"], metrics["naive_baselines"])
+        for name, payload in group.items()
+    }
+    assert all(
+        evidence[name].input_sha256 == metrics["discovery_matrix_sha256"]
+        for name in ("seed_perturbation", "single_cluster", "unconditional_recurrence")
+    )
+    assert all(
+        item.source_matrix_sha256 == metrics["discovery_matrix_sha256"]
+        for item in evidence.values()
+    )
+    assert evidence["seed_perturbation"].result["seed_ari"] == stability["seed_ari"]
+    assert evidence["time_order_preserving_null"].result["row_count"] == metrics["discovery_rows"]
+    assert (
+        evidence["time_order_preserving_null"].result["projection_sha256"]
+        == json.loads((tmp_path / "DR-000501" / "clustering.json").read_text(encoding="utf-8"))[
+            "projection_sha256"
+        ]
+    )
+    assert (
+        sum(evidence["time_order_preserving_null"].result["null_assignment_counts"].values())
+        == metrics["discovery_rows"]
+    )
+    assert len(evidence["single_cluster"].result["centroid"]) == len(
+        arguments["config"].feature_names
+    )
+    assert (
+        sum(evidence["unconditional_recurrence"].result["state_counts"].values())
+        == metrics["discovery_rows"]
+    )
+    assert config["reliability_evidence_algorithms"] == {
+        name: item.algorithm_version for name, item in sorted(evidence.items())
+    }
+    assert metrics["work_budget"]["reliability_control_feature_cells"] == (
+        len(arguments["discovery"].rows) * len(arguments["config"].feature_names)
+    )
+    projection_cells = len(arguments["discovery"].rows) * arguments["config"].pca_components
+    assert metrics["work_budget"]["reliability_control_projection_cells"] == projection_cells
+    assert metrics["work_budget"]["aggregate_projection_cells"] == (
+        metrics["work_budget"]["maximum_partition_pca_cells"] + projection_cells
+    )
+    null_evidence = evidence["time_order_preserving_null"].result
+    assert null_evidence["work_budget_sha256"] == arguments["config"].work_budget.sha256
+    assert null_evidence["reliability_control_projection_cells"] == projection_cells
+    assert null_evidence["aggregate_projection_cells"] == (
+        metrics["work_budget"]["maximum_partition_pca_cells"] + projection_cells
+    )
 
 
 @pytest.mark.parametrize(
@@ -953,6 +1094,8 @@ def test_discovery_work_budget_rejects_before_matrix_construction(
         ("maximum_pca_rows", 10**12),
         ("maximum_pca_features", 10**12),
         ("maximum_pca_cells", 10**12),
+        ("maximum_reliability_control_projection_cells", 10**12),
+        ("maximum_aggregate_projection_cells", 10**12),
         ("maximum_clusters", 10**12),
         ("maximum_seeds", 10**12),
         ("maximum_kmeans_iterations", 10**12),
@@ -972,6 +1115,8 @@ def test_discovery_work_budget_rejects_invalid_or_unsafe_limits(
         "maximum_pca_rows": 20,
         "maximum_pca_features": 2,
         "maximum_pca_cells": 40,
+        "maximum_reliability_control_projection_cells": 12,
+        "maximum_aggregate_projection_cells": 36,
         "maximum_clusters": 2,
         "maximum_seeds": 2,
         "maximum_kmeans_iterations": 100,

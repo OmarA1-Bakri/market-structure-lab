@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from itertools import product
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, cast
 
 import polars as pl
 
@@ -37,6 +37,11 @@ from market_structure_lab.data.reconciliation.receipts import (
 from market_structure_lab.data.segments import SegmentBoundary, segment_boundaries_sha256
 from market_structure_lab.discovery.splits import FrozenDiscoverySplit
 from market_structure_lab.discovery.runs import DiscoveryWorkBudget
+from market_structure_lab.discovery.reliability import (
+    ReliabilityEvidence,
+    expected_reliability_contract,
+    reliability_algorithm_versions,
+)
 from market_structure_lab.events import segment_fixed_windows
 from market_structure_lab.experiments import TrialManifest, read_trial_ledger
 from market_structure_lab.features import FeatureBuilder
@@ -153,7 +158,7 @@ class SelectedUniverse:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": "selected-universe-v1",
+            "schema_version": "selected-universe-v2",
             "selection_id": self.selection_id,
             "symbols": list(self.symbols),
             "timeframe": self.timeframe,
@@ -306,6 +311,7 @@ class DiscoveryPreregistration:
 
     preregistration_id: str
     selected_universe_sha256: str
+    selected_timeframe: str
     split: FrozenDiscoverySplit
     dataset_snapshot_id: str
     feature_set_id: str
@@ -357,10 +363,18 @@ class DiscoveryPreregistration:
             (self.lock_sha256, "lock_sha256"),
         ):
             _require_sha256(value, field)
+        if self.selected_timeframe != "1m":
+            raise ValueError("selected_timeframe must bind the canonical 1m universe")
         _require_safe_id(self.normalizer_policy_id, "normalizer_policy_id")
         _require_ordered_unique(self.feature_names, "feature_names", canonical=False)
         _require_ordered_unique(self.negative_controls, "negative_controls")
         _require_ordered_unique(self.naive_baselines, "naive_baselines")
+        for name in self.negative_controls:
+            if expected_reliability_contract(name).kind != "negative_control":
+                raise ValueError("negative_controls contain an unsupported contract")
+        for name in self.naive_baselines:
+            if expected_reliability_contract(name).kind != "naive_baseline":
+                raise ValueError("naive_baselines contain an unsupported contract")
         _require_ordered_unique(self.rejection_rules, "rejection_rules")
         for value, field in (
             (self.survivorship_policy, "survivorship_policy"),
@@ -401,9 +415,10 @@ class DiscoveryPreregistration:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": "discovery-preregistration-v1",
+            "schema_version": "discovery-preregistration-v2",
             "preregistration_id": self.preregistration_id,
             "selected_universe_sha256": self.selected_universe_sha256,
+            "selected_timeframe": self.selected_timeframe,
             "split_sha256": self.split.sha256,
             "discovery_metadata": self.split.discovery.to_dict(),
             "development_metadata": self.split.development.to_dict(),
@@ -509,15 +524,19 @@ class DiscoveryReliabilityVector:
     attempted_trial_count: int
     status_counts: tuple[tuple[str, int], ...]
     conclusion: str
+    negative_control_execution: tuple[tuple[str, str], ...]
+    naive_baseline_execution: tuple[tuple[str, str], ...]
     trials: tuple[TrialReliabilityRecord, ...]
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": "discovery-reliability-vector-v1",
+            "schema_version": "discovery-reliability-vector-v2",
             "preregistration_sha256": self.preregistration_sha256,
             "attempted_trial_count": self.attempted_trial_count,
             "status_counts": dict(self.status_counts),
             "conclusion": self.conclusion,
+            "negative_control_execution": dict(self.negative_control_execution),
+            "naive_baseline_execution": dict(self.naive_baseline_execution),
             "trials": [item.to_dict() for item in self.trials],
         }
 
@@ -614,6 +633,7 @@ def freeze_discovery_preregistration(
     return DiscoveryPreregistration(
         preregistration_id=preregistration_id,
         selected_universe_sha256=selected_universe.sha256,
+        selected_timeframe=selected_universe.timeframe,
         split=split,
         dataset_snapshot_id=dataset_snapshot_id,
         feature_set_id=feature_set_id,
@@ -858,18 +878,40 @@ def publish_reliability_vector(
             raise ValueError("reliability vector accepts discovery-mode receipts only")
         if manifest.canonical_config.get("preregistration_sha256") != preregistration.sha256:
             raise ValueError("trial receipt is not bound to the preregistration")
-        _verify_trial_config(preregistration, trial, manifest)
+        work_budget = _verify_trial_config(preregistration, trial, manifest)
         records.append(
             TrialReliabilityRecord.from_manifest(
                 manifest,
-                _trial_reliability_evidence(trial_root / manifest.run_id, manifest),
+                _trial_reliability_evidence(
+                    trial_root / manifest.run_id,
+                    manifest,
+                    work_budget=work_budget,
+                    negative_controls=preregistration.negative_controls,
+                    naive_baselines=preregistration.naive_baselines,
+                ),
             )
         )
     frozen_records = tuple(records)
     counts: dict[str, int] = {}
     for record in frozen_records:
         counts[record.status] = counts.get(record.status, 0) + 1
-    if any(record.status == "completed" for record in frozen_records):
+    negative_control_execution = _aggregate_execution_classification(
+        preregistration.negative_controls,
+        frozen_records,
+        evidence_field="negative_control_execution",
+    )
+    naive_baseline_execution = _aggregate_execution_classification(
+        preregistration.naive_baselines,
+        frozen_records,
+        evidence_field="naive_baseline_execution",
+    )
+    all_required_evidence_executed = all(
+        status == "executed"
+        for _, status in (*negative_control_execution, *naive_baseline_execution)
+    )
+    if any(record.status == "completed" for record in frozen_records) and (
+        all_required_evidence_executed
+    ):
         conclusion = "accepted"
     elif frozen_records and all(record.status == "rejected" for record in frozen_records):
         conclusion = "rejected"
@@ -880,6 +922,8 @@ def publish_reliability_vector(
         attempted_trial_count=len(frozen_records),
         status_counts=tuple(sorted(counts.items())),
         conclusion=conclusion,
+        negative_control_execution=negative_control_execution,
+        naive_baseline_execution=naive_baseline_execution,
         trials=frozen_records,
     )
     payload = {
@@ -906,7 +950,9 @@ def _verify_trial_config(
     preregistration: DiscoveryPreregistration,
     trial: PreregisteredTrial,
     manifest: TrialManifest,
-) -> None:
+) -> DiscoveryWorkBudget:
+    if manifest.timeframes != (preregistration.selected_timeframe,):
+        raise ValueError("trial receipt timeframe does not match the preregistration")
     if (
         manifest.run_id != trial.run_id
         or manifest.dataset_snapshot.identifier != preregistration.dataset_snapshot_id
@@ -962,7 +1008,11 @@ def _verify_trial_config(
         actual_work_budget = DiscoveryWorkBudget(**work_values)
     except (TypeError, ValueError) as error:
         raise ValueError("trial receipt work budget does not match the preregistration") from error
-    if actual_work_budget != preregistration.run_work_budget:
+    if (
+        dict(work_budget) != actual_work_budget.to_dict()
+        or actual_work_budget != preregistration.run_work_budget
+        or actual_work_budget.sha256 != preregistration.run_work_budget.sha256
+    ):
         raise ValueError("trial receipt work budget does not match the preregistration")
     orchestration = config.get("orchestration_parameters")
     if (
@@ -980,11 +1030,16 @@ def _verify_trial_config(
     }
     if canonical_policy_sha256(regime_policy) != preregistration.regime_contract_sha256:
         raise ValueError("trial receipt regime contract does not match preregistration")
+    return actual_work_budget
 
 
 def _trial_reliability_evidence(
     directory: Path,
     manifest: TrialManifest,
+    *,
+    work_budget: DiscoveryWorkBudget,
+    negative_controls: tuple[str, ...],
+    naive_baselines: tuple[str, ...],
 ) -> dict[str, object]:
     artifacts = dict(manifest.artifact_sha256)
 
@@ -995,6 +1050,8 @@ def _trial_reliability_evidence(
             directory / name,
             64 * 1024 * 1024,
         )
+        if _sha256(payload) != artifacts[name]:
+            raise RuntimeError("trial evidence artifact hash does not match terminal receipt")
         try:
             value = json.loads(payload)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -1004,9 +1061,33 @@ def _trial_reliability_evidence(
         return value
 
     metrics = optional_json("metrics.json")
+    discovery_manifest = optional_json("manifest.json")
     stability = optional_json("stability.json")
     motifs = optional_json("motifs.json")
     transitions = optional_json("transitions.json")
+    negative_control_execution = _execution_classification(
+        metrics,
+        declared=negative_controls,
+        metrics_field="negative_controls",
+        work_budget=work_budget,
+        discovery_manifest=discovery_manifest,
+    )
+    naive_baseline_execution = _execution_classification(
+        metrics,
+        declared=naive_baselines,
+        metrics_field="naive_baselines",
+        work_budget=work_budget,
+        discovery_manifest=discovery_manifest,
+    )
+    if (
+        any(
+            status == "executed"
+            for _, status in (*negative_control_execution, *naive_baseline_execution)
+        )
+        and manifest.canonical_config.get("reliability_evidence_algorithms")
+        != reliability_algorithm_versions()
+    ):
+        raise RuntimeError("trial reliability algorithms are not frozen in config identity")
     return {
         "data_evidence": {
             "dataset_snapshot": manifest.dataset_snapshot.to_dict(),
@@ -1022,6 +1103,8 @@ def _trial_reliability_evidence(
         "cluster_stability": stability,
         "motif_stability": motifs,
         "transition_intervals": transitions,
+        "negative_control_execution": dict(negative_control_execution),
+        "naive_baseline_execution": dict(naive_baseline_execution),
         "asset_regime_breakdowns": {
             "stability": stability,
             "motifs": motifs,
@@ -1032,6 +1115,136 @@ def _trial_reliability_evidence(
             "conclusion": manifest.conclusion,
         },
     }
+
+
+def _execution_classification(
+    metrics: object,
+    *,
+    declared: tuple[str, ...],
+    metrics_field: str,
+    work_budget: DiscoveryWorkBudget,
+    discovery_manifest: object,
+) -> tuple[tuple[str, str], ...]:
+    raw = metrics.get(metrics_field) if isinstance(metrics, Mapping) else None
+    if raw is None:
+        return tuple((name, "unexecuted") for name in declared)
+    if not isinstance(raw, Mapping) or any(name not in declared for name in raw):
+        raise RuntimeError("trial control execution evidence is malformed")
+    if not raw:
+        return tuple((name, "unexecuted") for name in declared)
+    input_sha256 = metrics.get("discovery_matrix_sha256") if isinstance(metrics, Mapping) else None
+    if not isinstance(input_sha256, str) or _SHA256.fullmatch(input_sha256) is None:
+        raise RuntimeError("trial control execution input identity is missing")
+    work_evidence: Mapping[str, object] | None = None
+    metrics_mapping = cast(Mapping[str, object], metrics)
+    classified: list[tuple[str, str]] = []
+    for name in declared:
+        payload = raw.get(name)
+        if payload is None:
+            classified.append((name, "unexecuted"))
+            continue
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("trial control execution evidence is malformed")
+        evidence = ReliabilityEvidence.from_dict(payload)
+        if work_evidence is None:
+            work_evidence = _verify_reliability_context(
+                metrics=metrics_mapping,
+                discovery_manifest=discovery_manifest,
+                input_sha256=input_sha256,
+                work_budget=work_budget,
+            )
+        if evidence.name != name or evidence.source_matrix_sha256 != input_sha256:
+            raise RuntimeError("trial control execution evidence identity is inconsistent")
+        if name == "time_order_preserving_null":
+            assert work_evidence is not None
+            _verify_null_projection_budget(evidence.result, work_evidence, work_budget)
+        classified.append((name, "executed"))
+    return tuple(classified)
+
+
+def _verify_reliability_context(
+    *,
+    metrics: Mapping[str, object],
+    discovery_manifest: object,
+    input_sha256: str,
+    work_budget: DiscoveryWorkBudget,
+) -> Mapping[str, object]:
+    if not isinstance(discovery_manifest, Mapping):
+        raise RuntimeError("trial discovery manifest identity is missing")
+    if discovery_manifest.get("schema_version") != "discovery-run-manifest-v3":
+        raise RuntimeError("trial discovery manifest schema is invalid")
+    manifest_sha256 = discovery_manifest.get("manifest_sha256")
+    manifest_body = {
+        key: value for key, value in discovery_manifest.items() if key != "manifest_sha256"
+    }
+    if (
+        not isinstance(manifest_sha256, str)
+        or _SHA256.fullmatch(manifest_sha256) is None
+        or canonical_policy_sha256(manifest_body) != manifest_sha256
+    ):
+        raise RuntimeError("trial discovery manifest identity is invalid")
+    if discovery_manifest.get("discovery_matrix_sha256") != input_sha256:
+        raise RuntimeError("trial control matrix identity is inconsistent")
+    work_evidence = metrics.get("work_budget")
+    if not isinstance(work_evidence, Mapping):
+        raise RuntimeError("trial control work budget evidence is missing")
+    if (
+        canonical_policy_sha256(work_evidence) != discovery_manifest.get("work_preflight_sha256")
+        or work_evidence.get("budget_sha256") != work_budget.sha256
+    ):
+        raise RuntimeError("trial control work budget identity is inconsistent")
+    return work_evidence
+
+
+def _verify_null_projection_budget(
+    result: Mapping[str, object],
+    work_evidence: Mapping[str, object],
+    work_budget: DiscoveryWorkBudget,
+) -> None:
+    control_limit = (
+        work_budget.maximum_reliability_control_projection_cells or work_budget.maximum_pca_cells
+    )
+    aggregate_limit = (
+        work_budget.maximum_aggregate_projection_cells or work_budget.maximum_pca_cells * 2
+    )
+    expected = {
+        "work_budget_sha256": work_budget.sha256,
+        "partition_projection_cells": work_evidence.get("maximum_partition_pca_cells"),
+        "maximum_partition_projection_cells": work_budget.maximum_pca_cells,
+        "reliability_control_projection_cells": work_evidence.get(
+            "reliability_control_projection_cells"
+        ),
+        "maximum_reliability_control_projection_cells": control_limit,
+        "aggregate_projection_cells": work_evidence.get("aggregate_projection_cells"),
+        "maximum_aggregate_projection_cells": aggregate_limit,
+    }
+    expected_work_limits = {
+        "maximum_partition_pca_cells_limit": work_budget.maximum_pca_cells,
+        "maximum_reliability_control_projection_cells": control_limit,
+        "maximum_aggregate_projection_cells": aggregate_limit,
+    }
+    if any(work_evidence.get(name) != value for name, value in expected_work_limits.items()):
+        raise RuntimeError("trial control projection work budget is inconsistent")
+    if any(result.get(name) != value for name, value in expected.items()):
+        raise RuntimeError("trial null projection evidence does not match the frozen work budget")
+
+
+def _aggregate_execution_classification(
+    declared: tuple[str, ...],
+    records: tuple[TrialReliabilityRecord, ...],
+    *,
+    evidence_field: str,
+) -> tuple[tuple[str, str], ...]:
+    completed = tuple(record for record in records if record.status == "completed")
+    aggregate: list[tuple[str, str]] = []
+    for name in declared:
+        executed = bool(completed) and all(
+            isinstance((evidence := dict(record.evidence).get(evidence_field)), Mapping)
+            and evidence.get(name) == "executed"
+            for record in completed
+        )
+        aggregate.append((name, "executed" if executed else "unexecuted"))
+    return tuple(aggregate)
 
 
 def _iter_auction_snapshots(

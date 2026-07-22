@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Literal, Mapping, Sequence
+from typing import Literal, Mapping, Sequence, cast
 
 from market_structure_lab.core.artifact_io import (
     bounded_regular_files,
@@ -58,6 +58,10 @@ from market_structure_lab.discovery.motifs import (
     evaluate_motif_stability,
 )
 from market_structure_lab.discovery.pca import fit_pca
+from market_structure_lab.discovery.reliability import (
+    execute_reliability_evidence,
+    reliability_algorithm_versions,
+)
 from market_structure_lab.discovery.splits import (
     DiscoveryInput,
     DiscoveryProvenance,
@@ -139,6 +143,8 @@ class DiscoveryWorkBudget:
     maximum_total_stability_fits: int
     maximum_serialized_evidence_bytes: int
     maximum_bundle_entries: int
+    maximum_reliability_control_projection_cells: int | None = None
+    maximum_aggregate_projection_cells: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -165,10 +171,31 @@ class DiscoveryWorkBudget:
                 raise ValueError(f"{field_name} must be a positive integer")
             if value > hard_limit:
                 raise ValueError(f"{field_name} exceeds its conservative safety maximum")
+        optional_projection_limits = {
+            "maximum_reliability_control_projection_cells": _MAX_PCA_CELLS,
+            "maximum_aggregate_projection_cells": _MAX_PCA_CELLS * 2,
+        }
+        supplied = tuple(
+            getattr(self, field_name) is not None for field_name in optional_projection_limits
+        )
+        if any(supplied) and not all(supplied):
+            raise ValueError("projection work-budget limits must be supplied together")
+        for field_name, hard_limit in optional_projection_limits.items():
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{field_name} must be a positive integer")
+            if value > hard_limit:
+                raise ValueError(f"{field_name} exceeds its conservative safety maximum")
 
     @property
     def sha256(self) -> str:
         return _sha256(_canonical_json(_work_budget_payload(self, include_sha256=False)))
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the exact versioned, hash-bound work-budget identity."""
+        return _work_budget_payload(self)
 
 
 class DiscoveryWorkBudgetViolation(ValueError):
@@ -342,10 +369,30 @@ class DiscoveryRunManifest:
     behaviours: tuple[FrozenBehaviour, ...]
     transition_matrix: ClusterTransitionMatrix
     manifest_sha256: str
+    discovery_matrix_sha256: str | None = None
+    work_preflight_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        supplied = (
+            self.discovery_matrix_sha256 is not None,
+            self.work_preflight_sha256 is not None,
+        )
+        if any(supplied) and not all(supplied):
+            raise ValueError("discovery manifest v3 identities must be supplied together")
+        if self.discovery_matrix_sha256 is not None:
+            _require_sha256(self.discovery_matrix_sha256, "discovery_matrix_sha256")
+            _require_sha256(
+                cast(str, self.work_preflight_sha256),
+                "work_preflight_sha256",
+            )
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "schema_version": "discovery-run-manifest-v2",
+        payload: dict[str, object] = {
+            "schema_version": (
+                "discovery-run-manifest-v3"
+                if self.discovery_matrix_sha256 is not None
+                else "discovery-run-manifest-v2"
+            ),
             "run_id": self.run_id,
             "status": self.status,
             "identity_sha256": self.identity_sha256,
@@ -355,6 +402,10 @@ class DiscoveryRunManifest:
             "transition_matrix": _jsonable(self.transition_matrix),
             "manifest_sha256": self.manifest_sha256,
         }
+        if self.discovery_matrix_sha256 is not None:
+            payload["discovery_matrix_sha256"] = self.discovery_matrix_sha256
+            payload["work_preflight_sha256"] = self.work_preflight_sha256
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -575,6 +626,26 @@ def _run_discovery_implementation(
         adjacent_period_policy=config.adjacent_period_stability_policy,
         max_iterations=config.max_iterations,
     )
+    negative_controls, naive_baselines = execute_reliability_evidence(
+        discovery=discovery_matrix,
+        stability=stability,
+        assignments=clustering.assignments,
+        sequence_lengths=_causal_sequence_lengths(selected_discovery),
+        projection=projection,
+        clustering=clustering,
+        work_budget_sha256=config.work_budget.sha256,
+        partition_projection_cells=max(len(discovery.rows), len(development.rows))
+        * len(config.feature_names),
+        maximum_partition_projection_cells=config.work_budget.maximum_pca_cells,
+        maximum_reliability_control_projection_cells=(
+            config.work_budget.maximum_reliability_control_projection_cells
+            or config.work_budget.maximum_pca_cells
+        ),
+        maximum_aggregate_projection_cells=(
+            config.work_budget.maximum_aggregate_projection_cells
+            or config.work_budget.maximum_pca_cells * 2
+        ),
+    )
     behaviours = freeze_behaviours(
         run_id=config.run_id,
         matrix=discovery_matrix,
@@ -626,8 +697,16 @@ def _run_discovery_implementation(
         "discovery": _jsonable(discovery_matrix.missingness_evidence),
         "development": _jsonable(development_matrix.missingness_evidence),
     }
+    work_budget_evidence = _work_preflight_evidence(config, discovery, development)
     metrics_payload = {
         "status": status,
+        "discovery_matrix_sha256": discovery_matrix.sha256,
+        "negative_controls": {
+            name: evidence.to_dict() for name, evidence in sorted(negative_controls.items())
+        },
+        "naive_baselines": {
+            name: evidence.to_dict() for name, evidence in sorted(naive_baselines.items())
+        },
         "discovery_rows": len(discovery_matrix.values),
         "development_rows": len(development_matrix.values),
         "missingness": missingness_payload,
@@ -635,7 +714,7 @@ def _run_discovery_implementation(
             "discovery": discovery_matrix.dropped_null_rows,
             "development": development_matrix.dropped_null_rows,
         },
-        "work_budget": _work_preflight_evidence(config, discovery, development),
+        "work_budget": work_budget_evidence,
         "behaviours": len(behaviours),
         "motif_candidates": len(motif_report.candidates),
         "motifs_published": motif_report.published_count,
@@ -677,7 +756,7 @@ def _run_discovery_implementation(
     artifact_hashes = tuple(sorted((name, _sha256(content)) for name, content in payloads.items()))
     config_sha256 = _sha256(_canonical_json(config_payload))
     manifest_without_hash = {
-        "schema_version": "discovery-run-manifest-v2",
+        "schema_version": "discovery-run-manifest-v3",
         "run_id": config.run_id,
         "status": status,
         "identity_sha256": identity_sha256,
@@ -685,6 +764,8 @@ def _run_discovery_implementation(
         "artifact_sha256": dict(artifact_hashes),
         "behaviour_ids": [item.behaviour_id for item in behaviours],
         "transition_matrix": _jsonable(transition_matrix),
+        "discovery_matrix_sha256": discovery_matrix.sha256,
+        "work_preflight_sha256": _sha256(_canonical_json(work_budget_evidence)),
     }
     manifest = DiscoveryRunManifest(
         run_id=config.run_id,
@@ -695,6 +776,8 @@ def _run_discovery_implementation(
         behaviours=behaviours,
         transition_matrix=transition_matrix,
         manifest_sha256=_sha256(_canonical_json(manifest_without_hash)),
+        discovery_matrix_sha256=discovery_matrix.sha256,
+        work_preflight_sha256=_sha256(_canonical_json(work_budget_evidence)),
     )
     manifest_bytes = _json_file(manifest.to_dict())
     payloads["manifest.json"] = manifest_bytes
@@ -1241,7 +1324,9 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
             "subsample_fraction": _SUBSAMPLE_FRACTION,
             "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
             "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
+            "reliability_evidence_algorithms": reliability_algorithm_versions(),
         },
+        "reliability_evidence_algorithms": reliability_algorithm_versions(),
     }
     payload.update(
         {
@@ -1287,6 +1372,9 @@ def _missingness_rejection_metrics(
             "budget_sha256": config.work_budget.sha256,
             "stage": "matrix_admission",
         },
+        "discovery_matrix_sha256": "",
+        "negative_controls": {},
+        "naive_baselines": {},
         "behaviours": 0,
         "motif_candidates": 0,
         "motifs_published": 0,
@@ -1304,7 +1392,11 @@ def _work_budget_payload(
     include_sha256: bool = True,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
-        "schema_version": "discovery-work-budget-v1",
+        "schema_version": (
+            "discovery-work-budget-v2"
+            if budget.maximum_reliability_control_projection_cells is not None
+            else "discovery-work-budget-v1"
+        ),
         "budget_id": budget.budget_id,
         "maximum_materialized_rows": budget.maximum_materialized_rows,
         "maximum_feature_cells": budget.maximum_feature_cells,
@@ -1318,6 +1410,11 @@ def _work_budget_payload(
         "maximum_serialized_evidence_bytes": budget.maximum_serialized_evidence_bytes,
         "maximum_bundle_entries": budget.maximum_bundle_entries,
     }
+    if budget.maximum_reliability_control_projection_cells is not None:
+        payload["maximum_reliability_control_projection_cells"] = (
+            budget.maximum_reliability_control_projection_cells
+        )
+        payload["maximum_aggregate_projection_cells"] = budget.maximum_aggregate_projection_cells
     if include_sha256:
         payload["sha256"] = budget.sha256
     return payload
@@ -1332,6 +1429,21 @@ def _preflight_discovery_work(
     row_counts = (len(discovery.rows), len(development.rows))
     total_rows = sum(row_counts)
     feature_count = len(config.feature_names)
+    reliability_control_feature_cells = row_counts[0] * feature_count
+    aggregate_feature_cells = total_rows * feature_count + reliability_control_feature_cells
+    partition_projection_cells = max(row_counts) * feature_count
+    reliability_control_projection_cells = row_counts[0] * config.pca_components
+    aggregate_projection_cells = partition_projection_cells + reliability_control_projection_cells
+    reliability_projection_limit = (
+        budget.maximum_reliability_control_projection_cells or budget.maximum_pca_cells
+    )
+    aggregate_projection_limit = (
+        budget.maximum_aggregate_projection_cells or budget.maximum_pca_cells * 2
+    )
+    maximum_motif_windows = max(
+        _motif_window_upper_bound(item.rows, config.motif_stability_policy.window_lengths)
+        for item in (discovery, development)
+    )
     checks = (
         (
             total_rows,
@@ -1349,7 +1461,7 @@ def _preflight_discovery_work(
             "bundle entries exceed the frozen discovery work budget",
         ),
         (
-            total_rows * feature_count,
+            aggregate_feature_cells,
             budget.maximum_feature_cells,
             "feature cells exceed the frozen discovery work budget",
         ),
@@ -1359,9 +1471,24 @@ def _preflight_discovery_work(
             "PCA rows exceed the frozen discovery work budget",
         ),
         (
-            max(row_counts) * feature_count,
+            partition_projection_cells,
             budget.maximum_pca_cells,
             "PCA cells exceed the frozen discovery work budget",
+        ),
+        (
+            reliability_control_projection_cells,
+            reliability_projection_limit,
+            "reliability-control projection cells exceed the frozen discovery work budget",
+        ),
+        (
+            aggregate_projection_cells,
+            aggregate_projection_limit,
+            "aggregate projection cells exceed the frozen discovery work budget",
+        ),
+        (
+            maximum_motif_windows,
+            config.motif_stability_policy.max_windows,
+            "motif windows exceed the frozen motif work budget",
         ),
     )
     for observed, limit, message in checks:
@@ -1381,18 +1508,79 @@ def _work_preflight_evidence(
 ) -> dict[str, object]:
     feature_count = len(config.feature_names)
     row_counts = (len(discovery.rows), len(development.rows))
+    partition_projection_cells = max(row_counts) * feature_count
+    reliability_control_projection_cells = len(discovery.rows) * config.pca_components
     return {
         "budget_sha256": config.work_budget.sha256,
         "materialized_rows": sum(row_counts),
         "feature_cells": sum(row_counts) * feature_count,
+        "reliability_control_feature_cells": len(discovery.rows) * feature_count,
+        "aggregate_feature_cells": (
+            sum(row_counts) * feature_count + len(discovery.rows) * feature_count
+        ),
         "maximum_partition_pca_rows": max(row_counts),
         "pca_features": feature_count,
-        "maximum_partition_pca_cells": max(row_counts) * feature_count,
+        "maximum_partition_pca_cells": partition_projection_cells,
+        "maximum_partition_pca_cells_limit": config.work_budget.maximum_pca_cells,
+        "reliability_control_projection_cells": reliability_control_projection_cells,
+        "maximum_reliability_control_projection_cells": (
+            config.work_budget.maximum_reliability_control_projection_cells
+            or config.work_budget.maximum_pca_cells
+        ),
+        "aggregate_projection_cells": (
+            partition_projection_cells + reliability_control_projection_cells
+        ),
+        "maximum_aggregate_projection_cells": (
+            config.work_budget.maximum_aggregate_projection_cells
+            or config.work_budget.maximum_pca_cells * 2
+        ),
         "clusters": config.clusters,
         "seeds": len(config.seeds),
         "kmeans_iterations": config.max_iterations,
         "total_stability_fits": len(config.seeds) * 2 + 2,
+        "maximum_motif_windows": max(
+            _motif_window_upper_bound(item.rows, config.motif_stability_policy.window_lengths)
+            for item in (discovery, development)
+        ),
     }
+
+
+def _motif_window_upper_bound(
+    rows: Sequence[FeatureRow],
+    window_lengths: Sequence[int],
+) -> int:
+    sequence_lengths = _causal_sequence_lengths(rows)
+    return max(
+        (
+            sum(max(length - window_length + 1, 0) for length in sequence_lengths)
+            for window_length in window_lengths
+        ),
+        default=0,
+    )
+
+
+def _causal_sequence_lengths(rows: Sequence[FeatureRow]) -> tuple[int, ...]:
+    sequence_lengths: list[int] = []
+    active_length = 0
+    previous: FeatureRow | None = None
+    for row in rows:
+        contiguous = previous is not None and (
+            previous.symbol == row.symbol
+            and previous.timeframe == row.timeframe
+            and previous.segment_id == row.segment_id
+            and previous.timestamp.date() == row.timestamp.date()
+            and previous.information_cutoff == row.timestamp
+        )
+        if not contiguous:
+            if active_length:
+                sequence_lengths.append(active_length)
+            active_length = 1
+        else:
+            active_length += 1
+        previous = row
+    if active_length:
+        sequence_lengths.append(active_length)
+    return tuple(sequence_lengths)
 
 
 def _preflight_serialized_bundle(
@@ -1433,6 +1621,9 @@ def _work_budget_rejection_metrics(
             "observed": error.observed,
             "limit": error.limit,
         },
+        "discovery_matrix_sha256": "",
+        "negative_controls": {},
+        "naive_baselines": {},
         "behaviours": 0,
         "motif_candidates": 0,
         "motifs_published": 0,
@@ -1515,6 +1706,9 @@ def _trial_config(
             "motifs_published": "integer",
             "motifs_rejected": "integer",
             "status": "string",
+            "discovery_matrix_sha256": "string",
+            "negative_controls": "object",
+            "naive_baselines": "object",
             "transitions": "integer",
             "conditional_recurrence_estimates": "integer",
             "conditional_recurrence_rejected": "integer",
