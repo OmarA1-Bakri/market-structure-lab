@@ -357,7 +357,7 @@ def publish_aggregate_bars(
     config_version: str,
     demand: ValidationWorkDemand,
     budget: ValidationWorkBudget,
-    max_rows_per_partition: int = 4_096,
+    max_rows_per_partition: int = MAX_AGGREGATE_ROWS_PER_PARTITION,
 ) -> AggregatePublicationManifest:
     """Publish one exact aggregate stream atomically without materialising all bars."""
 

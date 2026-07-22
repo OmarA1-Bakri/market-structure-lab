@@ -197,6 +197,31 @@ def test_clean_root_publication_is_byte_identical_across_source_chunking(tmp_pat
     verify_aggregate_publication(published_directory(tmp_path / "first"), first)
 
 
+def test_default_partition_row_bound_is_valid_and_never_exceeds_memory_cap(
+    tmp_path: Path,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+
+    manifest = publish_aggregate_bars(
+        [frame],
+        output_root=tmp_path / "output",
+        parent_snapshot_directory=parent_directory,
+        parent_snapshot_manifest=source_manifest,
+        symbol="SOLUSDT",
+        segment_id=0,
+        target_timeframe="1h",
+        expected_source_sha256=source_rows_sha256(rows(frame)),
+        config_version="aggregate-config-v1",
+        demand=publication_demand(frame, 1, artifacts=1),
+        budget=ValidationWorkBudget(),
+    )
+
+    assert manifest.max_rows_per_partition == 256
+    assert all(partition.row_count <= 256 for partition in manifest.partitions)
+    verify_aggregate_publication(published_directory(tmp_path / "output"), manifest)
+
+
 def test_publication_identity_changes_with_config_and_rejects_non_parent_row_content(
     tmp_path: Path,
 ) -> None:
