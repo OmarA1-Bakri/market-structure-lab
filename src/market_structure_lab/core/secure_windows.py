@@ -351,13 +351,7 @@ class WindowsDirectoryClaim:
 
     @property
     def created_directories(self) -> tuple[str, ...]:
-        return tuple(
-            sorted(
-                Path(*parts).as_posix()
-                for parts in self._directories
-                if parts
-            )
-        )
+        return tuple(sorted(Path(*parts).as_posix() for parts in self._directories if parts))
 
     def unlink_regular(self, relative_path: str | Path) -> None:
         parts = validated_relative_parts(relative_path)
@@ -395,9 +389,7 @@ class WindowsDirectoryClaim:
                             access=0,
                             share=FILE_SHARE_READ,
                             creation=OPEN_EXISTING,
-                            flags=(
-                                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS
-                            ),
+                            flags=(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS),
                         )
                         try:
                             attributes = self._api.attributes(handle)

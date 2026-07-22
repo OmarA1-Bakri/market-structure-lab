@@ -310,9 +310,7 @@ def test_same_inode_mutation_after_initial_validation_rejects_before_changed_rec
         if "payload" in envelope:
             envelope["payload"] = changed.to_dict()
             envelope["payload_sha256"] = hashlib.sha256(changed.to_json_line()).hexdigest()
-            lines[1] = (
-                json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n"
-            ).encode()
+            lines[1] = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode()
         else:
             lines[1] = changed.to_json_line()
         try:

@@ -530,10 +530,7 @@ def publish_aggregate_bars(
             created_root = True
             require_regular_directory(root)
         final = (
-            root
-            / f"symbol={symbol}"
-            / f"timeframe={target_timeframe}"
-            / f"segment={segment_id}"
+            root / f"symbol={symbol}" / f"timeframe={target_timeframe}" / f"segment={segment_id}"
         )
         if path_exists_no_follow(final):
             raise FileExistsError("aggregate publication already exists")
@@ -804,7 +801,9 @@ def verify_aggregate_publication(
     actual = set(bounded_regular_files(root, maximum=_MAX_PUBLICATION_ENTRIES))
     if actual != expected:
         raise ValueError("aggregate publication contains missing or unmanifested artifacts")
-    expected_directories = _artifact_parent_directories(partition.path for partition in active.partitions)
+    expected_directories = _artifact_parent_directories(
+        partition.path for partition in active.partitions
+    )
     if set(_bounded_regular_directories(root)) != expected_directories:
         raise ValueError("aggregate publication contains unmanifested directories")
     for partition in active.partitions:
@@ -853,8 +852,7 @@ def verify_failed_aggregate_publication(directory: str | Path) -> AggregatePubli
             raise ValueError("aggregate failure fields are invalid")
         artifacts = payload["written_artifacts"]
         if not isinstance(artifacts, list) or any(
-            not isinstance(item, dict) or set(item) != {"path", "sha256"}
-            for item in artifacts
+            not isinstance(item, dict) or set(item) != {"path", "sha256"} for item in artifacts
         ):
             raise ValueError("aggregate failure artifact bindings are invalid")
         directories = payload["created_directories"]
@@ -1257,7 +1255,9 @@ def _enumerate_posix_claim(
                     for entry in entries:
                         entries_seen += 1
                         if entries_seen > _MAX_PUBLICATION_ENTRIES:
-                            raise RuntimeError("failed aggregate claim enumeration exceeds its bound")
+                            raise RuntimeError(
+                                "failed aggregate claim enumeration exceeds its bound"
+                            )
                         metadata = entry.stat(follow_symlinks=False)
                         relative = (*prefix, entry.name)
                         relative_path = Path(*relative).as_posix()
