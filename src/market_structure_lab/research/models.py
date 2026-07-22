@@ -23,6 +23,7 @@ _IMPLEMENTATION_PLAN_EVIDENCE = "6da307a0d4756c61ddcabdf01f00d828afb55d7e"
 _IMPLEMENTATION_PLAN_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111"
 _GIT_SHA = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_CANDIDATE_DEFINITION_FACTORY_TOKEN = object()
 _CANDIDATE_SIGNAL_SEAL = object()
 
 
@@ -630,8 +631,11 @@ class CandidateDefinition:
     parent_a_candidate_id: str | None = None
     parent_a_slot_id: str | None = None
     candidate_id: str = field(init=False)
+    factory_token: InitVar[object] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, factory_token: object) -> None:
+        if factory_token is not _CANDIDATE_DEFINITION_FACTORY_TOKEN:
+            raise TypeError("CandidateDefinition requires the canonical candidate factory token")
         if self.slot not in VALIDATION_SLOT_ROSTER:
             raise ValueError("candidate slot must belong to the frozen validation roster")
         _require_sha256(self.source_publication_sha256, "source_publication_sha256")
@@ -764,6 +768,123 @@ class CandidateDefinition:
             "task15_plan_commit": _TASK15_PLAN,
             "task15_evidence_commit": _TASK15_EVIDENCE,
         }
+
+
+def candidate_definition_for_slot(
+    slot: ValidationSlot,
+    series: object,
+    *,
+    parent_a_candidate: CandidateDefinition | None = None,
+    profile_stream: object | None = None,
+    a_selector_grid: tuple[str, ...] = FROZEN_A_SELECTOR_GRID,
+) -> CandidateDefinition:
+    """Issue one sealed definition after resolving its exact verified inputs and parent."""
+
+    from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
+    from market_structure_lab.research.candidates import VerifiedProfileStream
+
+    if not isinstance(series, VerifiedAggregateSeries):
+        raise TypeError("candidate definition requires a VerifiedAggregateSeries capability")
+    if slot not in VALIDATION_SLOT_ROSTER:
+        raise ValueError("candidate slot must belong to the frozen validation roster")
+    selector_grid = () if slot.family == "A" else a_selector_grid
+    if slot.family != "A" and selector_grid != FROZEN_A_SELECTOR_GRID:
+        raise ValueError(
+            "subordinate candidate A selector grid does not match the frozen full grid"
+        )
+
+    profile_definition_id = None
+    profile_bin_step = None
+    profile_stream_sha256 = None
+    if slot.family == "B":
+        if (
+            not isinstance(profile_stream, VerifiedProfileStream)
+            or profile_stream.aggregate_series_sha256 != series.series_sha256
+        ):
+            raise ValueError("family B requires a matching verified profile stream")
+        profile_bin_step = profile_stream.bin_step
+        profile_stream_sha256 = profile_stream.stream_sha256
+        profile_bars = _candidate_parameter_bars(slot, "profile_hours")
+        window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
+        profile_definition_id = (
+            "rolling-1m:uniform-touched-v1:value-area=0.70:"
+            f"window-hours={window_hours}:fixed-step={profile_bin_step}:"
+            f"source-config={series.manifest.config_version}"
+        )
+    elif profile_stream is not None:
+        raise ValueError("profile stream is valid only for family B")
+
+    parent_id = None
+    parent_slot_id = None
+    if slot.family in ("B", "E"):
+        _validate_candidate_parent(
+            slot,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            source_segment_id=series.segment_id,
+            parent=parent_a_candidate,
+        )
+        assert parent_a_candidate is not None
+        parent_id = parent_a_candidate.candidate_id
+        parent_slot_id = parent_a_candidate.slot.slot_id
+
+    return CandidateDefinition(
+        slot=slot,
+        source_publication_sha256=series.publication_sha256,
+        source_series_sha256=series.series_sha256,
+        source_segment_id=series.segment_id,
+        aggregate_config_version=series.manifest.config_version,
+        a_selector_grid=selector_grid,
+        profile_bin_step=profile_bin_step,
+        profile_definition_id=profile_definition_id,
+        profile_stream_sha256=profile_stream_sha256,
+        parent_a_candidate_id=parent_id,
+        parent_a_slot_id=parent_slot_id,
+        factory_token=_CANDIDATE_DEFINITION_FACTORY_TOKEN,
+    )
+
+
+def _validate_candidate_parent(
+    slot: ValidationSlot,
+    *,
+    source_publication_sha256: str,
+    source_series_sha256: str,
+    source_segment_id: int,
+    parent: CandidateDefinition | None,
+) -> None:
+    if parent is None or parent.family != "A":
+        raise ValueError("B/E candidates require a registered parent family A candidate")
+    if (
+        parent.source_series_sha256 != source_series_sha256
+        or parent.source_publication_sha256 != source_publication_sha256
+        or parent.source_segment_id != source_segment_id
+        or parent.timeframe != slot.timeframe
+        or parent.slot.direction != slot.direction
+    ):
+        raise ValueError("parent A candidate does not match the subordinate source series/grid")
+    if slot.family == "E":
+        parameters = dict(parent.parameters)
+        if parameters.get("detector") != "donchian_breakout":
+            raise ValueError("family E requires an exact A Donchian opportunity parent")
+        if _candidate_parameter_bars(parent.slot, "lookback_hours") != (
+            _candidate_parameter_bars(slot, "donchian_hours")
+        ):
+            raise ValueError(
+                "family E parent Donchian lookback does not match its opportunity grid"
+            )
+    elif hash_json("A-selector-grid-entry-v1", parent.slot.to_dict()) not in FROZEN_A_SELECTOR_GRID:
+        raise ValueError("family B parent must be one exact registered A selector-grid candidate")
+
+
+def _candidate_parameter_bars(slot: ValidationSlot, name: str) -> int:
+    parameters = dict(slot.parameters)
+    bars = _target_bars(int(parameters[name]), slot.timeframe)
+    if (
+        slot.kind is ValidationSlotKind.PERTURBATION
+        and parameters.get("perturbed_parameter") == name
+    ):
+        return int(parameters["candidate_bars"])
+    return bars
 
 
 @dataclass(frozen=True, slots=True)
@@ -1002,6 +1123,7 @@ __all__ = [
     "ValidationWorkBudget",
     "ValidationWorkBudgetViolation",
     "ValidationWorkDemand",
+    "candidate_definition_for_slot",
     "emit_candidate_signal",
     "evaluation_id_for_slot",
     "freeze_validation_slot_roster",

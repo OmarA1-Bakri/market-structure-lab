@@ -20,6 +20,7 @@ from market_structure_lab.research.models import (
     CandidateSignal,
     ValidationSlot,
     ValidationSlotKind,
+    candidate_definition_for_slot,
     emit_candidate_signal,
 )
 from market_structure_lab.structure.value_migration import (
@@ -208,62 +209,6 @@ def target_bars(hours: int, timeframe: str) -> int:
     if isinstance(hours, bool) or not isinstance(hours, int) or hours < 1 or hours % width:
         raise ValueError("candidate hour window must convert to integral target bars")
     return hours // width
-
-
-def candidate_definition_for_slot(
-    slot: ValidationSlot,
-    series: VerifiedAggregateSeries,
-    *,
-    parent_a_candidate: CandidateDefinition | None = None,
-    profile_stream: VerifiedProfileStream | None = None,
-    a_selector_grid: tuple[str, ...] = A_SELECTOR_GRID,
-) -> CandidateDefinition:
-    """Freeze a roster slot against one authenticated aggregate publication."""
-
-    if not isinstance(series, VerifiedAggregateSeries):
-        raise TypeError("candidate definition requires a VerifiedAggregateSeries capability")
-    selector_grid = () if slot.family == "A" else a_selector_grid
-    if slot.family != "A" and selector_grid != A_SELECTOR_GRID:
-        raise ValueError(
-            "subordinate candidate A selector grid does not match the frozen full grid"
-        )
-    profile_definition_id = None
-    profile_bin_step = None
-    profile_stream_sha256 = None
-    if slot.family == "B":
-        if profile_stream is None or profile_stream.aggregate_series_sha256 != series.series_sha256:
-            raise ValueError("family B requires a matching verified profile stream")
-        profile_bin_step = profile_stream.bin_step
-        profile_stream_sha256 = profile_stream.stream_sha256
-        profile_bars = _parameter_bars(slot, "profile_hours")
-        window_hours = profile_bars * _TIMEFRAME_HOURS[slot.timeframe]
-        profile_definition_id = (
-            "rolling-1m:uniform-touched-v1:value-area=0.70:"
-            f"window-hours={window_hours}:fixed-step={profile_bin_step}:"
-            f"source-config={series.manifest.config_version}"
-        )
-    elif profile_stream is not None:
-        raise ValueError("profile stream is valid only for family B")
-    parent_id = None
-    parent_slot_id = None
-    if slot.family in ("B", "E"):
-        _validate_parent_definition(slot, series, parent_a_candidate)
-        assert parent_a_candidate is not None
-        parent_id = parent_a_candidate.candidate_id
-        parent_slot_id = parent_a_candidate.slot.slot_id
-    return CandidateDefinition(
-        slot=slot,
-        source_publication_sha256=series.publication_sha256,
-        source_series_sha256=series.series_sha256,
-        source_segment_id=series.segment_id,
-        aggregate_config_version=series.manifest.config_version,
-        a_selector_grid=selector_grid,
-        profile_bin_step=profile_bin_step,
-        profile_definition_id=profile_definition_id,
-        profile_stream_sha256=profile_stream_sha256,
-        parent_a_candidate_id=parent_id,
-        parent_a_slot_id=parent_slot_id,
-    )
 
 
 def detect_candidate_signals(
@@ -711,35 +656,6 @@ def _validate_opportunity(
         or signal.direction != definition.direction
     ):
         raise ValueError("A opportunity is not the exact registered parent of this candidate")
-
-
-def _validate_parent_definition(
-    slot: ValidationSlot,
-    series: VerifiedAggregateSeries,
-    parent: CandidateDefinition | None,
-) -> None:
-    if parent is None or parent.family != "A":
-        raise ValueError("B/E candidates require a registered parent family A candidate")
-    if (
-        parent.source_series_sha256 != series.series_sha256
-        or parent.source_publication_sha256 != series.publication_sha256
-        or parent.source_segment_id != series.segment_id
-        or parent.timeframe != slot.timeframe
-        or parent.slot.direction != slot.direction
-    ):
-        raise ValueError("parent A candidate does not match the subordinate source series/grid")
-    if slot.family == "E":
-        parameters = dict(parent.parameters)
-        if parameters.get("detector") != "donchian_breakout":
-            raise ValueError("family E requires an exact A Donchian opportunity parent")
-        if _parameter_bars(parent.slot, "lookback_hours") != _parameter_bars(
-            slot, "donchian_hours"
-        ):
-            raise ValueError(
-                "family E parent Donchian lookback does not match its opportunity grid"
-            )
-    elif hash_json("A-selector-grid-entry-v1", parent.slot.to_dict()) not in A_SELECTOR_GRID:
-        raise ValueError("family B parent must be one exact registered A selector-grid candidate")
 
 
 def _validate_series(definition: CandidateDefinition, series: VerifiedAggregateSeries) -> None:

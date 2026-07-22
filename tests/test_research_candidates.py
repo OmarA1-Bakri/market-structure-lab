@@ -661,6 +661,113 @@ def test_subordinate_candidates_reject_flat_or_wrong_registered_a_opportunities(
         )
 
 
+def test_e_definition_cannot_bypass_exact_donchian_parent_factory_gate() -> None:
+    series = _series(_bars([100.0] * 26))
+    e_slot = _slot("E", "volume_confirmation", role="volume_filtered_primary", lookback=24)
+    atr_definition = _definition(_slot("A", "atr_breakout"), series)
+    donchian_definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+    issued = candidate_definition_for_slot(
+        e_slot,
+        series,
+        parent_a_candidate=donchian_definition,
+    )
+
+    assert issued == candidate_definition_for_slot(
+        e_slot,
+        series,
+        parent_a_candidate=donchian_definition,
+    )
+    assert issued.parent_a_candidate_id == donchian_definition.candidate_id
+    assert issued.parent_a_slot_id == donchian_definition.slot.slot_id
+
+    with pytest.raises(ValueError, match="exact A Donchian"):
+        candidate_definition_for_slot(
+            e_slot,
+            series,
+            parent_a_candidate=atr_definition,
+        )
+    with pytest.raises(TypeError, match="factory"):
+        CandidateDefinition(
+            slot=e_slot,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            source_segment_id=series.segment_id,
+            aggregate_config_version=series.manifest.config_version,
+            a_selector_grid=A_SELECTOR_GRID,
+            parent_a_candidate_id=atr_definition.candidate_id,
+            parent_a_slot_id=atr_definition.slot.slot_id,
+        )
+    with pytest.raises(TypeError, match="factory"):
+        replace(
+            issued,
+            parent_a_candidate_id=atr_definition.candidate_id,
+            parent_a_slot_id=atr_definition.slot.slot_id,
+        )
+
+
+def test_b_definition_cannot_bypass_exact_selector_parent_factory_gate() -> None:
+    series = _series(_bars([100.0] * 26))
+    b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    profile_stream = _empty_profile_stream(series)
+    wrong_parent_slot = next(
+        slot
+        for slot in VALIDATION_SLOT_ROSTER
+        if slot.family == "A"
+        and slot.kind is ValidationSlotKind.PERTURBATION
+        and slot.timeframe == b_slot.timeframe
+        and slot.direction == b_slot.direction
+    )
+    wrong_parent = _definition(wrong_parent_slot, series)
+    allowed_parent = _definition(_parent_a_slot(b_slot), series)
+    issued = candidate_definition_for_slot(
+        b_slot,
+        series,
+        parent_a_candidate=allowed_parent,
+        profile_stream=profile_stream,
+    )
+
+    assert issued == candidate_definition_for_slot(
+        b_slot,
+        series,
+        parent_a_candidate=allowed_parent,
+        profile_stream=profile_stream,
+    )
+    assert issued.parent_a_candidate_id == allowed_parent.candidate_id
+    assert issued.parent_a_slot_id == allowed_parent.slot.slot_id
+
+    with pytest.raises(ValueError, match="selector-grid"):
+        candidate_definition_for_slot(
+            b_slot,
+            series,
+            parent_a_candidate=wrong_parent,
+            profile_stream=profile_stream,
+        )
+    with pytest.raises(TypeError, match="factory"):
+        CandidateDefinition(
+            slot=b_slot,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            source_segment_id=series.segment_id,
+            aggregate_config_version=series.manifest.config_version,
+            a_selector_grid=A_SELECTOR_GRID,
+            profile_bin_step=profile_stream.bin_step,
+            profile_definition_id=(
+                "rolling-1m:uniform-touched-v1:value-area=0.70:"
+                f"window-hours=24:fixed-step={profile_stream.bin_step}:"
+                f"source-config={series.manifest.config_version}"
+            ),
+            profile_stream_sha256=profile_stream.stream_sha256,
+            parent_a_candidate_id=wrong_parent.candidate_id,
+            parent_a_slot_id=wrong_parent.slot.slot_id,
+        )
+    with pytest.raises(TypeError, match="factory"):
+        replace(
+            issued,
+            parent_a_candidate_id=wrong_parent.candidate_id,
+            parent_a_slot_id=wrong_parent.slot.slot_id,
+        )
+
+
 def test_g_exact_candidate_and_controls_use_same_next_bar_clock() -> None:
     # Constant TR=2 makes ATR8/ATR24 equal; lower the final three pre-expansion ranges to compress.
     bars = list(_bars([100.0] * 28))
