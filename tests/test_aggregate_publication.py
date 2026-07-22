@@ -803,6 +803,9 @@ def test_partial_final_claim_is_terminal_and_retry_never_overwrites(
     assert failure.cause_class == "OSError"
     assert failure.retry_semantics == "terminal-claim-no-retry"
     assert failure.written_artifacts
+    moved = final.with_name("segment=0-handle-probe")
+    final.rename(moved)
+    moved.rename(final)
     anonymous = final / "anonymous"
     anonymous.mkdir()
     with pytest.raises(ValueError, match="anonymous directories"):
@@ -814,6 +817,256 @@ def test_partial_final_claim_is_terminal_and_retry_never_overwrites(
         "_write_exclusive_windows",
         original_windows_write,
     )
+    with pytest.raises(FileExistsError, match="publication"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+
+
+def _publish_injected_failed_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    frame = minute_frame(120)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
+    writes = 0
+    if os.name == "nt":
+        original = aggregate_publication_module._write_exclusive_windows
+
+        def fail_second(claim, name: str, content: bytes) -> None:
+            nonlocal writes
+            if writes == 1:
+                raise OSError("injected publication copy failure")
+            original(claim, name, content)
+            writes += 1
+
+        monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_windows", fail_second)
+    else:
+        original_posix = aggregate_publication_module._write_exclusive_at
+
+        def fail_second(parent_fd: int, name: str, content: bytes) -> None:
+            nonlocal writes
+            if writes == 1:
+                raise OSError("injected publication copy failure")
+            original_posix(parent_fd, name, content)
+            writes += 1
+
+        monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_at", fail_second)
+    with pytest.raises(OSError, match="injected"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+    return published_directory(output_root)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("cause_class", "written_artifacts", "created_directories", "retry_semantics"),
+)
+def test_failed_receipt_digest_binds_every_semantic_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    final = _publish_injected_failed_claim(tmp_path, monkeypatch)
+    path = final / "_FAILED.json"
+    payload = json.loads(path.read_bytes())
+    if field == "cause_class":
+        payload[field] = "RuntimeError"
+    elif field == "written_artifacts":
+        payload[field][0]["sha256"] = "e" * 64
+    elif field == "created_directories":
+        payload[field].append("extra-owned-directory")
+    else:
+        payload[field] = "terminal-claim-new-attempt"
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, separators=(",", ": ")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="receipt identity"):
+        aggregate_publication_module.verify_failed_aggregate_publication(final)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-fd failure seam")
+def test_posix_mkdir_success_open_failure_is_exactly_recorded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
+
+    def mkdir_then_fail(parent_fd: int, name: str, _flags: int) -> int:
+        os.mkdir(name, dir_fd=parent_fd)
+        raise OSError("injected child directory open failure")
+
+    monkeypatch.setattr(aggregate_publication_module, "_create_directory_at", mkdir_then_fail)
+    with pytest.raises(OSError, match="injected child"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+    failure = aggregate_publication_module.verify_failed_aggregate_publication(
+        published_directory(output_root)
+    )
+
+    assert failure.created_directories == ("chunk=000000",)
+    assert failure.written_artifacts == ()
+    final = published_directory(output_root)
+    moved = final.with_name("segment=0-handle-probe")
+    final.rename(moved)
+    moved.rename(final)
+
+
+def test_windows_adapter_mkdir_success_open_failure_is_exactly_recorded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
+
+    class OpenFailureClaim:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def create_regular_descriptor(self, relative_path: str | Path) -> int:
+            destination = self.root / relative_path
+            if destination.parent != self.root:
+                destination.parent.mkdir(exist_ok=False)
+                raise OSError("injected Windows child directory open failure")
+            return os.open(
+                destination,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+
+        def unlink_regular(self, relative_path: str | Path) -> None:
+            (self.root / relative_path).unlink()
+
+        @property
+        def created_directories(self) -> tuple[str, ...]:
+            return ()
+
+        def enumerate_tree(
+            self,
+            *,
+            maximum_entries: int,
+            maximum_file_bytes: int,
+        ) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+            assert maximum_entries > 0
+            assert maximum_file_bytes > 0
+            directories = tuple(
+                sorted(
+                    path.relative_to(self.root).as_posix()
+                    for path in self.root.rglob("*")
+                    if path.is_dir()
+                )
+            )
+            return (), directories
+
+    class OpenFailureFilesystem:
+        @contextmanager
+        def claim_exclusive_directory(
+            self,
+            root: Path,
+            ancestors: tuple[str, ...],
+            final_name: str,
+        ):
+            final = root.joinpath(*ancestors, final_name)
+            final.mkdir(parents=True, exist_ok=False)
+            yield OpenFailureClaim(final)
+
+    monkeypatch.setattr(aggregate_publication_module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        aggregate_publication_module,
+        "WindowsHandleFilesystem",
+        OpenFailureFilesystem,
+    )
+    with pytest.raises(OSError, match="injected Windows"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+    failure = aggregate_publication_module.verify_failed_aggregate_publication(
+        published_directory(output_root)
+    )
+
+    assert failure.created_directories == ("chunk=000000",)
+    assert failure.written_artifacts == ()
+    final = published_directory(output_root)
+    moved = final.with_name("segment=0-handle-probe")
+    final.rename(moved)
+    moved.rename(final)
+
+
+def test_failed_claim_enumeration_rejects_external_link_and_retry_stays_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(120)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
+    external = tmp_path / "external.txt"
+    external.write_text("outside the publication claim", encoding="utf-8")
+    writes = 0
+
+    if os.name == "nt":
+        original_windows = aggregate_publication_module._write_exclusive_windows
+
+        def link_then_fail_windows(claim, name: str, content: bytes) -> None:
+            nonlocal writes
+            if writes == 1:
+                (claim._path / "external-link").symlink_to(external)
+                raise OSError("injected publication copy failure")
+            original_windows(claim, name, content)
+            writes += 1
+
+        monkeypatch.setattr(
+            aggregate_publication_module,
+            "_write_exclusive_windows",
+            link_then_fail_windows,
+        )
+    else:
+        original_posix = aggregate_publication_module._write_exclusive_at
+
+        def link_then_fail_posix(parent_fd: int, name: str, content: bytes) -> None:
+            nonlocal writes
+            if writes == 1:
+                os.symlink(external, "external-link", dir_fd=parent_fd)
+                raise OSError("injected publication copy failure")
+            original_posix(parent_fd, name, content)
+            writes += 1
+
+        monkeypatch.setattr(
+            aggregate_publication_module,
+            "_write_exclusive_at",
+            link_then_fail_posix,
+        )
+
+    with pytest.raises(RuntimeError, match="symlink|reparse"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+
+    final = published_directory(output_root)
+    assert final.is_dir()
+    assert not (final / "_FAILED.json").exists()
     with pytest.raises(FileExistsError, match="publication"):
         publish(
             [frame],

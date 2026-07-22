@@ -6,9 +6,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
+import hashlib
 import ntpath
 import os
 from pathlib import Path
+import stat
 from typing import Any, Final, Protocol, cast
 
 GENERIC_READ: Final = 0x80000000
@@ -362,6 +364,87 @@ class WindowsDirectoryClaim:
         destination = self._path.joinpath(*parts)
         os.unlink(destination)
 
+    def enumerate_tree(
+        self,
+        *,
+        maximum_entries: int,
+        maximum_file_bytes: int,
+    ) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+        """Enumerate the pinned claim without following reparse entries."""
+
+        artifacts: list[tuple[str, str]] = []
+        directories: list[str] = []
+        entries_seen = 0
+
+        def visit(directory: Path, prefix: tuple[str, ...]) -> None:
+            nonlocal entries_seen
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    entries_seen += 1
+                    if entries_seen > maximum_entries:
+                        raise RuntimeError("Windows claim enumeration exceeds its bound")
+                    metadata = entry.stat(follow_symlinks=False)
+                    relative = (*prefix, entry.name)
+                    relative_path = Path(*relative).as_posix()
+                    if stat.S_ISLNK(metadata.st_mode):
+                        raise RuntimeError("Windows claim contains a reparse entry")
+                    path = directory / entry.name
+                    if stat.S_ISDIR(metadata.st_mode):
+                        handle = self._api.open_path(
+                            os.fspath(path),
+                            access=0,
+                            share=FILE_SHARE_READ,
+                            creation=OPEN_EXISTING,
+                            flags=(
+                                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS
+                            ),
+                        )
+                        try:
+                            attributes = self._api.attributes(handle)
+                            if attributes & FILE_ATTRIBUTE_REPARSE_POINT or not (
+                                attributes & FILE_ATTRIBUTE_DIRECTORY
+                            ):
+                                raise RuntimeError("Windows claim directory is a reparse entry")
+                            directories.append(relative_path)
+                            visit(path, relative)
+                        finally:
+                            self._api.close(handle)
+                    elif stat.S_ISREG(metadata.st_mode):
+                        handle = self._api.open_path(
+                            os.fspath(path),
+                            access=GENERIC_READ,
+                            share=FILE_SHARE_READ,
+                            creation=OPEN_EXISTING,
+                            flags=FILE_FLAG_OPEN_REPARSE_POINT,
+                        )
+                        try:
+                            _require_regular_attributes(self._api.attributes(handle))
+                            descriptor = self._api.fd_from_handle(
+                                handle,
+                                os.O_RDONLY | getattr(os, "O_BINARY", 0),
+                            )
+                            handle = -1
+                            try:
+                                artifacts.append(
+                                    (
+                                        relative_path,
+                                        _sha256_bounded_descriptor(
+                                            descriptor,
+                                            maximum=maximum_file_bytes,
+                                        ),
+                                    )
+                                )
+                            finally:
+                                os.close(descriptor)
+                        finally:
+                            if handle != -1:
+                                self._api.close(handle)
+                    else:
+                        raise RuntimeError("Windows claim contains a special entry")
+
+        visit(self._path, ())
+        return tuple(sorted(artifacts)), tuple(sorted(directories))
+
 
 def validated_relative_parts(path: str | Path) -> tuple[str, ...]:
     """Reject absolute, parent, empty, and alternate-stream relative paths."""
@@ -398,6 +481,20 @@ def _require_regular_attributes(attributes: int) -> None:
         raise RuntimeError("secure artifact file is a reparse point")
     if attributes & FILE_ATTRIBUTE_DIRECTORY:
         raise RuntimeError("secure artifact file is a directory")
+
+
+def _sha256_bounded_descriptor(descriptor: int, *, maximum: int) -> str:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
+        raise RuntimeError("Windows claim artifact exceeds its regular-file bound")
+    digest = hashlib.sha256()
+    total = 0
+    while chunk := os.read(descriptor, min(1024 * 1024, maximum - total + 1)):
+        total += len(chunk)
+        if total > maximum:
+            raise RuntimeError("Windows claim artifact exceeds its byte bound")
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _require_safe_component(component: str) -> None:

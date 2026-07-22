@@ -185,17 +185,6 @@ class AggregatePublicationFailure:
         target_timeframe_minutes(self.target_timeframe)
         if isinstance(self.segment_id, bool) or self.segment_id < 0:
             raise ValueError("failed publication segment_id is invalid")
-        expected_claim = hash_json(
-            "aggregate-publication-exclusive-claim-v1",
-            {
-                "publication_sha256": self.publication_sha256,
-                "symbol": self.symbol,
-                "target_timeframe": self.target_timeframe,
-                "segment_id": self.segment_id,
-            },
-        )
-        if self.claim_sha256 != expected_claim:
-            raise ValueError("failed publication claim identity is invalid")
         if _SAFE_COMPONENT.fullmatch(self.cause_class) is None:
             raise ValueError("aggregate failure cause class is invalid")
         paths = tuple(path for path, _ in self.written_artifacts)
@@ -210,15 +199,20 @@ class AggregatePublicationFailure:
         for directory in self.created_directories:
             if not directory or Path(directory).is_absolute() or ".." in Path(directory).parts:
                 raise ValueError("aggregate failure directory path is invalid")
+        expected_claim = hash_json(
+            "failed-aggregate-publication-receipt-v1",
+            self.logical_dict(),
+        )
+        if self.claim_sha256 != expected_claim:
+            raise ValueError("failed aggregate receipt identity mismatch")
         if self.retry_semantics != "terminal-claim-no-retry":
             raise ValueError("aggregate failure retry semantics are invalid")
 
-    def to_dict(self) -> dict[str, object]:
+    def logical_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
             "status": self.status,
             "publication_sha256": self.publication_sha256,
-            "claim_sha256": self.claim_sha256,
             "symbol": self.symbol,
             "target_timeframe": self.target_timeframe,
             "segment_id": self.segment_id,
@@ -229,6 +223,9 @@ class AggregatePublicationFailure:
             "created_directories": list(self.created_directories),
             "retry_semantics": self.retry_semantics,
         }
+
+    def to_dict(self) -> dict[str, object]:
+        return {**self.logical_dict(), "claim_sha256": self.claim_sha256}
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
@@ -879,6 +876,8 @@ def verify_failed_aggregate_publication(directory: str | Path) -> AggregatePubli
             retry_semantics=payload["retry_semantics"],
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        if isinstance(error, ValueError) and "receipt identity" in str(error):
+            raise
         raise ValueError("invalid aggregate failure evidence") from error
     if recorded_bytes != failure.to_json().encode("utf-8"):
         raise ValueError("aggregate failure evidence is not exact canonical JSON")
@@ -1106,8 +1105,6 @@ def _publish_staged_no_clobber(
                 except FileExistsError as error:
                     raise FileExistsError("aggregate publication already exists") from error
                 final_fd = os.open(final_name, directory_flags, dir_fd=timeframe_fd)
-                written: list[tuple[str, str]] = []
-                claimed_directories: list[str] = []
                 try:
                     try:
                         os.fsync(timeframe_fd)
@@ -1120,7 +1117,6 @@ def _publish_staged_no_clobber(
                                 relative.parts[0],
                                 directory_flags,
                             )
-                            claimed_directories.append(relative.parts[0])
                             try:
                                 content = read_bounded_regular(
                                     staging / relative,
@@ -1131,11 +1127,9 @@ def _publish_staged_no_clobber(
                                         f"staged aggregate partition changed: {partition.path}"
                                     )
                                 _write_exclusive_at(chunk_fd, relative.parts[1], content)
-                                written.append((partition.path, partition.sha256))
                             except Exception:
                                 os.close(chunk_fd)
                                 os.rmdir(relative.parts[0], dir_fd=final_fd)
-                                claimed_directories.remove(relative.parts[0])
                                 raise
                             else:
                                 os.close(chunk_fd)
@@ -1146,12 +1140,6 @@ def _publish_staged_no_clobber(
                         if manifest_bytes != manifest.to_json().encode("utf-8"):
                             raise ValueError("staged aggregate manifest changed")
                         _write_exclusive_at(final_fd, AGGREGATE_MANIFEST_NAME, manifest_bytes)
-                        written.append(
-                            (
-                                AGGREGATE_MANIFEST_NAME,
-                                hashlib.sha256(manifest_bytes).hexdigest(),
-                            )
-                        )
                         os.fsync(final_fd)
                         success_bytes = read_bounded_regular(
                             staging / AGGREGATE_SUCCESS_NAME,
@@ -1162,11 +1150,15 @@ def _publish_staged_no_clobber(
                             raise ValueError("staged aggregate completion marker changed")
                         _write_exclusive_at(final_fd, AGGREGATE_SUCCESS_NAME, success_bytes)
                     except Exception as error:
+                        actual_written, actual_directories = _enumerate_posix_claim(
+                            final_fd,
+                            maximum_file_bytes=manifest.declared_artifact_bytes,
+                        )
                         _write_failed_claim_at(
                             final_fd,
                             manifest,
-                            written=written,
-                            created_directories=claimed_directories,
+                            written=list(actual_written),
+                            created_directories=list(actual_directories),
                             cause=error,
                         )
                         raise
@@ -1195,7 +1187,6 @@ def _publish_staged_windows(
     try:
         claim_context = filesystem.claim_exclusive_directory(root, ancestors, final_name)
         with claim_context as claim:
-            written: list[tuple[str, str]] = []
             try:
                 for partition in manifest.partitions:
                     content = read_bounded_regular(
@@ -1205,7 +1196,6 @@ def _publish_staged_windows(
                     if hashlib.sha256(content).hexdigest() != partition.sha256:
                         raise ValueError(f"staged aggregate partition changed: {partition.path}")
                     _write_exclusive_windows(claim, partition.path, content)
-                    written.append((partition.path, partition.sha256))
                 manifest_bytes = read_bounded_regular(
                     staging / AGGREGATE_MANIFEST_NAME,
                     _MAX_MANIFEST_BYTES,
@@ -1213,20 +1203,21 @@ def _publish_staged_windows(
                 if manifest_bytes != manifest.to_json().encode("utf-8"):
                     raise ValueError("staged aggregate manifest changed")
                 _write_exclusive_windows(claim, AGGREGATE_MANIFEST_NAME, manifest_bytes)
-                written.append(
-                    (AGGREGATE_MANIFEST_NAME, hashlib.sha256(manifest_bytes).hexdigest())
-                )
                 success_bytes = read_bounded_regular(staging / AGGREGATE_SUCCESS_NAME, 128)
                 expected_success = f"{manifest.publication_sha256}\n".encode("utf-8")
                 if success_bytes != expected_success:
                     raise ValueError("staged aggregate completion marker changed")
                 _write_exclusive_windows(claim, AGGREGATE_SUCCESS_NAME, success_bytes)
             except Exception as error:
+                actual_written, actual_directories = claim.enumerate_tree(
+                    maximum_entries=_MAX_PUBLICATION_ENTRIES,
+                    maximum_file_bytes=manifest.declared_artifact_bytes,
+                )
                 _write_failed_claim_windows(
                     claim,
                     manifest,
-                    written=written,
-                    created_directories=list(claim.created_directories),
+                    written=list(actual_written),
+                    created_directories=list(actual_directories),
                     cause=error,
                 )
                 raise
@@ -1245,6 +1236,86 @@ def _create_or_open_directory_at(parent_fd: int, name: str, flags: int) -> int:
 def _create_directory_at(parent_fd: int, name: str, flags: int) -> int:
     os.mkdir(name, dir_fd=parent_fd)
     return os.open(name, flags, dir_fd=parent_fd)
+
+
+def _enumerate_posix_claim(
+    final_fd: int,
+    *,
+    maximum_file_bytes: int,
+) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    stack: list[tuple[int, tuple[str, ...]]] = [(os.dup(final_fd), ())]
+    artifacts: list[tuple[str, str]] = []
+    directories: list[str] = []
+    entries_seen = 0
+    try:
+        while stack:
+            directory_fd, prefix = stack.pop()
+            try:
+                with os.scandir(directory_fd) as entries:
+                    for entry in entries:
+                        entries_seen += 1
+                        if entries_seen > _MAX_PUBLICATION_ENTRIES:
+                            raise RuntimeError("failed aggregate claim enumeration exceeds its bound")
+                        metadata = entry.stat(follow_symlinks=False)
+                        relative = (*prefix, entry.name)
+                        relative_path = Path(*relative).as_posix()
+                        if stat.S_ISLNK(metadata.st_mode):
+                            raise RuntimeError("failed aggregate claim contains a symlink")
+                        if stat.S_ISDIR(metadata.st_mode):
+                            child_fd = os.open(
+                                entry.name,
+                                os.O_RDONLY | no_follow | directory_flag,
+                                dir_fd=directory_fd,
+                            )
+                            opened = os.fstat(child_fd)
+                            if not stat.S_ISDIR(opened.st_mode):
+                                os.close(child_fd)
+                                raise RuntimeError("failed aggregate claim directory changed")
+                            directories.append(relative_path)
+                            stack.append((child_fd, relative))
+                        elif stat.S_ISREG(metadata.st_mode):
+                            file_fd = os.open(
+                                entry.name,
+                                os.O_RDONLY | no_follow,
+                                dir_fd=directory_fd,
+                            )
+                            try:
+                                artifacts.append(
+                                    (
+                                        relative_path,
+                                        _sha256_bounded_descriptor(
+                                            file_fd,
+                                            maximum=maximum_file_bytes,
+                                        ),
+                                    )
+                                )
+                            finally:
+                                os.close(file_fd)
+                        else:
+                            raise RuntimeError("failed aggregate claim contains a special entry")
+            finally:
+                os.close(directory_fd)
+    except Exception:
+        for directory_fd, _ in stack:
+            os.close(directory_fd)
+        raise
+    return tuple(sorted(artifacts)), tuple(sorted(directories))
+
+
+def _sha256_bounded_descriptor(descriptor: int, *, maximum: int) -> str:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
+        raise RuntimeError("failed aggregate artifact exceeds its regular-file bound")
+    digest = hashlib.sha256()
+    total = 0
+    while chunk := os.read(descriptor, min(1024 * 1024, maximum - total + 1)):
+        total += len(chunk)
+        if total > maximum:
+            raise RuntimeError("failed aggregate artifact exceeds its byte bound")
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _write_exclusive_at(parent_fd: int, name: str, content: bytes) -> None:
@@ -1348,13 +1419,25 @@ def _failure_receipt(
     created_directories: list[str],
     cause: Exception,
 ) -> AggregatePublicationFailure:
+    cause_class = type(cause).__name__
+    written_artifacts = tuple(sorted(written))
+    recorded_directories = tuple(sorted(set(created_directories)))
+    retry_semantics = "terminal-claim-no-retry"
     claim_sha256 = hash_json(
-        "aggregate-publication-exclusive-claim-v1",
+        "failed-aggregate-publication-receipt-v1",
         {
+            "schema_version": 1,
+            "status": "failed",
             "publication_sha256": manifest.publication_sha256,
             "symbol": manifest.symbol,
             "target_timeframe": manifest.target_timeframe,
             "segment_id": manifest.segment_id,
+            "cause_class": cause_class,
+            "written_artifacts": [
+                {"path": path, "sha256": sha256} for path, sha256 in written_artifacts
+            ],
+            "created_directories": list(recorded_directories),
+            "retry_semantics": retry_semantics,
         },
     )
     return AggregatePublicationFailure(
@@ -1365,10 +1448,10 @@ def _failure_receipt(
         symbol=manifest.symbol,
         target_timeframe=manifest.target_timeframe,
         segment_id=manifest.segment_id,
-        cause_class=type(cause).__name__,
-        written_artifacts=tuple(sorted(written)),
-        created_directories=tuple(sorted(set(created_directories))),
-        retry_semantics="terminal-claim-no-retry",
+        cause_class=cause_class,
+        written_artifacts=written_artifacts,
+        created_directories=recorded_directories,
+        retry_semantics=retry_semantics,
     )
 
 
