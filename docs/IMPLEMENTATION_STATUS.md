@@ -513,3 +513,16 @@ remote SHA is verified, using a separate bounded implementation plan.
 The independently reviewed Task 15 plan/test-spec checkpoint
 `807ac28ac5616fb837c1ccea1e2bc47572ae3984` was pushed at `2026-07-22T10:24:29Z`; the remote branch
 resolved to the exact local SHA. No outcome code preceded that checkpoint.
+
+## Phase 5 bounded implementation plan
+
+The separately tracked
+[`2026-07-22-phase5-bounded-implementation.md`](superpowers/plans/2026-07-22-phase5-bounded-implementation.md)
+turns the Task 15 contract into eleven TDD work units. A repository capability map and independent
+specification review approved the revised file boundaries, exact 1,104-slot roster, complete work
+budgets, causal clocks, sealed final-access mechanism, development-only real-run boundary, and
+verification/review chain. The plan creates no outcome evidence and makes no validation claim.
+
+Source implementation remains blocked until this bounded plan has its own pushed, remotely verified
+checkpoint. The first bounded real programme remains development-only with zero final-holdout
+access; synthetic tests will prove the one-time access state without touching real final rows.

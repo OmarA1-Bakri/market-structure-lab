@@ -65,3 +65,22 @@ evidence that the question, method, and conclusion can be reconstructed later.
 - Artifacts:
   [`2026-07-22-phase5-validation.md`](superpowers/plans/2026-07-22-phase5-validation.md) and
   [`2026-07-22-phase5-validation-test-spec.md`](superpowers/plans/2026-07-22-phase5-validation-test-spec.md).
+
+### 2026-07-22 - Bound the Phase 5 implementation sequence
+
+- Question: What is the smallest implementation sequence that can falsify A/B/G/E/D without
+  overloading discovery semantics or opening the real final holdout?
+- Hypothesis: None tested; this session converted the reviewed Task 15 contract into TDD work units.
+- Method: Repository capability mapping, implementation decomposition, self-review, and independent
+  specification review with revision of eight identified plan gaps.
+- Dataset: Repository code and tracked plans only; no outcome or final-holdout row was read.
+- Results: Eleven bounded work units freeze public canonical identities, streaming aggregate bars,
+  causal candidate/outcome contracts, common-grid nested folds, costs/controls/statistics,
+  robustness/exposures, immutable VP/VR receipts, a synthetic vertical lifecycle, and a
+  development-only real programme with zero real final access.
+- Conclusions: The plan is approved for a separate remote checkpoint before source implementation.
+  It does not claim that any candidate is supported, validated, promoted, or an edge.
+- Next Question: Can the identity, roster, and work-budget contracts fail closed before any Phase 5
+  outcome code is allowed to run?
+- Artifacts:
+  [`2026-07-22-phase5-bounded-implementation.md`](superpowers/plans/2026-07-22-phase5-bounded-implementation.md).
