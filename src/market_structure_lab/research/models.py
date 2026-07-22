@@ -24,7 +24,6 @@ _IMPLEMENTATION_PLAN_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0c
 _GIT_SHA = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _CANDIDATE_DEFINITION_FACTORY_TOKEN = object()
-_CANDIDATE_SIGNAL_SEAL = object()
 
 
 def _require_sha256(value: object, label: str) -> None:
@@ -78,6 +77,11 @@ class ValidationWorkDemand:
     source_rows: int = 0
     source_bytes: int = 0
     aggregate_bars: int = 0
+    profile_stream_count: int = 0
+    profile_active_bin_cells: int = 0
+    profile_source_id_bytes: int = 0
+    profile_config_bytes: int = 0
+    profile_serialized_bytes: int = 0
     symbols: int = 0
     ranges: int = 0
     candidates: int = 0
@@ -136,6 +140,11 @@ class ValidationWorkBudget:
     max_source_rows: int = 25_000_000
     max_source_bytes: int = 8 * 1024 * 1024 * 1024
     max_aggregate_bars: int = 1_000_000
+    max_profile_stream_count: int = 1_000_000
+    max_profile_active_bin_cells: int = 100_000_000
+    max_profile_source_id_bytes: int = 2_000_000_000
+    max_profile_config_bytes: int = 64 * 1024
+    max_profile_serialized_bytes: int = 256 * 1024 * 1024
     max_symbols: int = 64
     max_ranges: int = 256
     max_candidates: int = 256
@@ -176,6 +185,7 @@ class ValidationWorkBudget:
             "max_controls": 384,
             "max_placebos": 192,
             "max_perturbations": 184,
+            "max_profile_stream_count": 1_000_000,
         }
         for field_name, required in exact.items():
             if getattr(self, field_name) != required:
@@ -218,6 +228,11 @@ class ValidationWorkBudget:
             "source_rows": self.max_source_rows,
             "source_bytes": self.max_source_bytes,
             "aggregate_bars": self.max_aggregate_bars,
+            "profile_stream_count": self.max_profile_stream_count,
+            "profile_active_bin_cells": self.max_profile_active_bin_cells,
+            "profile_source_id_bytes": self.max_profile_source_id_bytes,
+            "profile_config_bytes": self.max_profile_config_bytes,
+            "profile_serialized_bytes": self.max_profile_serialized_bytes,
             "symbols": self.max_symbols,
             "ranges": self.max_ranges,
             "candidates": self.max_candidates,
@@ -909,11 +924,11 @@ class CandidateSignal:
     source_series_sha256: str
     segment_id: int
     candidate_slot_id: str
-    seal: InitVar[object]
+    issuance_token: InitVar[object]
 
-    def __post_init__(self, seal: object) -> None:
-        if seal is not _CANDIDATE_SIGNAL_SEAL:
-            raise TypeError("CandidateSignal requires the verified detector emission seal")
+    def __post_init__(self, issuance_token: object) -> None:
+        if not _consume_candidate_signal_issuance(issuance_token, self.to_dict()):
+            raise TypeError("CandidateSignal requires a detector-owned one-use issuance token")
         if not self.candidate_id.startswith("HC-"):
             raise ValueError("candidate_id must identify a human-origin candidate")
         if self.family not in EXPECTED_FAMILIES:
@@ -958,62 +973,20 @@ class CandidateSignal:
         }
 
 
-def candidate_signal_from_indices(
-    definition: CandidateDefinition,
-    series: object,
-    *,
-    event_index: int,
-    feature_start_index: int,
-    cutoff_index: int,
-) -> CandidateSignal:
-    """Issue a detector signal whose causal clock is derived only from verified row indices."""
+def _consume_candidate_signal_issuance(issuance_token: object, payload: dict[str, object]) -> bool:
+    """Accept only a one-use token created by the detector-local issuer closure."""
 
-    from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
-
-    if not isinstance(series, VerifiedAggregateSeries):
-        raise TypeError("candidate signal issuance requires a VerifiedAggregateSeries capability")
+    token_type = type(issuance_token)
     if (
-        definition.source_publication_sha256 != series.publication_sha256
-        or definition.source_series_sha256 != series.series_sha256
-        or definition.source_segment_id != series.segment_id
+        token_type.__module__ != "market_structure_lab.research.candidates"
+        or token_type.__qualname__
+        != ("detect_candidate_signals.<locals>.detector_signal_issuer.<locals>.IssuanceToken")
     ):
-        raise ValueError("candidate definition is not registered to the verified aggregate series")
-    if (
-        isinstance(feature_start_index, bool)
-        or isinstance(event_index, bool)
-        or isinstance(cutoff_index, bool)
-        or not isinstance(feature_start_index, int)
-        or not isinstance(event_index, int)
-        or not isinstance(cutoff_index, int)
-        or feature_start_index < 0
-        or event_index < 0
-        or cutoff_index < 0
-        or feature_start_index > cutoff_index
-        or event_index > cutoff_index
-        or cutoff_index >= len(series.bars)
-    ):
-        raise ValueError("candidate signal indices are outside the verified causal interval")
-    expected_cutoff_index = event_index + 1 if definition.family == "D" else event_index
-    if cutoff_index != expected_cutoff_index:
-        raise ValueError("candidate signal indices violate the frozen family clock")
-    feature_start = series.bars[feature_start_index].timestamp
-    information_cutoff = series.bars[cutoff_index].bar_close
-    legal_entry = information_cutoff
-    return CandidateSignal(
-        candidate_id=definition.candidate_id,
-        family=definition.family,
-        symbol=series.symbol,
-        timeframe=definition.timeframe,
-        direction=definition.direction,
-        feature_start=feature_start,
-        information_cutoff=information_cutoff,
-        legal_entry=legal_entry,
-        source_publication_sha256=definition.source_publication_sha256,
-        source_series_sha256=definition.source_series_sha256,
-        segment_id=definition.source_segment_id,
-        candidate_slot_id=definition.slot.slot_id,
-        seal=_CANDIDATE_SIGNAL_SEAL,
-    )
+        return False
+    consume = getattr(issuance_token, "consume", None)
+    if not callable(consume):
+        return False
+    return consume(hash_json("candidate-signal-issuance-v1", payload)) is True
 
 
 @dataclass(frozen=True, slots=True)
@@ -1033,6 +1006,8 @@ class ValidationProgrammeConfig:
     cost_policy_sha256: str
     control_policy_sha256: str
     split_sha256: str
+    profile_config_sha256: str
+    source_price_precision_sha256: str
     families: tuple[str, ...]
     roster: tuple[ValidationSlot, ...]
     work_budget: ValidationWorkBudget
@@ -1069,14 +1044,16 @@ class ValidationProgrammeConfig:
             "cost_policy_sha256",
             "control_policy_sha256",
             "split_sha256",
+            "profile_config_sha256",
+            "source_price_precision_sha256",
         ):
             if _SHA256.fullmatch(getattr(self, field_name)) is None:
                 raise ValueError(f"{field_name} must be a lower-case SHA-256")
         if self.families != EXPECTED_FAMILIES:
             raise ValueError("validation families must remain ordered A, B, G, E, D")
         freeze_validation_slot_roster(self.roster)
-        if self.work_budget != ValidationWorkBudget():
-            raise ValueError("validation work budget must match the frozen Phase 5 budget")
+        if not isinstance(self.work_budget, ValidationWorkBudget):
+            raise TypeError("validation work budget must be a ValidationWorkBudget")
         object.__setattr__(self, "_programme_id", programme_id(self.to_dict()))
 
     @property
@@ -1102,6 +1079,8 @@ class ValidationProgrammeConfig:
             "cost_policy_sha256": self.cost_policy_sha256,
             "control_policy_sha256": self.control_policy_sha256,
             "split_sha256": self.split_sha256,
+            "profile_config_sha256": self.profile_config_sha256,
+            "source_price_precision_sha256": self.source_price_precision_sha256,
             "families": list(self.families),
             "roster": [slot.to_dict() for slot in self.roster],
             "roster_sha256": validation_roster_sha256(self.roster),

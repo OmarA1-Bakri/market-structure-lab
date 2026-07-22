@@ -334,6 +334,12 @@ class ProfileAccumulator:
             work_budget=self.work_budget,
         )
 
+    @property
+    def active_bin_count(self) -> int:
+        """Return the number of live non-empty bins without copying the profile map."""
+
+        return sum(1 for parts in self._bin_parts.values() if fsum(parts) > 0)
+
     def _require_stable_binning_identity(self) -> None:
         if self.binning.definition_id != self._binning_definition_id:
             raise ValueError("live binning definition identity changed after construction")

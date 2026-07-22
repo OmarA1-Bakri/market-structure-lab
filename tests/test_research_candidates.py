@@ -11,8 +11,10 @@ from tempfile import TemporaryDirectory
 
 import polars as pl
 import pytest
+import market_structure_lab.research.candidates as research_candidates
 import market_structure_lab.research.models as research_models
 
+from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import (
     CONTINUITY_ID,
     CanonicalAggregateBar,
@@ -28,13 +30,14 @@ from market_structure_lab.data.aggregate_publication import (
     read_verified_aggregate_series,
 )
 from market_structure_lab.data.export import PartitionRecord, SnapshotIdentity, SnapshotManifest
+from market_structure_lab.data.price_precision import verify_source_price_precision
+from market_structure_lab.profiles import ProfileAccumulator
 from market_structure_lab.research.candidates import (
     A_SELECTOR_GRID,
     VerifiedProfileStream,
     build_verified_profile_stream,
     candidate_definition_for_slot,
     detect_candidate_signals,
-    price_precision_artifact_bytes,
     profile_config_artifact_bytes,
     target_bars,
 )
@@ -42,14 +45,24 @@ from market_structure_lab.research.models import (
     VALIDATION_SLOT_ROSTER,
     CandidateDefinition,
     CandidateSignal,
+    EXPECTED_FAMILIES,
+    ValidationProgrammeConfig,
     ValidationSlot,
     ValidationSlotKind,
     ValidationWorkBudget,
+    ValidationWorkBudgetViolation,
 )
 
 PARENT = "b" * 64
 START = datetime(2025, 1, 1, tzinfo=UTC)
 _SERIES_TEMPORARIES: list[TemporaryDirectory[str]] = []
+TASK14_CLOSEOUT = "5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d"
+TASK14_EVIDENCE = "3482882c864f1471ec1dd682631544d0c404c542"
+TASK15_PLAN = "807ac28ac5616fb837c1ccea1e2bc47572ae3984"
+TASK15_EVIDENCE = "afce8e889aa645cd9e48e90631698b87866f287f"
+IMPLEMENTATION_CHECKPOINT = "e655152ab729b3e1e530f1bc044febca3509a6fd"
+IMPLEMENTATION_EVIDENCE = "6da307a0d4756c61ddcabdf01f00d828afb55d7e"
+IMPLEMENTATION_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111"
 
 
 def _slot(
@@ -412,6 +425,56 @@ def _parent_a_slot(slot: ValidationSlot) -> ValidationSlot:
     raise AssertionError("matching parent A Donchian slot not found")
 
 
+def _price_precision_bytes(
+    series: VerifiedAggregateSeries, *, step: float = 1.0, origin: float = 0.0
+) -> bytes:
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "source_snapshot_sha256": series.parent_snapshot_manifest.snapshot_sha256,
+            "source_snapshot_identity_sha256": hash_json(
+                "source-snapshot-identity-v1",
+                series.parent_snapshot_manifest.identity.to_dict(),
+            ),
+            "symbol": series.symbol,
+            "binning_version": "fixed-step-v1",
+            "step": step,
+            "origin": origin,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _programme(
+    series: VerifiedAggregateSeries,
+    profile_config: bytes,
+    price_precision: bytes,
+    *,
+    budget: ValidationWorkBudget | None = None,
+) -> ValidationProgrammeConfig:
+    return ValidationProgrammeConfig(
+        task14_closeout_commit=TASK14_CLOSEOUT,
+        task14_evidence_commit=TASK14_EVIDENCE,
+        task15_plan_commit=TASK15_PLAN,
+        task15_evidence_commit=TASK15_EVIDENCE,
+        implementation_plan_checkpoint=IMPLEMENTATION_CHECKPOINT,
+        implementation_plan_evidence_commit=IMPLEMENTATION_EVIDENCE,
+        implementation_plan_document_sha256=IMPLEMENTATION_DOCUMENT,
+        code_commit="1" * 40,
+        lockfile_sha256="2" * 64,
+        dataset_sha256=series.parent_snapshot_manifest.snapshot_sha256,
+        cost_policy_sha256="4" * 64,
+        control_policy_sha256="5" * 64,
+        split_sha256="6" * 64,
+        profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
+        source_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+        families=EXPECTED_FAMILIES,
+        roster=VALIDATION_SLOT_ROSTER,
+        work_budget=budget or ValidationWorkBudget(),
+    )
+
+
 def _profile_stream(
     series: VerifiedAggregateSeries,
     slot: ValidationSlot,
@@ -420,14 +483,21 @@ def _profile_stream(
     origin: float = 0.0,
 ) -> VerifiedProfileStream:
     window_hours = _effective_bars(slot, "profile_hours") * {"1h": 1, "4h": 4}[slot.timeframe]
-    profile_config = profile_config_artifact_bytes(window_hours)
-    price_precision = price_precision_artifact_bytes(series.symbol, step=step, origin=origin)
+    profile_config = profile_config_artifact_bytes()
+    price_precision = _price_precision_bytes(series, step=step, origin=origin)
+    programme = _programme(series, profile_config, price_precision)
+    receipt = verify_source_price_precision(
+        series,
+        price_precision,
+        expected_artifact_sha256=programme.source_price_precision_sha256,
+    )
     return build_verified_profile_stream(
         series,
+        programme,
+        window_hours=window_hours,
         profile_config_bytes=profile_config,
-        expected_profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
         price_precision_bytes=price_precision,
-        expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+        price_precision_receipt=receipt,
     )
 
 
@@ -472,7 +542,7 @@ def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin()
         {"outcome", "return", "mfe", "mae", "label"} & {item.name for item in fields(signal)}
     )
     assert not hasattr(definition, "behaviour_id")
-    with pytest.raises((TypeError, ValueError), match="seal"):
+    with pytest.raises((TypeError, ValueError), match="issuance|token"):
         replace(signal, direction=-1)
     with pytest.raises(Exception):
         signal.direction = -1  # type: ignore[misc]
@@ -481,6 +551,30 @@ def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin()
 def test_arbitrary_time_signal_issuer_is_not_public() -> None:
     assert "emit_candidate_signal" not in research_models.__all__
     assert not hasattr(research_models, "emit_candidate_signal")
+
+
+def test_flat_donchian_cannot_direct_mint_through_models_index_helper() -> None:
+    series = _series(_bars([100.0] * 25))
+    definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+
+    assert detect_candidate_signals(definition, series) == ()
+    assert not hasattr(research_models, "candidate_signal_from_indices")
+    with pytest.raises(TypeError, match="detector-owned.*issuance token"):
+        CandidateSignal(
+            candidate_id=definition.candidate_id,
+            family=definition.family,
+            symbol=series.symbol,
+            timeframe=definition.timeframe,
+            direction=definition.direction,
+            feature_start=series.bars[0].timestamp,
+            information_cutoff=series.bars[-1].bar_close,
+            legal_entry=series.bars[-1].bar_close,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            segment_id=series.segment_id,
+            candidate_slot_id=definition.slot.slot_id,
+            issuance_token=object(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -500,7 +594,7 @@ def test_arbitrary_signal_clocks_cannot_bypass_detector_index_issuance(
     definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
     cutoff = series.bars[-1].bar_close
 
-    with pytest.raises(TypeError, match="seal"):
+    with pytest.raises(TypeError, match="issuance|token"):
         CandidateSignal(  # type: ignore[call-arg]
             candidate_id=definition.candidate_id,
             family=definition.family,
@@ -751,55 +845,64 @@ def test_profile_stream_is_factory_computed_from_one_exact_parent_and_bin_origin
     stream = _profile_stream(series, slot)
     shifted_origin = _profile_stream(series, slot, origin=0.5)
 
+    assert not hasattr(research_candidates, "price_precision_artifact_bytes")
     assert len(stream.profiles) == 2
-    assert stream.source_row_ids == tuple(
-        source_id for bar in series.bars for source_id in bar.source_row_ids
-    )
+    assert not hasattr(stream, "source_row_ids")
+    assert not hasattr(stream.profiles[0], "snapshot")
     assert stream.source_row_count == series.manifest.source_row_count
     assert stream.source_sha256 == series.manifest.source_sha256
     assert stream.bin_definition_id != shifted_origin.bin_definition_id
+    profile_config = profile_config_artifact_bytes()
+    price_precision = _price_precision_bytes(series)
+    programme = _programme(series, profile_config, price_precision)
+    receipt = verify_source_price_precision(
+        series,
+        price_precision,
+        expected_artifact_sha256=programme.source_price_precision_sha256,
+    )
     with pytest.raises(ValueError, match="frozen expectation"):
-        profile_config = profile_config_artifact_bytes(24)
-        price_precision = price_precision_artifact_bytes(series.symbol, step=1.0)
         build_verified_profile_stream(
             series,
-            profile_config_bytes=profile_config,
-            expected_profile_config_sha256="f" * 64,
+            programme,
+            window_hours=24,
+            profile_config_bytes=profile_config + b" ",
             price_precision_bytes=price_precision,
-            expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+            price_precision_receipt=receipt,
         )
     with pytest.raises(ValueError, match="canonical JSON"):
-        profile_config = profile_config_artifact_bytes(24) + b"\n"
-        price_precision = price_precision_artifact_bytes(series.symbol, step=1.0)
+        noncanonical_config = profile_config + b"\n"
+        noncanonical_programme = _programme(series, noncanonical_config, price_precision)
         build_verified_profile_stream(
             series,
-            profile_config_bytes=profile_config,
-            expected_profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
+            noncanonical_programme,
+            window_hours=24,
+            profile_config_bytes=noncanonical_config,
             price_precision_bytes=price_precision,
-            expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+            price_precision_receipt=receipt,
         )
-    with pytest.raises(ValueError, match="aggregate symbol"):
-        profile_config = profile_config_artifact_bytes(24)
-        price_precision = price_precision_artifact_bytes("ETHUSDT", step=1.0)
+    alternative_precision = _price_precision_bytes(series, step=0.5, origin=0.5)
+    with pytest.raises(ValueError, match="frozen programme hash"):
         build_verified_profile_stream(
             series,
+            programme,
+            window_hours=24,
             profile_config_bytes=profile_config,
-            expected_profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
-            price_precision_bytes=price_precision,
-            expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+            price_precision_bytes=alternative_precision,
+            price_precision_receipt=receipt,
         )
-    impossible_snapshot = replace(
-        stream.profiles[0].snapshot,
-        bin_volumes={1_000_000: stream.profiles[0].snapshot.total_volume},
-        poc_index=1_000_000,
-        value_area_low_index=1_000_000,
-        value_area_high_index=1_000_000,
-        vwap=1_000_000.0,
+    foreign_payload = json.loads(price_precision.decode("utf-8"))
+    foreign_payload["symbol"] = "ETHUSDT"
+    foreign_precision = json.dumps(foreign_payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
     )
+    with pytest.raises(ValueError, match="snapshot symbol"):
+        verify_source_price_precision(
+            series,
+            foreign_precision,
+            expected_artifact_sha256=hashlib.sha256(foreign_precision).hexdigest(),
+        )
     with pytest.raises(TypeError, match="factory"):
-        replace(stream.profiles[0], snapshot=impossible_snapshot)
-    with pytest.raises(TypeError, match="factory"):
-        replace(stream.profiles[0], snapshot=shifted_origin.profiles[0].snapshot)
+        replace(stream.profiles[0], poc_index=1_000_000)
     with pytest.raises((TypeError, ValueError), match="seal"):
         replace(
             stream,
@@ -816,6 +919,108 @@ def test_profile_stream_is_factory_computed_from_one_exact_parent_and_bin_origin
     parent_partition.write_bytes(parent_partition.read_bytes() + b"tamper")
     with pytest.raises(ValueError, match="checksum|partition"):
         _profile_stream(series, slot)
+
+
+@pytest.mark.parametrize(
+    ("budget_field", "stage"),
+    (
+        ("max_profile_config_bytes", "profile_config_bytes"),
+        ("max_profile_source_id_bytes", "profile_source_id_bytes"),
+        ("max_profile_serialized_bytes", "profile_serialized_bytes"),
+    ),
+)
+def test_profile_budget_preflight_rejects_before_parent_row_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+    budget_field: str,
+    stage: str,
+) -> None:
+    series = _series(_bars([100.0] * 25))
+    profile_config = profile_config_artifact_bytes()
+    price_precision = _price_precision_bytes(series)
+    budget = replace(ValidationWorkBudget(), **{budget_field: 1})
+    programme = _programme(series, profile_config, price_precision, budget=budget)
+    receipt = verify_source_price_precision(
+        series,
+        price_precision,
+        expected_artifact_sha256=programme.source_price_precision_sha256,
+    )
+
+    def explode(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("profile parent rows were read before budget preflight")
+
+    monkeypatch.setattr(research_candidates, "read_bounded_regular", explode)
+    with pytest.raises(ValidationWorkBudgetViolation, match=stage):
+        build_verified_profile_stream(
+            series,
+            programme,
+            window_hours=24,
+            profile_config_bytes=profile_config,
+            price_precision_bytes=price_precision,
+            price_precision_receipt=receipt,
+        )
+
+
+def test_profile_active_bin_budget_rejects_before_first_snapshot_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    series = _series(_bars([100.0] * 25))
+    profile_config = profile_config_artifact_bytes()
+    price_precision = _price_precision_bytes(series)
+    budget = replace(ValidationWorkBudget(), max_profile_active_bin_cells=0)
+    programme = _programme(series, profile_config, price_precision, budget=budget)
+    receipt = verify_source_price_precision(
+        series,
+        price_precision,
+        expected_artifact_sha256=programme.source_price_precision_sha256,
+    )
+
+    def explode_snapshot(_self: ProfileAccumulator) -> object:
+        raise AssertionError("profile map was copied after the active-bin budget was exceeded")
+
+    monkeypatch.setattr(ProfileAccumulator, "snapshot", explode_snapshot)
+    with pytest.raises(ValidationWorkBudgetViolation, match="profile_active_bin_cells"):
+        build_verified_profile_stream(
+            series,
+            programme,
+            window_hours=24,
+            profile_config_bytes=profile_config,
+            price_precision_bytes=price_precision,
+            price_precision_receipt=receipt,
+        )
+
+
+def test_profile_serialized_budget_rejects_at_first_compact_record_excess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    series = _series(_bars([100.0] * 25))
+    profile_config = profile_config_artifact_bytes()
+    price_precision = _price_precision_bytes(series)
+    budget = replace(ValidationWorkBudget(), max_profile_serialized_bytes=2)
+    programme = _programme(series, profile_config, price_precision, budget=budget)
+    receipt = verify_source_price_precision(
+        series,
+        price_precision,
+        expected_artifact_sha256=programme.source_price_precision_sha256,
+    )
+    original_snapshot = ProfileAccumulator.snapshot
+    snapshot_calls = 0
+
+    def count_snapshot(self: ProfileAccumulator):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        return original_snapshot(self)
+
+    monkeypatch.setattr(ProfileAccumulator, "snapshot", count_snapshot)
+    with pytest.raises(ValidationWorkBudgetViolation, match="profile_serialized_bytes"):
+        build_verified_profile_stream(
+            series,
+            programme,
+            window_hours=24,
+            profile_config_bytes=profile_config,
+            price_precision_bytes=price_precision,
+            price_precision_receipt=receipt,
+        )
+    assert snapshot_calls == 1
 
 
 @pytest.mark.parametrize("direction", ("long", "short"))
@@ -885,7 +1090,7 @@ def test_subordinate_candidates_reject_flat_or_wrong_registered_a_opportunities(
     donchian_definition = _definition(donchian_slot, series)
     atr_definition = _definition(atr_slot, series)
     [atr_signal] = detect_candidate_signals(atr_definition, series)
-    with pytest.raises(TypeError, match="seal"):
+    with pytest.raises(TypeError, match="issuance|token"):
         CandidateSignal(  # type: ignore[call-arg]
             candidate_id=donchian_definition.candidate_id,
             family="A",

@@ -52,6 +52,10 @@ from market_structure_lab.data.export import (
     verify_snapshot,
 )
 from market_structure_lab.data.loader import iter_candle_batches, load_candles
+from market_structure_lab.data.price_precision import (
+    VerifiedSourcePricePrecision,
+    verify_source_price_precision,
+)
 from market_structure_lab.data.segments import (
     SegmentBoundary,
     assign_segment_ids,
@@ -66,6 +70,7 @@ __all__ = [
     "CanonicalSeriesState",
     "CanonicalAggregateBar",
     "VerifiedAggregateBarSpool",
+    "VerifiedSourcePricePrecision",
     "ColumnInspection",
     "DatabaseInspectionError",
     "FreshnessManifest",
@@ -101,6 +106,7 @@ __all__ = [
     "read_freshness_manifest",
     "resolve_freshness_cutoff",
     "verify_snapshot",
+    "verify_source_price_precision",
     "verify_aggregate_publication",
     "verify_failed_aggregate_publication",
     "write_freshness_manifest",

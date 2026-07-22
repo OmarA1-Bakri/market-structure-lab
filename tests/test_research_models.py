@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import pytest
 
@@ -45,6 +45,8 @@ def _config(**changes: object) -> ValidationProgrammeConfig:
         "cost_policy_sha256": "4" * 64,
         "control_policy_sha256": "5" * 64,
         "split_sha256": "6" * 64,
+        "profile_config_sha256": "7" * 64,
+        "source_price_precision_sha256": "8" * 64,
         "families": EXPECTED_FAMILIES,
         "roster": VALIDATION_SLOT_ROSTER,
         "work_budget": ValidationWorkBudget(),
@@ -117,6 +119,28 @@ def test_default_work_budget_freezes_exact_counts_and_draws() -> None:
     )
 
 
+def test_validation_programme_identity_requires_pinned_profile_artifact_hashes() -> None:
+    field_names = {item.name for item in fields(ValidationProgrammeConfig)}
+
+    assert {"profile_config_sha256", "source_price_precision_sha256"} <= field_names
+
+
+def test_validation_budget_freezes_profile_stream_and_serialization_limits() -> None:
+    budget_fields = {item.name for item in fields(ValidationWorkBudget)}
+    demand_fields = {item.name for item in fields(ValidationWorkDemand)}
+    expected = {
+        "profile_stream_count",
+        "profile_active_bin_cells",
+        "profile_source_id_bytes",
+        "profile_config_bytes",
+        "profile_serialized_bytes",
+    }
+
+    assert budget_fields >= {f"max_{name}" for name in expected}
+    assert demand_fields >= expected
+    assert ValidationWorkBudget().max_profile_stream_count == 1_000_000
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (
@@ -132,6 +156,8 @@ def test_default_work_budget_freezes_exact_counts_and_draws() -> None:
         ("bootstrap_draws", 4_095),
         ("max_source_rows", -1),
         ("max_source_bytes", 1.5),
+        ("max_profile_stream_count", 999_999),
+        ("max_profile_serialized_bytes", -1),
     ),
 )
 def test_work_budget_rejects_changed_exact_counts_or_invalid_limits(
@@ -218,8 +244,18 @@ def test_programme_config_binds_lineage_code_data_policies_roster_and_budget() -
         ("cost_policy_sha256", "a" * 64),
         ("control_policy_sha256", "b" * 64),
         ("split_sha256", "c" * 64),
+        ("profile_config_sha256", "d" * 64),
+        ("source_price_precision_sha256", "e" * 64),
     ):
         assert _config(**{field: value}).programme_id != config.programme_id
+
+    reduced_profile_budget = replace(
+        config.work_budget,
+        max_profile_active_bin_cells=config.work_budget.max_profile_active_bin_cells - 1,
+    )
+    reduced = _config(work_budget=reduced_profile_budget)
+    assert reduced.programme_id != config.programme_id
+    assert reduced.to_dict()["work_budget_sha256"] == reduced_profile_budget.sha256
 
 
 def test_programme_identity_is_frozen_once_for_repeated_evaluation_ids(
@@ -278,6 +314,11 @@ _LIMIT_CASES = (
     ("source_rows", "max_source_rows"),
     ("source_bytes", "max_source_bytes"),
     ("aggregate_bars", "max_aggregate_bars"),
+    ("profile_stream_count", "max_profile_stream_count"),
+    ("profile_active_bin_cells", "max_profile_active_bin_cells"),
+    ("profile_source_id_bytes", "max_profile_source_id_bytes"),
+    ("profile_config_bytes", "max_profile_config_bytes"),
+    ("profile_serialized_bytes", "max_profile_serialized_bytes"),
     ("symbols", "max_symbols"),
     ("ranges", "max_ranges"),
     ("candidates", "max_candidates"),

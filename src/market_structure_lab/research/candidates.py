@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime, timedelta
 import hashlib
@@ -20,11 +20,11 @@ from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import (
     CanonicalAggregateBar,
     canonical_source_row_identity,
-    source_rows_sha256,
 )
 from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
 from market_structure_lab.data.canonical import CANONICAL_SCHEMA, validate_candle_frame
 from market_structure_lab.data.export import read_snapshot_manifest, verify_snapshot
+from market_structure_lab.data.price_precision import VerifiedSourcePricePrecision
 from market_structure_lab.profiles import BinContribution, ProfileAccumulator, UniformAllocation
 from market_structure_lab.profiles.binning import FixedStepBins
 from market_structure_lab.profiles.models import Candle, ProfileSnapshot
@@ -32,14 +32,12 @@ from market_structure_lab.research.models import (
     FROZEN_A_SELECTOR_GRID,
     CandidateDefinition,
     CandidateSignal,
+    ValidationProgrammeConfig,
     ValidationSlot,
     ValidationSlotKind,
+    ValidationWorkBudgetViolation,
+    VALIDATION_SLOT_ROSTER,
     candidate_definition_for_slot,
-    candidate_signal_from_indices,
-)
-from market_structure_lab.structure.value_migration import (
-    ValueMigrationDirection,
-    compare_value_migration,
 )
 
 _SHA256_LENGTH = 64
@@ -64,12 +62,21 @@ class FrozenProfile:
     bin_metadata_sha256: str
     segment_id: int
     policy: str
-    snapshot: ProfileSnapshot
+    bin_definition_id: str
+    poc_index: int | None
+    value_area_low_index: int | None
+    value_area_high_index: int | None
+    value_area_mid_index: float | None
+    profile_content_sha256: str
+    active_bin_cells: int
+    serialized_bytes: int
     source_start_index: int
     source_end_index: int
     source_row_count: int
     source_start_timestamp: datetime
     source_end_timestamp: datetime
+    source_first_row_id: str
+    source_last_row_id: str
     source_window_sha256: str
     source_timeframe: str = "1m"
     profile_id: str = field(init=False)
@@ -92,16 +99,35 @@ class FrozenProfile:
             raise ValueError("candidate profiles require the rolling policy")
         if self.source_timeframe != "1m":
             raise ValueError("candidate profiles must be constructed from one-minute bars")
-        if self.snapshot.allocation_id != "uniform-touched-v1":
-            raise ValueError("candidate profiles require uniform-touched-v1 allocation")
-        if self.snapshot.value_area_fraction != 0.70:
-            raise ValueError("candidate profiles require the frozen 70% value area")
-        if not isinstance(self.snapshot.binning, FixedStepBins):
-            raise ValueError("candidate profiles require fixed-step integer bins")
-        if self.snapshot.binning.provenance != (
-            f"verified-price-precision:{self.bin_metadata_sha256}"
+        if not self.bin_definition_id.endswith(
+            f"source=verified-price-precision:{self.bin_metadata_sha256}"
         ):
             raise ValueError("candidate profile binning lacks exact verified precision metadata")
+        references = (self.poc_index, self.value_area_low_index, self.value_area_high_index)
+        if any(value is not None and type(value) is not int for value in references):
+            raise TypeError("candidate profile value references must be integer bin indices")
+        if any(value is None for value in references) and any(
+            value is not None for value in references
+        ):
+            raise ValueError("candidate profile value references must be complete or absent")
+        if self.value_area_low_index is None:
+            if self.value_area_mid_index is not None:
+                raise ValueError("empty candidate profile cannot claim a value-area midpoint")
+        elif (
+            self.value_area_mid_index
+            != (self.value_area_low_index + cast(int, self.value_area_high_index)) / 2
+        ):
+            raise ValueError("candidate profile midpoint differs from its value-area bounds")
+        _require_sha256(self.profile_content_sha256, "profile content")
+        if (
+            isinstance(self.active_bin_cells, bool)
+            or not isinstance(self.active_bin_cells, int)
+            or isinstance(self.serialized_bytes, bool)
+            or not isinstance(self.serialized_bytes, int)
+            or self.active_bin_cells < 0
+            or self.serialized_bytes < 1
+        ):
+            raise ValueError("candidate profile budget accounting is invalid")
         if (
             isinstance(self.source_start_index, bool)
             or isinstance(self.source_end_index, bool)
@@ -118,6 +144,8 @@ class FrozenProfile:
         ):
             raise ValueError("candidate profile source window does not start at its cutoff")
         _require_sha256(self.source_window_sha256, "profile source window")
+        _require_sha256(self.source_first_row_id, "profile first source row")
+        _require_sha256(self.source_last_row_id, "profile last source row")
         object.__setattr__(
             self,
             "profile_id",
@@ -139,7 +167,16 @@ class FrozenProfile:
                     "source_start_timestamp": self.source_start_timestamp,
                     "source_end_timestamp": self.source_end_timestamp,
                     "source_window_sha256": self.source_window_sha256,
-                    "snapshot": _profile_payload(self.snapshot),
+                    "bin_definition_id": self.bin_definition_id,
+                    "poc_index": self.poc_index,
+                    "value_area_low_index": self.value_area_low_index,
+                    "value_area_high_index": self.value_area_high_index,
+                    "value_area_mid_index": self.value_area_mid_index,
+                    "profile_content_sha256": self.profile_content_sha256,
+                    "active_bin_cells": self.active_bin_cells,
+                    "serialized_bytes": self.serialized_bytes,
+                    "source_first_row_id": self.source_first_row_id,
+                    "source_last_row_id": self.source_last_row_id,
                 },
             ),
         )
@@ -154,16 +191,22 @@ class VerifiedProfileStream:
     """Unique ordered content receipt for deterministic rolling one-minute profiles."""
 
     aggregate_series_sha256: str
+    validation_programme_id: str
+    work_budget_sha256: str
     source_minute_publication_sha256: str
     profile_config_sha256: str
     bin_metadata_sha256: str
     bin_step: float
     bin_origin: float
     bin_definition_id: str
+    price_precision_receipt_sha256: str
     window_hours: int
-    source_row_ids: tuple[str, ...]
     source_row_count: int
     source_sha256: str
+    profile_active_bin_cells: int
+    profile_source_id_bytes: int
+    profile_config_bytes: int
+    profile_serialized_bytes: int
     profiles: tuple[FrozenProfile, ...]
     ordered_profile_ids: tuple[str, ...]
     stream_sha256: str
@@ -174,10 +217,12 @@ class VerifiedProfileStream:
             raise TypeError("VerifiedProfileStream requires its verifier capability seal")
         for name in (
             "aggregate_series_sha256",
+            "work_budget_sha256",
             "source_minute_publication_sha256",
             "profile_config_sha256",
             "bin_metadata_sha256",
             "source_sha256",
+            "price_precision_receipt_sha256",
         ):
             _require_sha256(getattr(self, name), name)
         cutoffs = tuple(profile.information_cutoff for profile in self.profiles)
@@ -185,24 +230,37 @@ class VerifiedProfileStream:
             raise ValueError("verified profile stream cutoffs must be unique and ordered")
         if self.ordered_profile_ids != tuple(profile.profile_id for profile in self.profiles):
             raise ValueError("verified profile stream identities differ from profile content")
-        if self.source_row_count != len(self.source_row_ids):
+        if not self.validation_programme_id.startswith("VP-"):
+            raise ValueError("verified profile stream lacks its validation programme identity")
+        if self.source_row_count < 1:
             raise ValueError("verified profile stream source row count is invalid")
-        if source_rows_sha256(self.source_row_ids, identities=True) != self.source_sha256:
-            raise ValueError("verified profile stream ordered source identity is invalid")
+        if self.profile_source_id_bytes != self.source_row_count * _SHA256_LENGTH:
+            raise ValueError("verified profile stream source identity byte accounting is invalid")
+        if self.profile_config_bytes < 1:
+            raise ValueError("verified profile stream config byte accounting is invalid")
+        if self.profile_active_bin_cells != sum(
+            profile.active_bin_cells for profile in self.profiles
+        ):
+            raise ValueError("verified profile stream active-bin accounting is invalid")
+        if self.profile_serialized_bytes != sum(
+            profile.serialized_bytes for profile in self.profiles
+        ):
+            raise ValueError("verified profile stream serialized-byte accounting is invalid")
         for profile in self.profiles:
             if (
                 profile.source_minute_publication_sha256 != self.source_minute_publication_sha256
                 or profile.profile_config_sha256 != self.profile_config_sha256
                 or profile.bin_metadata_sha256 != self.bin_metadata_sha256
                 or profile.window_hours != self.window_hours
-                or profile.snapshot.binning.definition_id != self.bin_definition_id
+                or profile.bin_definition_id != self.bin_definition_id
             ):
                 raise ValueError("profile content differs from the verified stream receipt")
             expected_window = _profile_window_sha256(
                 source_sha256=self.source_sha256,
-                source_row_ids=self.source_row_ids,
                 start_index=profile.source_start_index,
                 end_index=profile.source_end_index,
+                first_source_row_id=profile.source_first_row_id,
+                last_source_row_id=profile.source_last_row_id,
             )
             if profile.source_window_sha256 != expected_window:
                 raise ValueError("profile source window differs from exact ordered parent rows")
@@ -210,71 +268,88 @@ class VerifiedProfileStream:
             "verified-candidate-profile-stream-v1",
             {
                 "aggregate_series_sha256": self.aggregate_series_sha256,
+                "validation_programme_id": self.validation_programme_id,
+                "work_budget_sha256": self.work_budget_sha256,
                 "source_minute_publication_sha256": self.source_minute_publication_sha256,
                 "profile_config_sha256": self.profile_config_sha256,
                 "bin_metadata_sha256": self.bin_metadata_sha256,
                 "bin_step": self.bin_step,
                 "bin_origin": self.bin_origin,
                 "bin_definition_id": self.bin_definition_id,
+                "price_precision_receipt_sha256": self.price_precision_receipt_sha256,
                 "window_hours": self.window_hours,
                 "source_row_count": self.source_row_count,
                 "source_sha256": self.source_sha256,
+                "profile_active_bin_cells": self.profile_active_bin_cells,
+                "profile_source_id_bytes": self.profile_source_id_bytes,
+                "profile_config_bytes": self.profile_config_bytes,
+                "profile_serialized_bytes": self.profile_serialized_bytes,
                 "ordered_profile_ids": self.ordered_profile_ids,
             },
         )
         if self.stream_sha256 != expected:
             raise ValueError("verified profile stream identity mismatch")
 
+    def bin_index(self, price: float) -> int:
+        """Map a price through the exact pinned precision without retaining profile maps."""
 
-def profile_config_artifact_bytes(window_hours: int) -> bytes:
-    """Return the exact frozen rolling-profile configuration artifact bytes."""
+        return FixedStepBins(
+            step=self.bin_step,
+            origin=self.bin_origin,
+            provenance=f"verified-price-precision:{self.bin_metadata_sha256}",
+        ).bin_index(price)
+
+
+def profile_config_artifact_bytes() -> bytes:
+    """Return the one exact rolling-profile registry for every legal B window."""
 
     return _artifact_bytes(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "policy": "rolling",
             "source_timeframe": "1m",
             "allocation_id": "uniform-touched-v1",
             "value_area_fraction": 0.70,
-            "window_hours": window_hours,
-        }
-    )
-
-
-def price_precision_artifact_bytes(symbol: str, *, step: float, origin: float = 0.0) -> bytes:
-    """Return exact fixed-step price-precision artifact bytes for one symbol."""
-
-    return _artifact_bytes(
-        {
-            "schema_version": 1,
-            "symbol": symbol,
-            "binning_version": "fixed-step-v1",
-            "step": step,
-            "origin": origin,
+            "window_hours": list(_frozen_profile_window_hours()),
         }
     )
 
 
 def build_verified_profile_stream(
     series: VerifiedAggregateSeries,
+    programme: ValidationProgrammeConfig,
     *,
+    window_hours: int,
     profile_config_bytes: bytes,
-    expected_profile_config_sha256: str,
     price_precision_bytes: bytes,
-    expected_price_precision_sha256: str,
+    price_precision_receipt: VerifiedSourcePricePrecision,
 ) -> VerifiedProfileStream:
     """Build rolling profiles only from exact verified parent one-minute publication rows."""
 
     if not isinstance(series, VerifiedAggregateSeries):
         raise TypeError("profile builder requires a VerifiedAggregateSeries capability")
-    _require_sha256(expected_profile_config_sha256, "expected profile config")
-    _require_sha256(expected_price_precision_sha256, "expected price precision")
-    if hashlib.sha256(profile_config_bytes).hexdigest() != expected_profile_config_sha256:
+    if not isinstance(programme, ValidationProgrammeConfig):
+        raise TypeError("profile builder requires its frozen ValidationProgrammeConfig")
+    if not isinstance(price_precision_receipt, VerifiedSourcePricePrecision):
+        raise TypeError("profile builder requires a verified source price precision receipt")
+    if programme.dataset_sha256 != series.parent_snapshot_manifest.snapshot_sha256:
+        raise ValueError("validation programme dataset does not match the profile source snapshot")
+    if hashlib.sha256(profile_config_bytes).hexdigest() != programme.profile_config_sha256:
         raise ValueError("profile config artifact bytes differ from the frozen expectation")
-    if hashlib.sha256(price_precision_bytes).hexdigest() != expected_price_precision_sha256:
-        raise ValueError("price precision artifact bytes differ from the frozen expectation")
+    if hashlib.sha256(price_precision_bytes).hexdigest() != programme.source_price_precision_sha256:
+        raise ValueError("source price precision differs from the frozen programme hash")
+    if (
+        price_precision_receipt.artifact_sha256 != programme.source_price_precision_sha256
+        or price_precision_receipt.aggregate_series_sha256 != series.series_sha256
+        or price_precision_receipt.source_snapshot_sha256
+        != series.parent_snapshot_manifest.snapshot_sha256
+        or price_precision_receipt.symbol != series.symbol
+    ):
+        raise ValueError("price precision receipt does not own the verified snapshot symbol")
+    budget = programme.work_budget
+    config_bytes = len(profile_config_bytes) + len(price_precision_bytes)
+    _require_profile_budget("profile_config_bytes", config_bytes, budget.max_profile_config_bytes)
     config = _parse_artifact(profile_config_bytes, "profile config")
-    precision = _parse_artifact(price_precision_bytes, "price precision")
     expected_config_fields = {
         "schema_version",
         "policy",
@@ -286,50 +361,43 @@ def build_verified_profile_stream(
     if set(config) != expected_config_fields or profile_config_bytes != _artifact_bytes(config):
         raise ValueError("profile config artifact bytes are not exact canonical JSON")
     if (
-        config["schema_version"] != 1
+        config["schema_version"] != 2
         or config["policy"] != "rolling"
         or config["source_timeframe"] != "1m"
         or config["allocation_id"] != "uniform-touched-v1"
         or config["value_area_fraction"] != 0.70
-        or isinstance(config["window_hours"], bool)
-        or not isinstance(config["window_hours"], int)
-        or config["window_hours"] < 1
+        or config["window_hours"] != list(_frozen_profile_window_hours())
+        or isinstance(window_hours, bool)
+        or not isinstance(window_hours, int)
+        or window_hours not in _frozen_profile_window_hours()
     ):
         raise ValueError("profile config artifact differs from the frozen rolling policy")
-    expected_precision_fields = {
-        "schema_version",
-        "symbol",
-        "binning_version",
-        "step",
-        "origin",
-    }
-    if set(precision) != expected_precision_fields or price_precision_bytes != _artifact_bytes(
-        precision
-    ):
-        raise ValueError("price precision artifact bytes are not exact canonical JSON")
-    if (
-        precision["schema_version"] != 1
-        or precision["symbol"] != series.symbol
-        or precision["binning_version"] != "fixed-step-v1"
-        or isinstance(precision["step"], bool)
-        or not isinstance(precision["step"], (int, float))
-        or isinstance(precision["origin"], bool)
-        or not isinstance(precision["origin"], (int, float))
-    ):
-        raise ValueError("price precision artifact differs from the verified aggregate symbol")
-    window_hours = cast(int, config["window_hours"])
     profile_config_sha256 = hashlib.sha256(profile_config_bytes).hexdigest()
     bin_metadata_sha256 = hashlib.sha256(price_precision_bytes).hexdigest()
-    bin_step = float(cast(float, precision["step"]))
-    bin_origin = float(cast(float, precision["origin"]))
+    bin_step = price_precision_receipt.step
+    bin_origin = price_precision_receipt.origin
     binning = FixedStepBins(
         step=bin_step,
         origin=bin_origin,
         provenance=f"verified-price-precision:{bin_metadata_sha256}",
     )
-    source_row_ids = tuple(source_id for bar in series.bars for source_id in bar.source_row_ids)
-    if source_rows_sha256(source_row_ids, identities=True) != series.manifest.source_sha256:
-        raise ValueError("aggregate source identity differs before profile construction")
+    expected_cutoffs = tuple(
+        bar.bar_close
+        for bar in series.bars
+        if bar.bar_close - series.bars[0].timestamp >= timedelta(hours=window_hours)
+    )
+    source_id_bytes = series.manifest.source_row_count * _SHA256_LENGTH
+    _require_profile_budget(
+        "profile_stream_count", len(expected_cutoffs), budget.max_profile_stream_count
+    )
+    _require_profile_budget(
+        "profile_source_id_bytes", source_id_bytes, budget.max_profile_source_id_bytes
+    )
+    _require_profile_budget(
+        "profile_serialized_bytes",
+        len(expected_cutoffs),
+        budget.max_profile_serialized_bytes,
+    )
     verify_snapshot(series.parent_snapshot_directory, series.parent_snapshot_manifest)
     if (
         read_snapshot_manifest(series.parent_snapshot_directory / "manifest.json")
@@ -342,10 +410,14 @@ def build_verified_profile_stream(
         value_area_fraction=0.70,
     )
     active: deque[BinContribution] = deque()
+    active_source_ids: deque[str] = deque()
     profiles: list[FrozenProfile] = []
     cutoff_set = {bar.bar_close for bar in series.bars}
     expected_timestamp = series.bars[0].timestamp
     source_index = 0
+    active_bin_cells = 0
+    serialized_bytes = 0
+    expected_source_ids = iter(source_id for bar in series.bars for source_id in bar.source_row_ids)
     expected_schema = pl.Schema(cast(Any, {**CANONICAL_SCHEMA, "segment_id": pl.UInt64}))
     for path, expected_sha256 in series.manifest.parent_partition_bindings:
         content = read_bounded_regular(
@@ -365,12 +437,18 @@ def build_verified_profile_stream(
         )
         for row in selected.iter_rows(named=True):
             timestamp = cast(datetime, row["timestamp"])
-            if source_index >= len(source_row_ids):
+            if source_index >= series.manifest.source_row_count:
                 raise ValueError("profile parent contains extra selected source rows")
             if timestamp != expected_timestamp:
                 raise ValueError("profile parent minute rows are missing, duplicated, or reordered")
             observed_id = canonical_source_row_identity(row)
-            if observed_id != source_row_ids[source_index]:
+            try:
+                expected_source_id = next(expected_source_ids)
+            except StopIteration as error:
+                raise ValueError(
+                    "aggregate source identities ended before the parent rows"
+                ) from error
+            if observed_id != expected_source_id:
                 raise ValueError("profile parent row differs from aggregate source identity")
             contribution = accumulator.add(
                 Candle(
@@ -382,13 +460,61 @@ def build_verified_profile_stream(
                 )
             )
             active.append(contribution)
+            active_source_ids.append(observed_id)
             window_rows = window_hours * 60
             if len(active) > window_rows:
                 accumulator.remove(active.popleft())
+                active_source_ids.popleft()
             cutoff = timestamp + timedelta(minutes=1)
             if cutoff in cutoff_set and len(active) == window_rows:
                 start_index = source_index - window_rows + 1
                 end_index = source_index + 1
+                next_active_cells = active_bin_cells + accumulator.active_bin_count
+                _require_profile_budget(
+                    "profile_active_bin_cells",
+                    next_active_cells,
+                    budget.max_profile_active_bin_cells,
+                )
+                snapshot = accumulator.snapshot()
+                first_source_row_id = active_source_ids[0]
+                last_source_row_id = active_source_ids[-1]
+                source_start_timestamp = timestamp - timedelta(minutes=window_rows - 1)
+                source_window_sha256 = _profile_window_sha256(
+                    source_sha256=series.manifest.source_sha256,
+                    start_index=start_index,
+                    end_index=end_index,
+                    first_source_row_id=first_source_row_id,
+                    last_source_row_id=last_source_row_id,
+                )
+                content_sha256 = hash_json(
+                    "candidate-profile-content-v1", _profile_payload(snapshot)
+                )
+                compact_payload = _compact_profile_payload(
+                    information_cutoff=cutoff,
+                    window_hours=window_hours,
+                    source_minute_publication_sha256=series.manifest.parent_snapshot_sha256,
+                    profile_config_sha256=profile_config_sha256,
+                    bin_metadata_sha256=bin_metadata_sha256,
+                    segment_id=series.segment_id,
+                    bin_definition_id=binning.definition_id,
+                    source_start_index=start_index,
+                    source_end_index=end_index,
+                    source_row_count=window_rows,
+                    source_start_timestamp=source_start_timestamp,
+                    source_end_timestamp=timestamp,
+                    source_first_row_id=first_source_row_id,
+                    source_last_row_id=last_source_row_id,
+                    source_window_sha256=source_window_sha256,
+                    profile_content_sha256=content_sha256,
+                    snapshot=snapshot,
+                )
+                item_bytes = len(_artifact_bytes(compact_payload))
+                next_serialized_bytes = serialized_bytes + item_bytes
+                _require_profile_budget(
+                    "profile_serialized_bytes",
+                    next_serialized_bytes,
+                    budget.max_profile_serialized_bytes,
+                )
                 profiles.append(
                     FrozenProfile(
                         information_cutoff=cutoff,
@@ -398,31 +524,46 @@ def build_verified_profile_stream(
                         bin_metadata_sha256=bin_metadata_sha256,
                         segment_id=series.segment_id,
                         policy="rolling",
-                        snapshot=accumulator.snapshot(),
+                        bin_definition_id=binning.definition_id,
+                        poc_index=snapshot.poc_index,
+                        value_area_low_index=snapshot.value_area_low_index,
+                        value_area_high_index=snapshot.value_area_high_index,
+                        value_area_mid_index=(
+                            None
+                            if snapshot.value_area_low_index is None
+                            else (
+                                snapshot.value_area_low_index
+                                + cast(int, snapshot.value_area_high_index)
+                            )
+                            / 2
+                        ),
+                        profile_content_sha256=content_sha256,
+                        active_bin_cells=accumulator.active_bin_count,
+                        serialized_bytes=item_bytes,
                         source_start_index=start_index,
                         source_end_index=end_index,
                         source_row_count=window_rows,
-                        source_start_timestamp=timestamp - timedelta(minutes=window_rows - 1),
+                        source_start_timestamp=source_start_timestamp,
                         source_end_timestamp=timestamp,
-                        source_window_sha256=_profile_window_sha256(
-                            source_sha256=series.manifest.source_sha256,
-                            source_row_ids=source_row_ids,
-                            start_index=start_index,
-                            end_index=end_index,
-                        ),
+                        source_first_row_id=first_source_row_id,
+                        source_last_row_id=last_source_row_id,
+                        source_window_sha256=source_window_sha256,
                         seal=_FROZEN_PROFILE_SEAL,
                     )
                 )
+                active_bin_cells = next_active_cells
+                serialized_bytes = next_serialized_bytes
             source_index += 1
             expected_timestamp += timedelta(minutes=1)
-    if source_index != len(source_row_ids):
+    if source_index != series.manifest.source_row_count:
         raise ValueError("profile parent is missing exact aggregate source rows")
+    try:
+        next(expected_source_ids)
+    except StopIteration:
+        pass
+    else:
+        raise ValueError("aggregate source identities exceed the exact parent row count")
     frozen = tuple(profiles)
-    expected_cutoffs = tuple(
-        bar.bar_close
-        for bar in series.bars
-        if bar.bar_close - series.bars[0].timestamp >= timedelta(hours=window_hours)
-    )
     if tuple(profile.information_cutoff for profile in frozen) != expected_cutoffs:
         raise ValueError("verified profile stream contains duplicate or missing rolling cutoffs")
     ordered = tuple(profile.profile_id for profile in frozen)
@@ -431,30 +572,43 @@ def build_verified_profile_stream(
         "verified-candidate-profile-stream-v1",
         {
             "aggregate_series_sha256": series.series_sha256,
+            "validation_programme_id": programme.programme_id,
+            "work_budget_sha256": budget.sha256,
             "source_minute_publication_sha256": source_minute_publication_sha256,
             "profile_config_sha256": profile_config_sha256,
             "bin_metadata_sha256": bin_metadata_sha256,
             "bin_step": bin_step,
             "bin_origin": bin_origin,
             "bin_definition_id": binning.definition_id,
+            "price_precision_receipt_sha256": price_precision_receipt.receipt_sha256,
             "window_hours": window_hours,
-            "source_row_count": len(source_row_ids),
+            "source_row_count": series.manifest.source_row_count,
             "source_sha256": series.manifest.source_sha256,
+            "profile_active_bin_cells": active_bin_cells,
+            "profile_source_id_bytes": source_id_bytes,
+            "profile_config_bytes": config_bytes,
+            "profile_serialized_bytes": serialized_bytes,
             "ordered_profile_ids": ordered,
         },
     )
     return VerifiedProfileStream(
         aggregate_series_sha256=series.series_sha256,
+        validation_programme_id=programme.programme_id,
+        work_budget_sha256=budget.sha256,
         source_minute_publication_sha256=source_minute_publication_sha256,
         profile_config_sha256=profile_config_sha256,
         bin_metadata_sha256=bin_metadata_sha256,
         bin_step=bin_step,
         bin_origin=bin_origin,
         bin_definition_id=binning.definition_id,
+        price_precision_receipt_sha256=price_precision_receipt.receipt_sha256,
         window_hours=window_hours,
-        source_row_ids=source_row_ids,
-        source_row_count=len(source_row_ids),
+        source_row_count=series.manifest.source_row_count,
         source_sha256=series.manifest.source_sha256,
+        profile_active_bin_cells=active_bin_cells,
+        profile_source_id_bytes=source_id_bytes,
+        profile_config_bytes=config_bytes,
+        profile_serialized_bytes=serialized_bytes,
         profiles=frozen,
         ordered_profile_ids=ordered,
         stream_sha256=stream_sha256,
@@ -482,43 +636,130 @@ def detect_candidate_signals(
 ) -> tuple[CandidateSignal, ...]:
     """Detect one frozen candidate/comparator over authenticated complete aggregate bars."""
 
+    def detector_signal_issuer() -> Callable[[int, int, int], CandidateSignal]:
+        evidence_capability = object()
+
+        @dataclass(frozen=True, slots=True)
+        class DetectorEvidence:
+            event_index: int
+            feature_start_index: int
+            cutoff_index: int
+            capability: object
+
+        class IssuanceToken:
+            __slots__ = ("_expected", "_used")
+
+            def __init__(self, expected: str) -> None:
+                self._expected = expected
+                self._used = False
+
+            def consume(self, observed: str) -> bool:
+                if self._used or observed != self._expected:
+                    return False
+                self._used = True
+                return True
+
+        def issue(evidence: DetectorEvidence) -> CandidateSignal:
+            if (
+                type(evidence) is not DetectorEvidence
+                or evidence.capability is not evidence_capability
+            ):
+                raise TypeError("candidate issuance requires internal detector evidence")
+            indices = (
+                evidence.event_index,
+                evidence.feature_start_index,
+                evidence.cutoff_index,
+            )
+            if any(isinstance(index, bool) or not isinstance(index, int) for index in indices):
+                raise ValueError("candidate signal indices must be integers")
+            if (
+                evidence.feature_start_index < 0
+                or evidence.event_index < 0
+                or evidence.cutoff_index < 0
+                or evidence.feature_start_index > evidence.cutoff_index
+                or evidence.event_index > evidence.cutoff_index
+                or evidence.cutoff_index >= len(series.bars)
+            ):
+                raise ValueError(
+                    "candidate signal indices are outside the verified causal interval"
+                )
+            expected_cutoff_index = (
+                evidence.event_index + 1 if definition.family == "D" else evidence.event_index
+            )
+            if evidence.cutoff_index != expected_cutoff_index:
+                raise ValueError("candidate signal indices violate the frozen family clock")
+            payload: dict[str, object] = {
+                "candidate_id": definition.candidate_id,
+                "family": definition.family,
+                "symbol": series.symbol,
+                "timeframe": definition.timeframe,
+                "direction": definition.direction,
+                "feature_start": series.bars[evidence.feature_start_index].timestamp,
+                "information_cutoff": series.bars[evidence.cutoff_index].bar_close,
+                "legal_entry": series.bars[evidence.cutoff_index].bar_close,
+                "source_publication_sha256": definition.source_publication_sha256,
+                "source_series_sha256": definition.source_series_sha256,
+                "segment_id": definition.source_segment_id,
+                "candidate_slot_id": definition.slot.slot_id,
+            }
+            token = IssuanceToken(hash_json("candidate-signal-issuance-v1", payload))
+            return CandidateSignal(**payload, issuance_token=token)  # type: ignore[arg-type]
+
+        def record_event(
+            event_index: int, feature_start_index: int, cutoff_index: int
+        ) -> CandidateSignal:
+            evidence = DetectorEvidence(
+                event_index=event_index,
+                feature_start_index=feature_start_index,
+                cutoff_index=cutoff_index,
+                capability=evidence_capability,
+            )
+            return issue(evidence)
+
+        return record_event
+
     _validate_series(definition, series)
     bars = series.bars
     if not bars:
         return ()
+    issuer = detector_signal_issuer()
     if definition.family == "A":
-        return _detect_a(definition, series)
+        return _detect_a(definition, series, issuer)
     if definition.family == "B":
         if (
             profile_stream is None
             or profile_stream.stream_sha256 != definition.profile_stream_sha256
         ):
             raise ValueError("family B detection requires its exact verified profile stream")
-        return _detect_b(definition, series, a_opportunities, profile_stream)
+        return _detect_b(definition, series, a_opportunities, profile_stream, issuer)
     if definition.family == "G":
-        return _detect_g(definition, series)
+        return _detect_g(definition, series, issuer)
     if definition.family == "E":
-        return _detect_e(definition, series, a_opportunities)
-    return _detect_d(definition, series)
+        return _detect_e(definition, series, a_opportunities, issuer)
+    return _detect_d(definition, series, issuer)
 
 
 def _detect_a(
-    definition: CandidateDefinition, series: VerifiedAggregateSeries
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     detector = dict(definition.parameters)["detector"]
     if detector == "moving_average_crossover":
-        return _detect_a_sma(definition, series)
+        return _detect_a_sma(definition, series, issuer)
     if detector == "donchian_breakout":
-        return _detect_a_donchian(definition, series)
+        return _detect_a_donchian(definition, series, issuer)
     if detector == "atr_breakout":
-        return _detect_a_atr(definition, series)
+        return _detect_a_atr(definition, series, issuer)
     if detector == "time_series_momentum":
-        return _detect_a_momentum(definition, series)
+        return _detect_a_momentum(definition, series, issuer)
     raise ValueError("unsupported family A detector")
 
 
 def _detect_a_sma(
-    definition: CandidateDefinition, series: VerifiedAggregateSeries
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     fast = _parameter_bars(definition.slot, "fast_hours")
@@ -534,11 +775,13 @@ def _detect_a_sma(
         previous = states[index - 1]
         if state == definition.direction and state != 0 and state != previous:
             events.append((index, index - slow, index))
-    return _signals(definition, series, events)
+    return _signals(definition, series, events, issuer)
 
 
 def _detect_a_donchian(
-    definition: CandidateDefinition, series: VerifiedAggregateSeries
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     lookback = _parameter_bars(definition.slot, "lookback_hours")
@@ -554,11 +797,13 @@ def _detect_a_donchian(
             armed = False
         elif not armed and lower <= bars[index].close <= upper:
             armed = True
-    return _signals(definition, series, events)
+    return _signals(definition, series, events, issuer)
 
 
 def _detect_a_atr(
-    definition: CandidateDefinition, series: VerifiedAggregateSeries
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     count = _parameter_bars(definition.slot, "atr_hours")
@@ -580,11 +825,13 @@ def _detect_a_atr(
             armed = False
         elif not condition:
             armed = True
-    return _signals(definition, series, events)
+    return _signals(definition, series, events, issuer)
 
 
 def _detect_a_momentum(
-    definition: CandidateDefinition, series: VerifiedAggregateSeries
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     lookback = _parameter_bars(definition.slot, "momentum_hours")
@@ -596,7 +843,7 @@ def _detect_a_momentum(
         state = states[index]
         if state == definition.direction and state != 0 and state != states[index - 1]:
             events.append((index, index - lookback - 1, index))
-    return _signals(definition, series, events)
+    return _signals(definition, series, events, issuer)
 
 
 def _detect_b(
@@ -604,6 +851,7 @@ def _detect_b(
     series: VerifiedAggregateSeries,
     opportunities: Sequence[CandidateSignal],
     profile_stream: VerifiedProfileStream,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     by_cutoff = {profile.information_cutoff: profile for profile in profile_stream.profiles}
@@ -624,34 +872,25 @@ def _detect_b(
             definition, current, window_hours
         ):
             continue
-        prior_snapshot = previous.snapshot
-        snapshot = current.snapshot
         references = (
-            prior_snapshot.poc_index,
-            prior_snapshot.value_area_low_index,
-            prior_snapshot.value_area_high_index,
-            snapshot.poc_index,
-            snapshot.value_area_low_index,
-            snapshot.value_area_high_index,
+            previous.poc_index,
+            previous.value_area_low_index,
+            previous.value_area_high_index,
+            current.poc_index,
+            current.value_area_low_index,
+            current.value_area_high_index,
         )
         if any(value is None for value in references):
             continue
-        classified_migration = compare_value_migration(prior_snapshot, snapshot)
         prior_poc, prior_low, prior_high, poc, low, high = cast(tuple[int, ...], references)
         migration = (
-            poc > prior_poc
-            and low + high > prior_low + prior_high
-            and classified_migration.direction
-            in (ValueMigrationDirection.HIGHER, ValueMigrationDirection.OVERLAPPING_HIGHER)
+            poc > prior_poc and low + high > prior_low + prior_high
             if definition.direction == 1
-            else poc < prior_poc
-            and low + high < prior_low + prior_high
-            and classified_migration.direction
-            in (ValueMigrationDirection.LOWER, ValueMigrationDirection.OVERLAPPING_LOWER)
+            else poc < prior_poc and low + high < prior_low + prior_high
         )
         accepted = (
-            low <= snapshot.binning.bin_index(bars[index - 1].close) <= high
-            and low <= (snapshot.binning.bin_index(bars[index].close)) <= high
+            low <= profile_stream.bin_index(bars[index - 1].close) <= high
+            and low <= profile_stream.bin_index(bars[index].close) <= high
         )
         if migration and accepted:
             selected.append((opportunity, index))
@@ -683,6 +922,7 @@ def _detect_b(
                     _timestamp_index(series, by_cutoff[bars[index - 2].bar_close].feature_start),
                 )
             ),
+            issuer=issuer,
         )
         for opportunity, index in chosen
     )
@@ -693,6 +933,7 @@ def _detect_e(
     definition: CandidateDefinition,
     series: VerifiedAggregateSeries,
     opportunities: Sequence[CandidateSignal],
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     count = _parameter_bars(definition.slot, "volume_median_hours")
@@ -725,6 +966,7 @@ def _detect_e(
             feature_start_index=min(
                 _timestamp_index(series, opportunity.feature_start), index - count
             ),
+            issuer=issuer,
         )
         for opportunity, index in chosen
     )
@@ -732,7 +974,9 @@ def _detect_e(
 
 
 def _detect_g(
-    definition: CandidateDefinition, series: VerifiedAggregateSeries
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     n8 = _parameter_bars(definition.slot, "atr_short_hours")
@@ -788,11 +1032,13 @@ def _detect_g(
                 armed = False
         elif definition.role == "candidate_primary" and not condition:
             armed = True
-    return _signals(definition, series, events)
+    return _signals(definition, series, events, issuer)
 
 
 def _detect_d(
-    definition: CandidateDefinition, series: VerifiedAggregateSeries
+    definition: CandidateDefinition,
+    series: VerifiedAggregateSeries,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     lookback = _parameter_bars(definition.slot, "level_hours")
@@ -816,13 +1062,14 @@ def _detect_d(
             armed = False
         elif not breach:
             armed = True
-    return _signals(definition, series, events)
+    return _signals(definition, series, events, issuer)
 
 
 def _signals(
     definition: CandidateDefinition,
     series: VerifiedAggregateSeries,
     events: Sequence[tuple[int, int, int]],
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     output: list[CandidateSignal] = []
@@ -832,15 +1079,7 @@ def _signals(
         legal_entry = cutoff
         if frozen_until is not None and legal_entry < frozen_until:
             continue
-        output.append(
-            candidate_signal_from_indices(
-                definition,
-                series,
-                event_index=signal_index,
-                feature_start_index=start_index,
-                cutoff_index=cutoff_index,
-            )
-        )
+        output.append(issuer(signal_index, start_index, cutoff_index))
         frozen_until = legal_entry + timedelta(hours=definition.horizon_hours)
     return tuple(output)
 
@@ -852,19 +1091,14 @@ def _signal_from_opportunity(
     *,
     feature_start_index: int,
     cutoff_index: int,
+    issuer: Callable[[int, int, int], CandidateSignal],
 ) -> CandidateSignal:
     if (
         opportunity.information_cutoff != series.bars[cutoff_index].bar_close
         or opportunity.legal_entry != opportunity.information_cutoff
     ):
         raise ValueError("subordinate signal bar does not match its verified cutoff index")
-    return candidate_signal_from_indices(
-        definition,
-        series,
-        event_index=cutoff_index,
-        feature_start_index=feature_start_index,
-        cutoff_index=cutoff_index,
-    )
+    return issuer(cutoff_index, feature_start_index, cutoff_index)
 
 
 def _timestamp_index(series: VerifiedAggregateSeries, timestamp: datetime) -> int:
@@ -913,13 +1147,11 @@ def _rate_matched(
 def _valid_profile(
     definition: CandidateDefinition, profile: FrozenProfile, window_hours: int
 ) -> bool:
-    if (
+    return not (
         profile.window_hours != window_hours
         or profile.segment_id != definition.source_segment_id
-        or getattr(profile.snapshot.binning, "step", None) != definition.profile_bin_step
-    ):
-        return False
-    return isinstance(profile.snapshot.binning, FixedStepBins)
+        or not profile.bin_definition_id
+    )
 
 
 def _validate_opportunity(
@@ -968,6 +1200,64 @@ def _profile_payload(snapshot: ProfileSnapshot) -> dict[str, object]:
     }
 
 
+def _compact_profile_payload(
+    *,
+    information_cutoff: datetime,
+    window_hours: int,
+    source_minute_publication_sha256: str,
+    profile_config_sha256: str,
+    bin_metadata_sha256: str,
+    segment_id: int,
+    bin_definition_id: str,
+    source_start_index: int,
+    source_end_index: int,
+    source_row_count: int,
+    source_start_timestamp: datetime,
+    source_end_timestamp: datetime,
+    source_first_row_id: str,
+    source_last_row_id: str,
+    source_window_sha256: str,
+    profile_content_sha256: str,
+    snapshot: ProfileSnapshot,
+) -> dict[str, object]:
+    """Return the exact compact B-detector record without retaining its bin-volume map."""
+
+    return {
+        "information_cutoff": information_cutoff.isoformat(),
+        "window_hours": window_hours,
+        "source_minute_publication_sha256": source_minute_publication_sha256,
+        "profile_config_sha256": profile_config_sha256,
+        "bin_metadata_sha256": bin_metadata_sha256,
+        "segment_id": segment_id,
+        "policy": "rolling",
+        "source_timeframe": "1m",
+        "bin_definition_id": bin_definition_id,
+        "source_start_index": source_start_index,
+        "source_end_index": source_end_index,
+        "source_row_count": source_row_count,
+        "source_start_timestamp": source_start_timestamp.isoformat(),
+        "source_end_timestamp": source_end_timestamp.isoformat(),
+        "source_first_row_id": source_first_row_id,
+        "source_last_row_id": source_last_row_id,
+        "source_window_sha256": source_window_sha256,
+        "profile_content_sha256": profile_content_sha256,
+        "active_bin_cells": len(snapshot.bin_volumes),
+        "poc_index": snapshot.poc_index,
+        "value_area_low_index": snapshot.value_area_low_index,
+        "value_area_high_index": snapshot.value_area_high_index,
+        "value_area_mid_index": (
+            None
+            if snapshot.value_area_low_index is None
+            else (snapshot.value_area_low_index + cast(int, snapshot.value_area_high_index)) / 2
+        ),
+    }
+
+
+def _require_profile_budget(stage: str, observed: int, limit: int) -> None:
+    if observed > limit:
+        raise ValidationWorkBudgetViolation(stage, observed, limit)
+
+
 def _artifact_bytes(payload: Mapping[str, object]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -987,9 +1277,10 @@ def _parse_artifact(content: bytes, label: str) -> dict[str, object]:
 def _profile_window_sha256(
     *,
     source_sha256: str,
-    source_row_ids: Sequence[str],
     start_index: int,
     end_index: int,
+    first_source_row_id: str,
+    last_source_row_id: str,
 ) -> str:
     return hash_json(
         "candidate-profile-source-window-v1",
@@ -998,8 +1289,8 @@ def _profile_window_sha256(
             "start_index": start_index,
             "end_index": end_index,
             "row_count": end_index - start_index,
-            "first_source_row_id": source_row_ids[start_index],
-            "last_source_row_id": source_row_ids[end_index - 1],
+            "first_source_row_id": first_source_row_id,
+            "last_source_row_id": last_source_row_id,
         },
     )
 
@@ -1013,6 +1304,19 @@ def _parameter_bars(slot: ValidationSlot, name: str) -> int:
     ):
         return int(parameters["candidate_bars"])
     return base
+
+
+def _frozen_profile_window_hours() -> tuple[int, ...]:
+    return tuple(
+        sorted(
+            {
+                _parameter_bars(slot, "profile_hours") * _TIMEFRAME_HOURS[slot.timeframe]
+                for slot in VALIDATION_SLOT_ROSTER
+                if slot.family == "B"
+                and slot.kind in (ValidationSlotKind.CORE, ValidationSlotKind.PERTURBATION)
+            }
+        )
+    )
 
 
 def _true_ranges(bars: Sequence[CanonicalAggregateBar]) -> tuple[float | None, ...]:
@@ -1064,7 +1368,6 @@ __all__ = [
     "build_verified_profile_stream",
     "candidate_definition_for_slot",
     "detect_candidate_signals",
-    "price_precision_artifact_bytes",
     "profile_config_artifact_bytes",
     "target_bars",
 ]
