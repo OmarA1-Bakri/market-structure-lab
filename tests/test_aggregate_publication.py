@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from collections.abc import Iterator
+from contextlib import contextmanager
+import os
 
 import polars as pl
 import pytest
@@ -680,25 +682,105 @@ def test_symbol_ancestor_symlink_race_cannot_escape_output_root(
     assert not any(external.iterdir())
 
 
-def test_partial_final_claim_is_terminal_and_retry_never_overwrites(
+def test_windows_publication_branch_uses_exclusive_handle_claim_adapter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     frame = minute_frame(60)
     parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
     output_root = tmp_path / "output"
+
+    class FakeClaim:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+            self.directories: set[str] = set()
+
+        def create_regular_descriptor(self, relative_path: str | Path) -> int:
+            destination = self.root / relative_path
+            if destination.parent != self.root:
+                destination.parent.mkdir(exist_ok=False)
+                self.directories.add(destination.parent.relative_to(self.root).as_posix())
+            return os.open(
+                destination,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+
+        def unlink_regular(self, relative_path: str | Path) -> None:
+            (self.root / relative_path).unlink()
+
+        @property
+        def created_directories(self) -> tuple[str, ...]:
+            return tuple(sorted(self.directories))
+
+    class FakeWindowsFilesystem:
+        def __init__(self) -> None:
+            self.claims = 0
+
+        @contextmanager
+        def claim_exclusive_directory(
+            self,
+            root: Path,
+            ancestors: tuple[str, ...],
+            final_name: str,
+        ):
+            self.claims += 1
+            final = root.joinpath(*ancestors, final_name)
+            final.mkdir(parents=True, exist_ok=False)
+            yield FakeClaim(final)
+
+    filesystem = FakeWindowsFilesystem()
+    monkeypatch.setattr(aggregate_publication_module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        aggregate_publication_module,
+        "WindowsHandleFilesystem",
+        lambda: filesystem,
+    )
+    manifest = publish(
+        [frame],
+        output_root=output_root,
+        parent_directory=parent_directory,
+        parent_manifest=source_manifest,
+    )
+
+    assert filesystem.claims == 1
+    verify_aggregate_publication(published_directory(output_root), manifest)
+
+
+def test_partial_final_claim_is_terminal_and_retry_never_overwrites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(120)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
     final = published_directory(output_root)
     original_write = aggregate_publication_module._write_exclusive_at
+    original_windows_write = aggregate_publication_module._write_exclusive_windows
     writes = 0
 
     def write_then_fail(parent_fd: int, name: str, content: bytes) -> None:
         nonlocal writes
-        original_write(parent_fd, name, content)
-        writes += 1
         if writes == 1:
             raise OSError("injected publication copy failure")
+        original_write(parent_fd, name, content)
+        writes += 1
 
-    monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_at", write_then_fail)
+    def windows_write_then_fail(claim, name: str, content: bytes) -> None:
+        nonlocal writes
+        if writes == 1:
+            raise OSError("injected publication copy failure")
+        original_windows_write(claim, name, content)
+        writes += 1
+
+    if os.name == "nt":
+        monkeypatch.setattr(
+            aggregate_publication_module,
+            "_write_exclusive_windows",
+            windows_write_then_fail,
+        )
+    else:
+        monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_at", write_then_fail)
     with pytest.raises(OSError, match="injected"):
         publish(
             [frame],
@@ -709,7 +791,29 @@ def test_partial_final_claim_is_terminal_and_retry_never_overwrites(
 
     assert final.is_dir()
     assert not (final / "_SUCCESS").exists()
+    assert (final / "_FAILED.json").is_file()
+    failed_verifier = getattr(
+        aggregate_publication_module,
+        "verify_failed_aggregate_publication",
+        None,
+    )
+    assert callable(failed_verifier)
+    failure = failed_verifier(final)
+    assert failure.publication_sha256
+    assert failure.cause_class == "OSError"
+    assert failure.retry_semantics == "terminal-claim-no-retry"
+    assert failure.written_artifacts
+    anonymous = final / "anonymous"
+    anonymous.mkdir()
+    with pytest.raises(ValueError, match="anonymous directories"):
+        failed_verifier(final)
+    anonymous.rmdir()
     monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_at", original_write)
+    monkeypatch.setattr(
+        aggregate_publication_module,
+        "_write_exclusive_windows",
+        original_windows_write,
+    )
     with pytest.raises(FileExistsError, match="publication"):
         publish(
             [frame],

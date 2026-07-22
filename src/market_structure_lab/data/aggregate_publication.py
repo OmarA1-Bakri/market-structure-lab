@@ -28,6 +28,10 @@ from market_structure_lab.core.artifact_io import (
     sha256_regular,
 )
 from market_structure_lab.core.identity import canonical_json, hash_json
+from market_structure_lab.core.secure_windows import (
+    WindowsDirectoryClaim,
+    WindowsHandleFilesystem,
+)
 from market_structure_lab.data.aggregate_bars import (
     CONTINUITY_ID,
     CanonicalAggregateBar,
@@ -54,7 +58,9 @@ from market_structure_lab.research.models import (
 
 AGGREGATE_MANIFEST_NAME: Final = "manifest.json"
 AGGREGATE_SUCCESS_NAME: Final = "_SUCCESS"
+AGGREGATE_FAILED_NAME: Final = "_FAILED.json"
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+_MAX_FAILURE_BYTES = 1024 * 1024
 _MAX_PUBLICATION_ENTRIES = 2_000_010
 _MAX_PARENT_PARTITION_BYTES = 64 * 1024 * 1024
 _MAX_PARENT_PARTITION_ROWS = 2_000
@@ -151,6 +157,81 @@ class AggregateSourceSelectionReceipt:
                 {"path": path, "sha256": sha256} for path, sha256 in self.parent_partition_bindings
             ],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class AggregatePublicationFailure:
+    """Canonical terminal evidence for an exclusively claimed publication that failed."""
+
+    schema_version: int
+    status: str
+    publication_sha256: str
+    claim_sha256: str
+    symbol: str
+    target_timeframe: str
+    segment_id: int
+    cause_class: str
+    written_artifacts: tuple[tuple[str, str], ...]
+    created_directories: tuple[str, ...]
+    retry_semantics: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1 or self.status != "failed":
+            raise ValueError("aggregate failure schema or status is invalid")
+        _require_sha256(self.publication_sha256, "failed publication sha256")
+        _require_sha256(self.claim_sha256, "failed publication claim sha256")
+        if _SAFE_COMPONENT.fullmatch(self.symbol) is None:
+            raise ValueError("failed publication symbol is invalid")
+        target_timeframe_minutes(self.target_timeframe)
+        if isinstance(self.segment_id, bool) or self.segment_id < 0:
+            raise ValueError("failed publication segment_id is invalid")
+        expected_claim = hash_json(
+            "aggregate-publication-exclusive-claim-v1",
+            {
+                "publication_sha256": self.publication_sha256,
+                "symbol": self.symbol,
+                "target_timeframe": self.target_timeframe,
+                "segment_id": self.segment_id,
+            },
+        )
+        if self.claim_sha256 != expected_claim:
+            raise ValueError("failed publication claim identity is invalid")
+        if _SAFE_COMPONENT.fullmatch(self.cause_class) is None:
+            raise ValueError("aggregate failure cause class is invalid")
+        paths = tuple(path for path, _ in self.written_artifacts)
+        if paths != tuple(sorted(paths)) or len(paths) != len(set(paths)):
+            raise ValueError("aggregate failure artifacts must be uniquely ordered")
+        for path, sha256 in self.written_artifacts:
+            if not path or Path(path).is_absolute() or ".." in Path(path).parts:
+                raise ValueError("aggregate failure artifact path is invalid")
+            _require_sha256(sha256, "aggregate failure artifact sha256")
+        if self.created_directories != tuple(sorted(set(self.created_directories))):
+            raise ValueError("aggregate failure directories must be uniquely ordered")
+        for directory in self.created_directories:
+            if not directory or Path(directory).is_absolute() or ".." in Path(directory).parts:
+                raise ValueError("aggregate failure directory path is invalid")
+        if self.retry_semantics != "terminal-claim-no-retry":
+            raise ValueError("aggregate failure retry semantics are invalid")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "status": self.status,
+            "publication_sha256": self.publication_sha256,
+            "claim_sha256": self.claim_sha256,
+            "symbol": self.symbol,
+            "target_timeframe": self.target_timeframe,
+            "segment_id": self.segment_id,
+            "cause_class": self.cause_class,
+            "written_artifacts": [
+                {"path": path, "sha256": sha256} for path, sha256 in self.written_artifacts
+            ],
+            "created_directories": list(self.created_directories),
+            "retry_semantics": self.retry_semantics,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,7 +444,7 @@ def publish_aggregate_bars(
     budget: ValidationWorkBudget,
     max_rows_per_partition: int = MAX_AGGREGATE_ROWS_PER_PARTITION,
 ) -> AggregatePublicationManifest:
-    """Publish one exact aggregate stream atomically without materialising all bars."""
+    """Publish one exact aggregate stream with an exclusive claim and success marker last."""
 
     if _SAFE_COMPONENT.fullmatch(symbol) is None:
         raise ValueError("symbol must be a safe path component")
@@ -435,7 +516,8 @@ def publish_aggregate_bars(
     try:
         spool = spool_complete_aggregate_bars(
             batches,
-            spool_path=Path(spool_directory.name) / "bars.jsonl",
+            spool_root=Path(spool_directory.name),
+            spool_relative_path=Path("bars.auth"),
             target_timeframe=target_timeframe,
             expected_source_sha256=expected_source_sha256,
             parent_snapshot_sha256=parent_snapshot_manifest.snapshot_sha256,
@@ -725,6 +807,9 @@ def verify_aggregate_publication(
     actual = set(bounded_regular_files(root, maximum=_MAX_PUBLICATION_ENTRIES))
     if actual != expected:
         raise ValueError("aggregate publication contains missing or unmanifested artifacts")
+    expected_directories = _artifact_parent_directories(partition.path for partition in active.partitions)
+    if set(_bounded_regular_directories(root)) != expected_directories:
+        raise ValueError("aggregate publication contains unmanifested directories")
     for partition in active.partitions:
         if sha256_regular(root / partition.path) != partition.sha256:
             raise ValueError(f"aggregate partition checksum mismatch: {partition.path}")
@@ -744,6 +829,73 @@ def verify_aggregate_publication(
         or actual_artifact_bytes > active.artifact_byte_limit
     ):
         raise ValueError("aggregate actual artifacts exceed declared or frozen limits")
+
+
+def verify_failed_aggregate_publication(directory: str | Path) -> AggregatePublicationFailure:
+    """Verify canonical terminal evidence and every artifact written before failure."""
+
+    root = Path(directory)
+    require_regular_directory(root)
+    recorded_bytes = read_bounded_regular(root / AGGREGATE_FAILED_NAME, _MAX_FAILURE_BYTES)
+    try:
+        payload = json.loads(recorded_bytes)
+        expected = {
+            "schema_version",
+            "status",
+            "publication_sha256",
+            "claim_sha256",
+            "symbol",
+            "target_timeframe",
+            "segment_id",
+            "cause_class",
+            "written_artifacts",
+            "created_directories",
+            "retry_semantics",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected:
+            raise ValueError("aggregate failure fields are invalid")
+        artifacts = payload["written_artifacts"]
+        if not isinstance(artifacts, list) or any(
+            not isinstance(item, dict) or set(item) != {"path", "sha256"}
+            for item in artifacts
+        ):
+            raise ValueError("aggregate failure artifact bindings are invalid")
+        directories = payload["created_directories"]
+        if not isinstance(directories, list) or any(
+            not isinstance(directory, str) for directory in directories
+        ):
+            raise ValueError("aggregate failure directory bindings are invalid")
+        failure = AggregatePublicationFailure(
+            schema_version=payload["schema_version"],
+            status=payload["status"],
+            publication_sha256=payload["publication_sha256"],
+            claim_sha256=payload["claim_sha256"],
+            symbol=payload["symbol"],
+            target_timeframe=payload["target_timeframe"],
+            segment_id=payload["segment_id"],
+            cause_class=payload["cause_class"],
+            written_artifacts=tuple((item["path"], item["sha256"]) for item in artifacts),
+            created_directories=tuple(directories),
+            retry_semantics=payload["retry_semantics"],
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("invalid aggregate failure evidence") from error
+    if recorded_bytes != failure.to_json().encode("utf-8"):
+        raise ValueError("aggregate failure evidence is not exact canonical JSON")
+    expected_files = {AGGREGATE_FAILED_NAME, *(path for path, _ in failure.written_artifacts)}
+    actual_files = set(bounded_regular_files(root, maximum=_MAX_PUBLICATION_ENTRIES))
+    if actual_files != expected_files or AGGREGATE_SUCCESS_NAME in actual_files:
+        raise ValueError("failed aggregate claim contains anonymous or successful artifacts")
+    expected_directories = _artifact_parent_directories(
+        path for path, _ in failure.written_artifacts
+    )
+    expected_directories.update(failure.created_directories)
+    if set(_bounded_regular_directories(root)) != expected_directories:
+        raise ValueError("failed aggregate claim contains anonymous directories")
+    for path, sha256 in failure.written_artifacts:
+        if sha256_regular(root / path) != sha256:
+            raise ValueError(f"failed aggregate artifact checksum mismatch: {path}")
+    return failure
 
 
 def _build_parent_source_selection(
@@ -855,6 +1007,39 @@ def _partition_artifact_metrics(
     return len(actual), sum(_regular_file_size(directory / path) for path in actual)
 
 
+def _artifact_parent_directories(paths: Iterable[str]) -> set[str]:
+    directories: set[str] = set()
+    for path in paths:
+        parent = Path(path).parent
+        while parent != Path("."):
+            directories.add(parent.as_posix())
+            parent = parent.parent
+    return directories
+
+
+def _bounded_regular_directories(root: Path) -> tuple[str, ...]:
+    directories: list[str] = []
+    stack: list[tuple[Path, tuple[str, ...]]] = [(root, ())]
+    count = 0
+    while stack:
+        directory, prefix = stack.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                count += 1
+                if count > _MAX_PUBLICATION_ENTRIES:
+                    raise RuntimeError("aggregate publication tree exceeds its bounded entry limit")
+                metadata = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise RuntimeError("aggregate publication tree contains a symlink")
+                if stat.S_ISDIR(metadata.st_mode):
+                    relative = (*prefix, entry.name)
+                    directories.append(Path(*relative).as_posix())
+                    stack.append((Path(entry.path), relative))
+                elif not stat.S_ISREG(metadata.st_mode):
+                    raise RuntimeError("aggregate publication tree contains a non-regular entry")
+    return tuple(sorted(directories))
+
+
 def _conservative_artifact_byte_upper(
     aggregate_bars: int,
     artifacts: int,
@@ -890,6 +1075,16 @@ def _publish_staged_no_clobber(
 ) -> None:
     """Claim and fill a publication with directory-relative no-follow operations."""
 
+    if _is_windows_platform():
+        _publish_staged_windows(
+            staging,
+            root,
+            symbol=symbol,
+            target_timeframe=target_timeframe,
+            segment_id=segment_id,
+            manifest=manifest,
+        )
+        return
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     directory = getattr(os, "O_DIRECTORY", 0)
     if not no_follow or not directory:
@@ -911,49 +1106,132 @@ def _publish_staged_no_clobber(
                 except FileExistsError as error:
                     raise FileExistsError("aggregate publication already exists") from error
                 final_fd = os.open(final_name, directory_flags, dir_fd=timeframe_fd)
+                written: list[tuple[str, str]] = []
+                claimed_directories: list[str] = []
                 try:
-                    for partition in manifest.partitions:
-                        relative = Path(partition.path)
-                        if len(relative.parts) != 2:
-                            raise ValueError("aggregate partition path is not canonical")
-                        chunk_fd = _create_directory_at(final_fd, relative.parts[0], directory_flags)
-                        try:
-                            content = read_bounded_regular(
-                                staging / relative,
-                                manifest.declared_artifact_bytes,
+                    try:
+                        os.fsync(timeframe_fd)
+                        for partition in manifest.partitions:
+                            relative = Path(partition.path)
+                            if len(relative.parts) != 2:
+                                raise ValueError("aggregate partition path is not canonical")
+                            chunk_fd = _create_directory_at(
+                                final_fd,
+                                relative.parts[0],
+                                directory_flags,
                             )
-                            if hashlib.sha256(content).hexdigest() != partition.sha256:
-                                raise ValueError(
-                                    f"staged aggregate partition changed: {partition.path}"
+                            claimed_directories.append(relative.parts[0])
+                            try:
+                                content = read_bounded_regular(
+                                    staging / relative,
+                                    manifest.declared_artifact_bytes,
                                 )
-                            _write_exclusive_at(chunk_fd, relative.parts[1], content)
-                        finally:
-                            os.close(chunk_fd)
-                    manifest_bytes = read_bounded_regular(
-                        staging / AGGREGATE_MANIFEST_NAME,
-                        _MAX_MANIFEST_BYTES,
-                    )
-                    if manifest_bytes != manifest.to_json().encode("utf-8"):
-                        raise ValueError("staged aggregate manifest changed")
-                    _write_exclusive_at(final_fd, AGGREGATE_MANIFEST_NAME, manifest_bytes)
-                    success_bytes = read_bounded_regular(
-                        staging / AGGREGATE_SUCCESS_NAME,
-                        128,
-                    )
-                    expected_success = f"{manifest.publication_sha256}\n".encode("utf-8")
-                    if success_bytes != expected_success:
-                        raise ValueError("staged aggregate completion marker changed")
-                    _write_exclusive_at(final_fd, AGGREGATE_SUCCESS_NAME, success_bytes)
-                    os.fsync(final_fd)
+                                if hashlib.sha256(content).hexdigest() != partition.sha256:
+                                    raise ValueError(
+                                        f"staged aggregate partition changed: {partition.path}"
+                                    )
+                                _write_exclusive_at(chunk_fd, relative.parts[1], content)
+                                written.append((partition.path, partition.sha256))
+                            except Exception:
+                                os.close(chunk_fd)
+                                os.rmdir(relative.parts[0], dir_fd=final_fd)
+                                claimed_directories.remove(relative.parts[0])
+                                raise
+                            else:
+                                os.close(chunk_fd)
+                        manifest_bytes = read_bounded_regular(
+                            staging / AGGREGATE_MANIFEST_NAME,
+                            _MAX_MANIFEST_BYTES,
+                        )
+                        if manifest_bytes != manifest.to_json().encode("utf-8"):
+                            raise ValueError("staged aggregate manifest changed")
+                        _write_exclusive_at(final_fd, AGGREGATE_MANIFEST_NAME, manifest_bytes)
+                        written.append(
+                            (
+                                AGGREGATE_MANIFEST_NAME,
+                                hashlib.sha256(manifest_bytes).hexdigest(),
+                            )
+                        )
+                        os.fsync(final_fd)
+                        success_bytes = read_bounded_regular(
+                            staging / AGGREGATE_SUCCESS_NAME,
+                            128,
+                        )
+                        expected_success = f"{manifest.publication_sha256}\n".encode("utf-8")
+                        if success_bytes != expected_success:
+                            raise ValueError("staged aggregate completion marker changed")
+                        _write_exclusive_at(final_fd, AGGREGATE_SUCCESS_NAME, success_bytes)
+                    except Exception as error:
+                        _write_failed_claim_at(
+                            final_fd,
+                            manifest,
+                            written=written,
+                            created_directories=claimed_directories,
+                            cause=error,
+                        )
+                        raise
                 finally:
                     os.close(final_fd)
-                os.fsync(timeframe_fd)
             finally:
                 os.close(timeframe_fd)
         finally:
             os.close(symbol_fd)
     finally:
         os.close(root_fd)
+
+
+def _publish_staged_windows(
+    staging: Path,
+    root: Path,
+    *,
+    symbol: str,
+    target_timeframe: str,
+    segment_id: int,
+    manifest: AggregatePublicationManifest,
+) -> None:
+    filesystem = WindowsHandleFilesystem()
+    ancestors = (f"symbol={symbol}", f"timeframe={target_timeframe}")
+    final_name = f"segment={segment_id}"
+    try:
+        claim_context = filesystem.claim_exclusive_directory(root, ancestors, final_name)
+        with claim_context as claim:
+            written: list[tuple[str, str]] = []
+            try:
+                for partition in manifest.partitions:
+                    content = read_bounded_regular(
+                        staging / partition.path,
+                        manifest.declared_artifact_bytes,
+                    )
+                    if hashlib.sha256(content).hexdigest() != partition.sha256:
+                        raise ValueError(f"staged aggregate partition changed: {partition.path}")
+                    _write_exclusive_windows(claim, partition.path, content)
+                    written.append((partition.path, partition.sha256))
+                manifest_bytes = read_bounded_regular(
+                    staging / AGGREGATE_MANIFEST_NAME,
+                    _MAX_MANIFEST_BYTES,
+                )
+                if manifest_bytes != manifest.to_json().encode("utf-8"):
+                    raise ValueError("staged aggregate manifest changed")
+                _write_exclusive_windows(claim, AGGREGATE_MANIFEST_NAME, manifest_bytes)
+                written.append(
+                    (AGGREGATE_MANIFEST_NAME, hashlib.sha256(manifest_bytes).hexdigest())
+                )
+                success_bytes = read_bounded_regular(staging / AGGREGATE_SUCCESS_NAME, 128)
+                expected_success = f"{manifest.publication_sha256}\n".encode("utf-8")
+                if success_bytes != expected_success:
+                    raise ValueError("staged aggregate completion marker changed")
+                _write_exclusive_windows(claim, AGGREGATE_SUCCESS_NAME, success_bytes)
+            except Exception as error:
+                _write_failed_claim_windows(
+                    claim,
+                    manifest,
+                    written=written,
+                    created_directories=list(claim.created_directories),
+                    cause=error,
+                )
+                raise
+    except FileExistsError as error:
+        raise FileExistsError("aggregate publication already exists") from error
 
 
 def _create_or_open_directory_at(parent_fd: int, name: str, flags: int) -> int:
@@ -970,6 +1248,17 @@ def _create_directory_at(parent_fd: int, name: str, flags: int) -> int:
 
 
 def _write_exclusive_at(parent_fd: int, name: str, content: bytes) -> None:
+    try:
+        _write_exclusive_raw_at(parent_fd, name, content)
+    except Exception:
+        try:
+            os.unlink(name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _write_exclusive_raw_at(parent_fd: int, name: str, content: bytes) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     file_fd = os.open(name, flags, 0o644, dir_fd=parent_fd)
     try:
@@ -982,6 +1271,118 @@ def _write_exclusive_at(parent_fd: int, name: str, content: bytes) -> None:
         os.fsync(file_fd)
     finally:
         os.close(file_fd)
+
+
+def _write_exclusive_windows(
+    claim: WindowsDirectoryClaim,
+    relative_path: str,
+    content: bytes,
+) -> None:
+    try:
+        _write_exclusive_windows_raw(claim, relative_path, content)
+    except Exception:
+        try:
+            claim.unlink_regular(relative_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _write_exclusive_windows_raw(
+    claim: WindowsDirectoryClaim,
+    relative_path: str,
+    content: bytes,
+) -> None:
+    descriptor = claim.create_regular_descriptor(relative_path)
+    try:
+        _write_all_descriptor(descriptor, content)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_failed_claim_at(
+    final_fd: int,
+    manifest: AggregatePublicationManifest,
+    *,
+    written: list[tuple[str, str]],
+    created_directories: list[str],
+    cause: Exception,
+) -> None:
+    failure = _failure_receipt(
+        manifest,
+        written=written,
+        created_directories=created_directories,
+        cause=cause,
+    )
+    content = failure.to_json().encode("utf-8")
+    if len(content) > _MAX_FAILURE_BYTES:
+        raise RuntimeError("aggregate failure evidence exceeds its bound") from cause
+    _write_exclusive_raw_at(final_fd, AGGREGATE_FAILED_NAME, content)
+
+
+def _write_failed_claim_windows(
+    claim: WindowsDirectoryClaim,
+    manifest: AggregatePublicationManifest,
+    *,
+    written: list[tuple[str, str]],
+    created_directories: list[str],
+    cause: Exception,
+) -> None:
+    failure = _failure_receipt(
+        manifest,
+        written=written,
+        created_directories=created_directories,
+        cause=cause,
+    )
+    content = failure.to_json().encode("utf-8")
+    if len(content) > _MAX_FAILURE_BYTES:
+        raise RuntimeError("aggregate failure evidence exceeds its bound") from cause
+    _write_exclusive_windows_raw(claim, AGGREGATE_FAILED_NAME, content)
+
+
+def _failure_receipt(
+    manifest: AggregatePublicationManifest,
+    *,
+    written: list[tuple[str, str]],
+    created_directories: list[str],
+    cause: Exception,
+) -> AggregatePublicationFailure:
+    claim_sha256 = hash_json(
+        "aggregate-publication-exclusive-claim-v1",
+        {
+            "publication_sha256": manifest.publication_sha256,
+            "symbol": manifest.symbol,
+            "target_timeframe": manifest.target_timeframe,
+            "segment_id": manifest.segment_id,
+        },
+    )
+    return AggregatePublicationFailure(
+        schema_version=1,
+        status="failed",
+        publication_sha256=manifest.publication_sha256,
+        claim_sha256=claim_sha256,
+        symbol=manifest.symbol,
+        target_timeframe=manifest.target_timeframe,
+        segment_id=manifest.segment_id,
+        cause_class=type(cause).__name__,
+        written_artifacts=tuple(sorted(written)),
+        created_directories=tuple(sorted(set(created_directories))),
+        retry_semantics="terminal-claim-no-retry",
+    )
+
+
+def _write_all_descriptor(descriptor: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(descriptor, view)
+        if written < 1:
+            raise OSError("aggregate artifact write made no progress")
+        view = view[written:]
+
+
+def _is_windows_platform() -> bool:
+    return os.name == "nt"
 
 
 def _regular_file_size(path: Path) -> int:
@@ -1048,12 +1449,15 @@ def _atomic_write(path: Path, content: bytes) -> None:
 
 
 __all__ = [
+    "AGGREGATE_FAILED_NAME",
     "AGGREGATE_MANIFEST_NAME",
     "AGGREGATE_SUCCESS_NAME",
     "MAX_AGGREGATE_ROWS_PER_PARTITION",
     "AggregatePublicationManifest",
+    "AggregatePublicationFailure",
     "AggregateSourceSelectionReceipt",
     "publish_aggregate_bars",
     "read_aggregate_publication_manifest",
     "verify_aggregate_publication",
+    "verify_failed_aggregate_publication",
 ]

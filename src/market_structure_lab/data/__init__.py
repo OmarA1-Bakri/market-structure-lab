@@ -7,9 +7,11 @@ from market_structure_lab.data.aggregate_bars import (
     spool_complete_aggregate_bars,
 )
 from market_structure_lab.data.aggregate_publication import (
+    AggregatePublicationFailure,
     AggregatePublicationManifest,
     publish_aggregate_bars,
     verify_aggregate_publication,
+    verify_failed_aggregate_publication,
 )
 from market_structure_lab.data.freshness import (
     CanonicalSeriesState,
@@ -58,6 +60,7 @@ from market_structure_lab.data.segments import (
 
 __all__ = [
     "AggregatePublicationManifest",
+    "AggregatePublicationFailure",
     "CandidateMapping",
     "CandleQuality",
     "CanonicalSeriesState",
@@ -99,5 +102,6 @@ __all__ = [
     "resolve_freshness_cutoff",
     "verify_snapshot",
     "verify_aggregate_publication",
+    "verify_failed_aggregate_publication",
     "write_freshness_manifest",
 ]

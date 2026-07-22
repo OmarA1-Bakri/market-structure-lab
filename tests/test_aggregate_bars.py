@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -107,7 +109,8 @@ def aggregate(
     with TemporaryDirectory(prefix="market-structure-lab-test-aggregate-") as temporary:
         spool = spool_complete_aggregate_bars(
             batches,
-            spool_path=Path(temporary) / "bars.jsonl",
+            spool_root=Path(temporary),
+            spool_relative_path=Path("bars.auth"),
             target_timeframe=target_timeframe,
             expected_source_sha256=(expected_source_sha256 or source_rows_sha256(rows(combined))),
             parent_snapshot_sha256=parent_snapshot_sha256,
@@ -234,22 +237,25 @@ def test_wrong_terminal_digest_never_exposes_provisional_bars(tmp_path) -> None:
     with pytest.raises(ValueError, match="source digest"):
         spool_writer(
             [frame],
-            spool_path=tmp_path / "aggregate-bars.jsonl",
+            spool_root=tmp_path,
+            spool_relative_path=Path("aggregate-bars.auth"),
             target_timeframe="15m",
             expected_source_sha256="f" * 64,
             parent_snapshot_sha256=PARENT_SHA256,
             demand=demand(frame, 2),
             budget=ValidationWorkBudget(),
         )
-    assert not (tmp_path / "aggregate-bars.jsonl").exists()
+    assert not (tmp_path / "aggregate-bars.auth").exists()
+    assert not any(tmp_path.iterdir())
 
 
-def test_public_iterator_validates_every_spooled_record_before_first_yield(tmp_path) -> None:
+def test_public_iterator_rejects_changed_spooled_record_before_that_record_yields(tmp_path) -> None:
     frame = minute_frame(30)
     path = tmp_path / "aggregate-bars.jsonl"
     spool = spool_complete_aggregate_bars(
         [frame],
-        spool_path=path,
+        spool_root=tmp_path,
+        spool_relative_path=path.name,
         target_timeframe="15m",
         expected_source_sha256=source_rows_sha256(rows(frame)),
         parent_snapshot_sha256=PARENT_SHA256,
@@ -258,7 +264,7 @@ def test_public_iterator_validates_every_spooled_record_before_first_yield(tmp_p
     )
     lines = path.read_bytes().splitlines(keepends=True)
     second = json.loads(lines[1])
-    second["row_sha256"] = "f" * 64
+    second["payload"]["row_sha256"] = "f" * 64
     lines[1] = (json.dumps(second, sort_keys=True, separators=(",", ":")) + "\n").encode()
     changed = b"".join(lines)
     path.write_bytes(changed)
@@ -268,8 +274,141 @@ def test_public_iterator_validates_every_spooled_record_before_first_yield(tmp_p
         artifact_bytes=len(changed),
     )
 
+    iterator = iter_complete_aggregate_bars(forged)
+    assert next(iterator).timestamp == datetime(2025, 1, 1, tzinfo=UTC)
     with pytest.raises(ValueError, match="row identity"):
-        next(iter_complete_aggregate_bars(forged))
+        next(iterator)
+    path.unlink()
+
+
+def test_same_inode_mutation_after_initial_validation_rejects_before_changed_record_yield(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(30)
+    path = tmp_path / "aggregate-bars.auth"
+    spool = spool_complete_aggregate_bars(
+        [frame],
+        spool_root=tmp_path,
+        spool_relative_path=path.name,
+        target_timeframe="15m",
+        expected_source_sha256=source_rows_sha256(rows(frame)),
+        parent_snapshot_sha256=PARENT_SHA256,
+        demand=demand(frame, 2),
+        budget=ValidationWorkBudget(),
+    )
+
+    mutation_blocked = False
+
+    def mutate_second_record(_spool) -> None:
+        nonlocal mutation_blocked
+        lines = path.read_bytes().splitlines(keepends=True)
+        envelope = json.loads(lines[1])
+        payload = envelope.get("payload", envelope)
+        changed = CanonicalAggregateBar.from_mapping(payload)
+        changed = replace(changed, high=changed.high + 0.5, row_sha256="")
+        if "payload" in envelope:
+            envelope["payload"] = changed.to_dict()
+            envelope["payload_sha256"] = hashlib.sha256(changed.to_json_line()).hexdigest()
+            lines[1] = (
+                json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        else:
+            lines[1] = changed.to_json_line()
+        try:
+            path.write_bytes(b"".join(lines))
+        except PermissionError:
+            mutation_blocked = True
+
+    monkeypatch.setattr(
+        aggregate_bars_module,
+        "_spool_pre_yield_hook",
+        mutate_second_record,
+        raising=False,
+    )
+    iterator = iter_complete_aggregate_bars(spool)
+
+    assert next(iterator).timestamp == datetime(2025, 1, 1, tzinfo=UTC)
+    if mutation_blocked:
+        assert next(iterator).timestamp == datetime(2025, 1, 1, 0, 15, tzinfo=UTC)
+    else:
+        with pytest.raises(ValueError, match="authentication|chain|checksum"):
+            next(iterator)
+
+
+def test_spool_rejects_symlink_in_earlier_trusted_root_descendant(tmp_path) -> None:
+    frame = minute_frame(15)
+    trusted_root = tmp_path / "trusted"
+    trusted_root.mkdir()
+    external = tmp_path / "external"
+    (external / "nested").mkdir(parents=True)
+    (trusted_root / "linked").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlink|reparse|trusted"):
+        spool_complete_aggregate_bars(
+            [frame],
+            spool_root=trusted_root,
+            spool_relative_path=Path("linked/nested/bars.auth"),
+            target_timeframe="15m",
+            expected_source_sha256=source_rows_sha256(rows(frame)),
+            parent_snapshot_sha256=PARENT_SHA256,
+            demand=demand(frame, 1),
+            budget=ValidationWorkBudget(),
+        )
+    assert not (external / "nested" / "bars.auth").exists()
+
+
+def test_windows_spool_branch_uses_handle_adapter_without_safety_downgrade(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(15)
+
+    class FakeWindowsFilesystem:
+        def __init__(self) -> None:
+            self.created = 0
+            self.opened = 0
+            self.pinned = 0
+
+        def create_regular_descriptor(self, root: Path, relative: Path) -> int:
+            self.created += 1
+            return os.open(
+                root / relative,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+
+        def open_regular_descriptor(self, root: Path, relative: Path) -> int:
+            self.opened += 1
+            return os.open(root / relative, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+
+        @contextmanager
+        def pin_directory_chain(self, _path: Path):
+            self.pinned += 1
+            yield ()
+
+    filesystem = FakeWindowsFilesystem()
+    monkeypatch.setattr(aggregate_bars_module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        aggregate_bars_module,
+        "WindowsHandleFilesystem",
+        lambda: filesystem,
+    )
+    spool = spool_complete_aggregate_bars(
+        [frame],
+        spool_root=tmp_path,
+        spool_relative_path=Path("bars.auth"),
+        target_timeframe="15m",
+        expected_source_sha256=source_rows_sha256(rows(frame)),
+        parent_snapshot_sha256=PARENT_SHA256,
+        demand=demand(frame, 1),
+        budget=ValidationWorkBudget(),
+    )
+
+    assert len(list(iter_complete_aggregate_bars(spool))) == 1
+    assert filesystem.created == 4
+    assert filesystem.opened == 1
+    assert filesystem.pinned == 3
 
 
 class ExplodingBatches:
@@ -303,7 +442,8 @@ def test_over_budget_declaration_rejects_before_source_iteration(
     with pytest.raises(ValidationWorkBudgetViolation, match=stage):
         spool_complete_aggregate_bars(
             batches,
-            spool_path=tmp_path / "bars.jsonl",
+            spool_root=tmp_path,
+            spool_relative_path=Path("bars.auth"),
             target_timeframe="15m",
             expected_source_sha256="a" * 64,
             parent_snapshot_sha256=PARENT_SHA256,

@@ -12,11 +12,17 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 from typing import Any, Final, cast
 
 import polars as pl
 
 from market_structure_lab.core.identity import canonical_json, hash_json
+from market_structure_lab.core.artifact_io import require_regular_directory
+from market_structure_lab.core.secure_windows import (
+    WindowsHandleFilesystem,
+    validated_relative_parts,
+)
 from market_structure_lab.data.canonical import (
     CANONICAL_COLUMNS,
     CANONICAL_SCHEMA,
@@ -35,7 +41,9 @@ CONTINUITY_ID: Final = "complete-contiguous-1m-v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_SCHEMA = pl.Schema(cast(Any, {**CANONICAL_SCHEMA, "segment_id": pl.UInt64}))
 _MAX_SPOOL_LINE_BYTES: Final = 128 * 1024
+_MAX_AUTHENTICATED_SPOOL_LINE_BYTES: Final = _MAX_SPOOL_LINE_BYTES + 1024
 _SPOOL_CHUNK_BYTES: Final = 1024 * 1024
+_SPOOL_CHAIN_BYTES: Final = 32
 
 
 class OrderedSourceIdentity:
@@ -280,19 +288,23 @@ class CanonicalAggregateBar:
 class VerifiedAggregateBarSpool:
     """Receipt for a fully validated, bounded on-disk aggregate-bar stream."""
 
-    path: Path
+    trusted_root: Path
+    relative_path: Path
     artifact_sha256: str
     artifact_bytes: int
     bar_count: int
+    chain_root_sha256: str
     target_timeframe: str
     source_sha256: str
     parent_snapshot_sha256: str
-    max_line_bytes: int = _MAX_SPOOL_LINE_BYTES
+    max_line_bytes: int = _MAX_AUTHENTICATED_SPOOL_LINE_BYTES
 
     def __post_init__(self) -> None:
-        if not isinstance(self.path, Path):
-            raise TypeError("aggregate spool path must be a Path")
+        if not isinstance(self.trusted_root, Path) or not isinstance(self.relative_path, Path):
+            raise TypeError("aggregate spool paths must be Path values")
+        validated_relative_parts(self.relative_path)
         _require_sha256(self.artifact_sha256, "aggregate spool sha256")
+        _require_sha256(self.chain_root_sha256, "aggregate spool chain root sha256")
         _require_sha256(self.source_sha256, "aggregate spool source sha256")
         _require_sha256(self.parent_snapshot_sha256, "aggregate spool parent snapshot sha256")
         target_timeframe_minutes(self.target_timeframe)
@@ -303,9 +315,13 @@ class VerifiedAggregateBarSpool:
         if (
             isinstance(self.max_line_bytes, bool)
             or self.max_line_bytes < 1
-            or self.max_line_bytes > _MAX_SPOOL_LINE_BYTES
+            or self.max_line_bytes > _MAX_AUTHENTICATED_SPOOL_LINE_BYTES
         ):
             raise ValueError("aggregate spool line bound is invalid")
+
+    @property
+    def path(self) -> Path:
+        return self.trusted_root / self.relative_path
 
 
 def target_timeframe_minutes(target_timeframe: str) -> int:
@@ -324,43 +340,46 @@ def target_timeframe_minutes(target_timeframe: str) -> int:
 def spool_complete_aggregate_bars(
     batches: Iterable[pl.DataFrame],
     *,
-    spool_path: str | Path,
+    spool_root: str | Path,
+    spool_relative_path: str | Path,
     target_timeframe: str,
     expected_source_sha256: str,
     parent_snapshot_sha256: str,
     demand: ValidationWorkDemand,
     budget: ValidationWorkBudget,
 ) -> VerifiedAggregateBarSpool:
-    """Write provisional bars to disk and return only after terminal verification."""
+    """Build an authenticated spool and return only after terminal source verification."""
 
-    path = Path(spool_path)
-    parent = path.parent
-    metadata = parent.lstat()
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise RuntimeError("aggregate spool parent must be a regular directory")
-    no_follow = getattr(os, "O_NOFOLLOW", 0)
-    directory = getattr(os, "O_DIRECTORY", 0)
-    if not no_follow or not directory:
-        raise RuntimeError("safe aggregate spooling requires no-follow filesystem operations")
-    parent_fd = os.open(parent, os.O_RDONLY | no_follow | directory)
-    file_fd: int | None = None
-    created = False
+    root = Path(spool_root).absolute()
+    relative = Path(*validated_relative_parts(spool_relative_path))
+    require_regular_directory(root)
+    if not isinstance(demand, ValidationWorkDemand):
+        raise TypeError("demand must be a ValidationWorkDemand")
+    if not isinstance(budget, ValidationWorkBudget):
+        raise TypeError("budget must be a ValidationWorkBudget")
+    budget.preflight(demand, deferred_work=batches)
+    temporary_paths = (
+        relative.with_name(f".{relative.name}.payload.partial"),
+        relative.with_name(f".{relative.name}.offsets.partial"),
+        relative.with_name(f".{relative.name}.chains.partial"),
+    )
+    created: list[Path] = []
+    payload_fd: int | None = None
+    offsets_fd: int | None = None
+    chains_fd: int | None = None
+    output_fd: int | None = None
+    maximum_spool_bytes = min(
+        budget.max_source_bytes,
+        demand.source_bytes,
+        demand.aggregate_bars * _MAX_AUTHENTICATED_SPOOL_LINE_BYTES,
+    )
     try:
-        file_fd = os.open(
-            path.name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
-            0o600,
-            dir_fd=parent_fd,
-        )
-        created = True
-        digest = hashlib.sha256()
-        artifact_bytes = 0
+        payload_fd = _create_secure_regular(root, temporary_paths[0])
+        created.append(temporary_paths[0])
+        offsets_fd = _create_secure_regular(root, temporary_paths[1])
+        created.append(temporary_paths[1])
+        payload_bytes = 0
         bar_count = 0
-        maximum_spool_bytes = min(
-            budget.max_source_bytes,
-            demand.source_bytes,
-            demand.aggregate_bars * _MAX_SPOOL_LINE_BYTES,
-        )
         for bar in _iter_provisional_aggregate_bars(
             batches,
             target_timeframe=target_timeframe,
@@ -372,49 +391,117 @@ def spool_complete_aggregate_bars(
             line = bar.to_json_line()
             if len(line) > _MAX_SPOOL_LINE_BYTES + 1:
                 raise RuntimeError("aggregate spool record exceeds its bounded width")
-            artifact_bytes += len(line)
+            if payload_bytes + len(line) > maximum_spool_bytes:
+                raise ValidationWorkBudgetViolation(
+                    "aggregate_spool_bytes",
+                    payload_bytes + len(line),
+                    maximum_spool_bytes,
+                )
+            _write_all(offsets_fd, struct.pack("<Q", payload_bytes))
+            _write_all(payload_fd, line)
+            payload_bytes += len(line)
+            bar_count += 1
+        os.fsync(payload_fd)
+        os.fsync(offsets_fd)
+
+        chains_fd = _create_secure_regular(root, temporary_paths[2])
+        created.append(temporary_paths[2])
+        os.ftruncate(chains_fd, bar_count * _SPOOL_CHAIN_BYTES)
+        chain_end = _spool_chain_end(
+            bar_count=bar_count,
+            target_timeframe=target_timeframe,
+            source_sha256=expected_source_sha256,
+            parent_snapshot_sha256=parent_snapshot_sha256,
+        )
+        chain = chain_end
+        for index in range(bar_count - 1, -1, -1):
+            payload = _read_indexed_payload(
+                payload_fd,
+                offsets_fd,
+                index=index,
+                bar_count=bar_count,
+                payload_bytes=payload_bytes,
+            )
+            chain = _spool_record_chain(
+                index=index,
+                payload_sha256=hashlib.sha256(payload).hexdigest(),
+                next_sha256=chain,
+            )
+            _pwrite_all(chains_fd, bytes.fromhex(chain), index * _SPOOL_CHAIN_BYTES)
+        os.fsync(chains_fd)
+
+        output_fd = _create_secure_regular(root, relative)
+        created.append(relative)
+        artifact_digest = hashlib.sha256()
+        artifact_bytes = 0
+        for index in range(bar_count):
+            payload = _read_indexed_payload(
+                payload_fd,
+                offsets_fd,
+                index=index,
+                bar_count=bar_count,
+                payload_bytes=payload_bytes,
+            )
+            next_sha256 = (
+                _pread_exact(chains_fd, _SPOOL_CHAIN_BYTES, (index + 1) * _SPOOL_CHAIN_BYTES).hex()
+                if index + 1 < bar_count
+                else chain_end
+            )
+            envelope = _authenticated_spool_record(
+                index=index,
+                payload=cast(dict[str, object], json.loads(payload)),
+                next_sha256=next_sha256,
+            )
+            if len(envelope) > _MAX_AUTHENTICATED_SPOOL_LINE_BYTES + 1:
+                raise RuntimeError("authenticated aggregate spool record exceeds its bound")
+            artifact_bytes += len(envelope)
             if artifact_bytes > maximum_spool_bytes:
                 raise ValidationWorkBudgetViolation(
                     "aggregate_spool_bytes",
                     artifact_bytes,
                     maximum_spool_bytes,
                 )
-            _write_all(file_fd, line)
-            digest.update(line)
-            bar_count += 1
-        os.fsync(file_fd)
-        os.close(file_fd)
-        file_fd = None
+            _write_all(output_fd, envelope)
+            artifact_digest.update(envelope)
+        os.fsync(output_fd)
+        for descriptor in (output_fd, chains_fd, offsets_fd, payload_fd):
+            os.close(descriptor)
+        output_fd = chains_fd = offsets_fd = payload_fd = None
+        for temporary in temporary_paths:
+            _unlink_secure_regular(root, temporary)
+            created.remove(temporary)
         return VerifiedAggregateBarSpool(
-            path=path,
-            artifact_sha256=digest.hexdigest(),
+            trusted_root=root,
+            relative_path=relative,
+            artifact_sha256=artifact_digest.hexdigest(),
             artifact_bytes=artifact_bytes,
             bar_count=bar_count,
+            chain_root_sha256=chain,
             target_timeframe=target_timeframe,
             source_sha256=expected_source_sha256,
             parent_snapshot_sha256=parent_snapshot_sha256,
+            max_line_bytes=_MAX_AUTHENTICATED_SPOOL_LINE_BYTES,
         )
     except Exception:
-        if file_fd is not None:
-            os.close(file_fd)
-        if created:
-            os.unlink(path.name, dir_fd=parent_fd)
+        for cleanup_descriptor in (output_fd, chains_fd, offsets_fd, payload_fd):
+            if cleanup_descriptor is not None:
+                os.close(cleanup_descriptor)
+        for created_path in reversed(created):
+            try:
+                _unlink_secure_regular(root, created_path)
+            except FileNotFoundError:
+                pass
         raise
-    finally:
-        os.close(parent_fd)
 
 
 def iter_complete_aggregate_bars(
     spool: VerifiedAggregateBarSpool,
 ) -> Iterator[CanonicalAggregateBar]:
-    """Yield bars only after the exact spool bytes and every record are verified."""
+    """Authenticate each record against the frozen chain immediately before yielding it."""
 
     if not isinstance(spool, VerifiedAggregateBarSpool):
         raise TypeError("spool must be a VerifiedAggregateBarSpool")
-    no_follow = getattr(os, "O_NOFOLLOW", 0)
-    if not no_follow:
-        raise RuntimeError("safe aggregate spool reading requires no-follow filesystem operations")
-    descriptor = os.open(spool.path, os.O_RDONLY | no_follow)
+    descriptor = _open_secure_regular(spool.trusted_root, spool.relative_path)
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != spool.artifact_bytes:
@@ -425,11 +512,80 @@ def iter_complete_aggregate_bars(
         if digest.hexdigest() != spool.artifact_sha256:
             raise ValueError("aggregate spool checksum mismatch")
         os.lseek(descriptor, 0, os.SEEK_SET)
-        _validate_spool_records(descriptor, spool)
-        os.lseek(descriptor, 0, os.SEEK_SET)
+        _spool_pre_yield_hook(spool)
+        expected_chain = spool.chain_root_sha256
+        count = 0
+        source_identity = OrderedSourceIdentity()
+        series_key: tuple[str, str, int] | None = None
+        previous_close: datetime | None = None
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            for line in handle:
-                yield CanonicalAggregateBar.from_mapping(json.loads(line))
+            while line := handle.readline(spool.max_line_bytes + 2):
+                if len(line) > spool.max_line_bytes + 1 or not line.endswith(b"\n"):
+                    raise RuntimeError(
+                        "authenticated aggregate spool record exceeds its bound or lacks a newline"
+                    )
+                if count >= spool.bar_count:
+                    raise ValueError("aggregate spool contains more rows than its receipt")
+                envelope = json.loads(line)
+                if not isinstance(envelope, dict) or set(envelope) != {
+                    "schema_version",
+                    "index",
+                    "payload",
+                    "payload_sha256",
+                    "next_sha256",
+                }:
+                    raise ValueError("aggregate spool envelope schema is invalid")
+                if envelope["schema_version"] != 1 or envelope["index"] != count:
+                    raise ValueError("aggregate spool envelope order is invalid")
+                payload = envelope["payload"]
+                if not isinstance(payload, dict):
+                    raise ValueError("aggregate spool payload is invalid")
+                bar = CanonicalAggregateBar.from_mapping(payload)
+                payload_bytes = bar.to_json_line()
+                payload_sha256 = hashlib.sha256(payload_bytes).hexdigest()
+                if payload != bar.to_dict() or envelope["payload_sha256"] != payload_sha256:
+                    raise ValueError("aggregate spool payload authentication failed")
+                next_sha256 = envelope["next_sha256"]
+                _require_sha256(next_sha256, "aggregate spool next chain sha256")
+                if line != _authenticated_spool_record(
+                    index=count,
+                    payload=bar.to_dict(),
+                    next_sha256=next_sha256,
+                ):
+                    raise ValueError("aggregate spool envelope is not exact canonical JSON")
+                actual_chain = _spool_record_chain(
+                    index=count,
+                    payload_sha256=payload_sha256,
+                    next_sha256=next_sha256,
+                )
+                if actual_chain != expected_chain:
+                    raise ValueError("aggregate spool record chain authentication failed")
+                current_key = (bar.symbol, bar.source_timeframe, bar.segment_id)
+                if series_key is None:
+                    series_key = current_key
+                elif current_key != series_key or bar.timestamp != previous_close:
+                    raise ValueError("aggregate spool records are not one contiguous source series")
+                if (
+                    bar.target_timeframe != spool.target_timeframe
+                    or bar.parent_snapshot_sha256 != spool.parent_snapshot_sha256
+                ):
+                    raise ValueError("aggregate spool record metadata differs from its receipt")
+                previous_close = bar.bar_close
+                for source_row_id in bar.source_row_ids:
+                    source_identity.update(source_row_id)
+                count += 1
+                expected_chain = next_sha256
+                yield bar
+        expected_end = _spool_chain_end(
+            bar_count=spool.bar_count,
+            target_timeframe=spool.target_timeframe,
+            source_sha256=spool.source_sha256,
+            parent_snapshot_sha256=spool.parent_snapshot_sha256,
+        )
+        if count != spool.bar_count or expected_chain != expected_end:
+            raise ValueError("aggregate spool chain did not complete against its receipt")
+        if source_identity.hexdigest() != spool.source_sha256:
+            raise ValueError("aggregate spool source digest differs from its receipt")
     finally:
         os.close(descriptor)
 
@@ -530,38 +686,170 @@ def _iter_provisional_aggregate_bars(
         raise ValueError("source digest mismatch")
 
 
-def _validate_spool_records(descriptor: int, spool: VerifiedAggregateBarSpool) -> None:
-    count = 0
-    source_identity = OrderedSourceIdentity()
-    series_key: tuple[str, str, int] | None = None
-    previous_close: datetime | None = None
-    with os.fdopen(descriptor, "rb", closefd=False) as handle:
-        while line := handle.readline(spool.max_line_bytes + 2):
-            if len(line) > spool.max_line_bytes + 1 or not line.endswith(b"\n"):
-                raise RuntimeError("aggregate spool record exceeds its bound or lacks a newline")
-            bar = CanonicalAggregateBar.from_mapping(json.loads(line))
-            if line != bar.to_json_line():
-                raise ValueError("aggregate spool record is not exact canonical JSON")
-            if (
-                bar.target_timeframe != spool.target_timeframe
-                or bar.parent_snapshot_sha256 != spool.parent_snapshot_sha256
-            ):
-                raise ValueError("aggregate spool record metadata differs from its receipt")
-            current_key = (bar.symbol, bar.source_timeframe, bar.segment_id)
-            if series_key is None:
-                series_key = current_key
-            elif current_key != series_key or bar.timestamp != previous_close:
-                raise ValueError("aggregate spool records are not one contiguous source series")
-            previous_close = bar.bar_close
-            for source_row_id in bar.source_row_ids:
-                source_identity.update(source_row_id)
-            count += 1
-            if count > spool.bar_count:
-                raise ValueError("aggregate spool contains more rows than its receipt")
-    if count != spool.bar_count:
-        raise ValueError("aggregate spool row count differs from its receipt")
-    if source_identity.hexdigest() != spool.source_sha256:
-        raise ValueError("aggregate spool source digest differs from its receipt")
+def _authenticated_spool_record(
+    *,
+    index: int,
+    payload: dict[str, object],
+    next_sha256: str,
+) -> bytes:
+    payload_bytes = CanonicalAggregateBar.from_mapping(payload).to_json_line()
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "index": index,
+                "payload": payload,
+                "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+                "next_sha256": next_sha256,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _spool_record_chain(*, index: int, payload_sha256: str, next_sha256: str) -> str:
+    return hash_json(
+        "aggregate-spool-record-chain-v1",
+        {
+            "index": index,
+            "payload_sha256": payload_sha256,
+            "next_sha256": next_sha256,
+        },
+    )
+
+
+def _spool_chain_end(
+    *,
+    bar_count: int,
+    target_timeframe: str,
+    source_sha256: str,
+    parent_snapshot_sha256: str,
+) -> str:
+    return hash_json(
+        "aggregate-spool-record-chain-end-v1",
+        {
+            "bar_count": bar_count,
+            "target_timeframe": target_timeframe,
+            "source_sha256": source_sha256,
+            "parent_snapshot_sha256": parent_snapshot_sha256,
+        },
+    )
+
+
+def _read_indexed_payload(
+    payload_fd: int,
+    offsets_fd: int,
+    *,
+    index: int,
+    bar_count: int,
+    payload_bytes: int,
+) -> bytes:
+    offset = struct.unpack("<Q", _pread_exact(offsets_fd, 8, index * 8))[0]
+    next_offset = (
+        struct.unpack("<Q", _pread_exact(offsets_fd, 8, (index + 1) * 8))[0]
+        if index + 1 < bar_count
+        else payload_bytes
+    )
+    length = next_offset - offset
+    if length < 1 or length > _MAX_SPOOL_LINE_BYTES + 1:
+        raise RuntimeError("aggregate provisional spool index is invalid")
+    payload = _pread_exact(payload_fd, length, offset)
+    if not payload.endswith(b"\n"):
+        raise RuntimeError("aggregate provisional spool record is incomplete")
+    return payload
+
+
+def _create_secure_regular(trusted_root: Path, relative_path: Path) -> int:
+    if _is_windows_platform():
+        return WindowsHandleFilesystem().create_regular_descriptor(trusted_root, relative_path)
+    parent_fd, name = _open_posix_parent(trusted_root, relative_path)
+    try:
+        return os.open(
+            name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _open_secure_regular(trusted_root: Path, relative_path: Path) -> int:
+    if _is_windows_platform():
+        return WindowsHandleFilesystem().open_regular_descriptor(trusted_root, relative_path)
+    parent_fd, name = _open_posix_parent(trusted_root, relative_path)
+    try:
+        return os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _unlink_secure_regular(trusted_root: Path, relative_path: Path) -> None:
+    if _is_windows_platform():
+        destination = trusted_root.joinpath(*validated_relative_parts(relative_path))
+        with WindowsHandleFilesystem().pin_directory_chain(destination.parent):
+            os.unlink(destination)
+        return
+    parent_fd, name = _open_posix_parent(trusted_root, relative_path)
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _open_posix_parent(trusted_root: Path, relative_path: Path) -> tuple[int, str]:
+    parts = validated_relative_parts(relative_path)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not no_follow or not directory:
+        raise RuntimeError("secure POSIX artifact traversal requires no-follow directory handles")
+    descriptor = os.open(trusted_root, os.O_RDONLY | no_follow | directory)
+    try:
+        for component in parts[:-1]:
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | no_follow | directory,
+                    dir_fd=descriptor,
+                )
+            except OSError as error:
+                raise RuntimeError(
+                    "secure artifact path contains a symlink, reparse, or invalid ancestor"
+                ) from error
+            os.close(descriptor)
+            descriptor = child
+        return descriptor, parts[-1]
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _is_windows_platform() -> bool:
+    return os.name == "nt"
+
+
+def _spool_pre_yield_hook(spool: VerifiedAggregateBarSpool) -> None:
+    """Internal deterministic race seam; production intentionally performs no action."""
+
+
+def _pread_exact(descriptor: int, length: int, offset: int) -> bytes:
+    os.lseek(descriptor, offset, os.SEEK_SET)
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining:
+        chunk = os.read(descriptor, remaining)
+        if not chunk:
+            raise RuntimeError("aggregate spool ended before its bounded record")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _pwrite_all(descriptor: int, content: bytes, offset: int) -> None:
+    os.lseek(descriptor, offset, os.SEEK_SET)
+    _write_all(descriptor, content)
 
 
 def _write_all(descriptor: int, content: bytes) -> None:
