@@ -509,3 +509,7 @@ and does not invent discovery lineage.
 This planning checkpoint does not attach outcomes or claim support, validation, promotion, or an
 edge. Source implementation begins only after the Task 15 plan/test-spec commit is pushed and its
 remote SHA is verified, using a separate bounded implementation plan.
+
+The independently reviewed Task 15 plan/test-spec checkpoint
+`807ac28ac5616fb837c1ccea1e2bc47572ae3984` was pushed at `2026-07-22T10:24:29Z`; the remote branch
+resolved to the exact local SHA. No outcome code preceded that checkpoint.

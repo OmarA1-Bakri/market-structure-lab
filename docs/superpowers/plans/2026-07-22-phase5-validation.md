@@ -11,6 +11,11 @@ plan and immediate execution of a separately tracked bounded Phase 5 implementat
 strategy construction, portfolio, paper/live trading, exchange integration, and leverage remain
 unauthorised.
 
+The reviewed Task 15 plan/test-spec checkpoint is
+`807ac28ac5616fb837c1ccea1e2bc47572ae3984`. It was pushed to
+`origin/agent/research-lab-foundation` at `2026-07-22T10:24:29Z`; local and remote SHAs matched
+exactly before the bounded implementation plan began.
+
 No new dependency is authorised for the bounded implementation. Use the Python standard library,
 Polars, SciPy, and existing canonical JSON, hashing, bounded-I/O, and immutable-publication
 primitives. A third-party backtesting or execution framework is explicitly rejected for this phase.
