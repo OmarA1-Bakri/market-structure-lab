@@ -354,7 +354,60 @@ def test_control_execution_binds_null_projection_evidence_to_manifest_and_budget
             metrics_field="negative_controls",
             work_budget=budget,
             discovery_manifest=_discovery_manifest_identity(matrix_sha256, work_evidence),
+            pca_components=2,
         )
+
+
+def test_control_execution_accepts_selected_null_projection_within_frozen_reservation() -> None:
+    budget = _run_budget()
+    matrix_sha256 = _sha("b")
+    work_evidence = _projection_work_evidence(budget)
+    contract = expected_reliability_contract("time_order_preserving_null")
+    evidence = ReliabilityEvidence.create(
+        name=contract.name,
+        kind=contract.kind,
+        algorithm_version=contract.algorithm_version,
+        input_sha256=_sha("9"),
+        source_matrix_sha256=matrix_sha256,
+        result={
+            "row_count": 2,
+            "feature_count": 2,
+            "sequence_count": 1,
+            "sequences": [{"row_start": 0, "row_count": 2, "column_offsets": [1, 1]}],
+            "transformed_matrix_sha256": _sha("c"),
+            "mean_absolute_change": 0.5,
+            "projection_sha256": _sha("d"),
+            "frozen_centroids_sha256": _sha("e"),
+            "projected_null_sha256": _sha("f"),
+            "null_assignment_counts": {"0": 1, "1": 1},
+            "primary_inertia": 1.0,
+            "null_inertia": 1.5,
+            "inertia_delta": 0.5,
+            "work_budget_sha256": budget.sha256,
+            "partition_projection_cells": 6,
+            "maximum_partition_projection_cells": budget.maximum_pca_cells,
+            "reliability_control_projection_cells": 4,
+            "maximum_reliability_control_projection_cells": (
+                budget.maximum_reliability_control_projection_cells
+            ),
+            "aggregate_projection_cells": 10,
+            "maximum_aggregate_projection_cells": budget.maximum_aggregate_projection_cells,
+        },
+    )
+    metrics = {
+        "discovery_matrix_sha256": matrix_sha256,
+        "work_budget": work_evidence,
+        "negative_controls": {contract.name: evidence.to_dict()},
+    }
+
+    assert discovery_program._execution_classification(
+        metrics,
+        declared=(contract.name,),
+        metrics_field="negative_controls",
+        work_budget=budget,
+        discovery_manifest=_discovery_manifest_identity(matrix_sha256, work_evidence),
+        pca_components=2,
+    ) == ((contract.name, "executed"),)
 
 
 def test_trial_grid_is_exact_deterministic_and_bounded() -> None:

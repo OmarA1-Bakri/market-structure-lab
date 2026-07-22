@@ -1065,12 +1065,16 @@ def _trial_reliability_evidence(
     stability = optional_json("stability.json")
     motifs = optional_json("motifs.json")
     transitions = optional_json("transitions.json")
+    pca_components = manifest.canonical_config.get("pca_components")
+    if isinstance(pca_components, bool) or not isinstance(pca_components, int):
+        raise RuntimeError("trial PCA component identity is invalid")
     negative_control_execution = _execution_classification(
         metrics,
         declared=negative_controls,
         metrics_field="negative_controls",
         work_budget=work_budget,
         discovery_manifest=discovery_manifest,
+        pca_components=pca_components,
     )
     naive_baseline_execution = _execution_classification(
         metrics,
@@ -1078,6 +1082,7 @@ def _trial_reliability_evidence(
         metrics_field="naive_baselines",
         work_budget=work_budget,
         discovery_manifest=discovery_manifest,
+        pca_components=pca_components,
     )
     if (
         any(
@@ -1124,6 +1129,7 @@ def _execution_classification(
     metrics_field: str,
     work_budget: DiscoveryWorkBudget,
     discovery_manifest: object,
+    pca_components: int,
 ) -> tuple[tuple[str, str], ...]:
     raw = metrics.get(metrics_field) if isinstance(metrics, Mapping) else None
     if raw is None:
@@ -1157,7 +1163,12 @@ def _execution_classification(
             raise RuntimeError("trial control execution evidence identity is inconsistent")
         if name == "time_order_preserving_null":
             assert work_evidence is not None
-            _verify_null_projection_budget(evidence.result, work_evidence, work_budget)
+            _verify_null_projection_budget(
+                evidence.result,
+                work_evidence,
+                work_budget,
+                pca_components=pca_components,
+            )
         classified.append((name, "executed"))
     return tuple(classified)
 
@@ -1200,6 +1211,8 @@ def _verify_null_projection_budget(
     result: Mapping[str, object],
     work_evidence: Mapping[str, object],
     work_budget: DiscoveryWorkBudget,
+    *,
+    pca_components: int,
 ) -> None:
     control_limit = (
         work_budget.maximum_reliability_control_projection_cells or work_budget.maximum_pca_cells
@@ -1211,11 +1224,7 @@ def _verify_null_projection_budget(
         "work_budget_sha256": work_budget.sha256,
         "partition_projection_cells": work_evidence.get("maximum_partition_pca_cells"),
         "maximum_partition_projection_cells": work_budget.maximum_pca_cells,
-        "reliability_control_projection_cells": work_evidence.get(
-            "reliability_control_projection_cells"
-        ),
         "maximum_reliability_control_projection_cells": control_limit,
-        "aggregate_projection_cells": work_evidence.get("aggregate_projection_cells"),
         "maximum_aggregate_projection_cells": aggregate_limit,
     }
     expected_work_limits = {
@@ -1227,6 +1236,33 @@ def _verify_null_projection_budget(
         raise RuntimeError("trial control projection work budget is inconsistent")
     if any(result.get(name) != value for name, value in expected.items()):
         raise RuntimeError("trial null projection evidence does not match the frozen work budget")
+    row_count = result.get("row_count")
+    control_cells = result.get("reliability_control_projection_cells")
+    aggregate_cells = result.get("aggregate_projection_cells")
+    partition_cells = result.get("partition_projection_cells")
+    reserved_control_cells = work_evidence.get("reliability_control_projection_cells")
+    reserved_aggregate_cells = work_evidence.get("aggregate_projection_cells")
+    if (
+        isinstance(pca_components, bool)
+        or pca_components < 1
+        or isinstance(row_count, bool)
+        or not isinstance(row_count, int)
+        or isinstance(control_cells, bool)
+        or not isinstance(control_cells, int)
+        or isinstance(aggregate_cells, bool)
+        or not isinstance(aggregate_cells, int)
+        or isinstance(partition_cells, bool)
+        or not isinstance(partition_cells, int)
+        or isinstance(reserved_control_cells, bool)
+        or not isinstance(reserved_control_cells, int)
+        or isinstance(reserved_aggregate_cells, bool)
+        or not isinstance(reserved_aggregate_cells, int)
+        or control_cells != row_count * pca_components
+        or control_cells > reserved_control_cells
+        or aggregate_cells != partition_cells + control_cells
+        or aggregate_cells > reserved_aggregate_cells
+    ):
+        raise RuntimeError("trial null projection evidence exceeds its frozen reservation")
 
 
 def _aggregate_execution_classification(

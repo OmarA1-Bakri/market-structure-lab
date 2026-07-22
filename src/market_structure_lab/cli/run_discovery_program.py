@@ -77,9 +77,9 @@ DEFAULT_PROMOTION_RECEIPT = Path(
     "data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json"
 )
 DEFAULT_SNAPSHOT_ROOT = Path("data/exports/snapshots")
-DEFAULT_DERIVED_ROOT = Path("data/exports/derived/task14-PG-000003")
-DEFAULT_PROGRAM_ROOT = Path("data/exports/discovery-programs/PG-000003")
-DEFAULT_TRIAL_ROOT = Path("data/exports/trials/task14-PG-000003")
+DEFAULT_DERIVED_ROOT = Path("data/exports/derived/task14-PG-000004")
+DEFAULT_PROGRAM_ROOT = Path("data/exports/discovery-programs/PG-000004")
+DEFAULT_TRIAL_ROOT = Path("data/exports/trials/task14-PG-000004")
 AUCTION_CONFIG_VERSION = "task14-auction-v1"
 
 
@@ -109,7 +109,7 @@ class Task14PilotConfiguration:
 
 
 def _pilot_configuration() -> Task14PilotConfiguration:
-    """Return the frozen metadata-only PG-000003 pilot contract without external access."""
+    """Return the frozen metadata-only PG-000004 pilot contract without external access."""
     feature_names = (
         "poc_distance_close",
         "poc_volume_share",
@@ -119,15 +119,15 @@ def _pilot_configuration() -> Task14PilotConfiguration:
         "vwap_distance_close",
     )
     return Task14PilotConfiguration(
-        selection_id="SU-000703",
-        preregistration_id="PG-000003",
-        split_id="task14-first-real-discovery-v3",
-        run_id="DR-000703",
-        dataset_snapshot_id="DS-000703",
-        feature_publication_id="FP-000703",
-        event_publication_id="EP-000703",
-        normalizer_id="NZ-000703",
-        regime_assignment_contract_id="task14-contemporaneous-regimes-v3",
+        selection_id="SU-000704",
+        preregistration_id="PG-000004",
+        split_id="task14-first-real-discovery-v4",
+        run_id="DR-000704",
+        dataset_snapshot_id="DS-000704",
+        feature_publication_id="FP-000704",
+        event_publication_id="EP-000704",
+        normalizer_id="NZ-000704",
+        regime_assignment_contract_id="task14-contemporaneous-regimes-v4",
         start=datetime(2025, 2, 1, tzinfo=UTC),
         discovery_end=datetime(2025, 2, 1, 8, 0, tzinfo=UTC),
         development_end=datetime(2025, 2, 1, 16, 0, tzinfo=UTC),
@@ -154,7 +154,7 @@ def _pilot_configuration() -> Task14PilotConfiguration:
             minimum_regime_support=1,
         ),
         program_budget=DiscoveryProgramBudget(
-            budget_id="task14-program-budget-v3",
+            budget_id="task14-program-budget-v4",
             maximum_trials=1,
             maximum_total_stability_fits=8,
             maximum_serialized_evidence_bytes=64 * 1024 * 1024,
@@ -167,7 +167,7 @@ def _pilot_configuration() -> Task14PilotConfiguration:
             maximum_rows=960,
         ),
         work_budget=DiscoveryWorkBudget(
-            budget_id="task14-run-budget-v4",
+            budget_id="task14-run-budget-v5",
             maximum_materialized_rows=959,
             maximum_feature_cells=8_628,
             maximum_pca_rows=480,
@@ -183,8 +183,8 @@ def _pilot_configuration() -> Task14PilotConfiguration:
             maximum_bundle_entries=100,
         ),
         run_max_rows=480,
-        started_at=datetime(2026, 7, 22, 16, 0, tzinfo=UTC),
-        completed_at=datetime(2026, 7, 22, 16, 1, tzinfo=UTC),
+        started_at=datetime(2026, 7, 22, 20, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 22, 20, 1, tzinfo=UTC),
     )
 
 
