@@ -531,3 +531,17 @@ That planning checkpoint is `e655152ab729b3e1e530f1bc044febca3509a6fd`, pushed a
 verified at `2026-07-22T10:36:29Z`. The checkpointed plan bytes have SHA-256
 `d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111`. Phase 5 source TDD may now
 begin against those exact identities.
+
+### Phase 5 work unit 1: identities, roster, statuses, and budgets
+
+Work unit 1 is complete and remotely verified at
+`8ee49b1184d46ae508e82688a14a73aa76baabb1`. Public domain/schema-separated canonical identities,
+stable VP/VR identities, exact 1,104-slot roster validation, orthogonal execution/scientific status,
+full bounded-work declarations, and authoritative plan/data/policy lineage now fail closed before
+outcome work. Strict RED preceded implementation; the final focused gate is 77 passed.
+
+Independent specification review approved the contract. Independent code-quality review initially
+found forged integer `-0` acceptance, repeated whole-roster hashing per VR, and raw-string terminal
+states; regression-first fixes now reject both invalid forms and generate all 1,104 unique VR IDs in
+about 0.135 seconds. No aggregate, candidate, outcome, holdout, strategy, or trading implementation
+was introduced.

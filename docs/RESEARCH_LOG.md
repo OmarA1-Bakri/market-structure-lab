@@ -86,3 +86,22 @@ evidence that the question, method, and conclusion can be reconstructed later.
   [`2026-07-22-phase5-bounded-implementation.md`](superpowers/plans/2026-07-22-phase5-bounded-implementation.md).
   Remotely verified checkpoint `e655152ab729b3e1e530f1bc044febca3509a6fd`; tracked plan SHA-256
   `d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111`.
+
+### 2026-07-22 - Fail closed before Phase 5 outcome work
+
+- Question: Can validation identities, the complete trial roster, statuses, and all work limits be
+  frozen before aggregate or outcome implementation begins?
+- Hypothesis: None tested; this is programme-contract infrastructure.
+- Method: Strict test-first implementation, self-review, independent specification review, and
+  independent code-quality review with regression-first repairs.
+- Dataset: No market rows; fixed synthetic identity and exploding-iterable fixtures only.
+- Metrics: 1,104 exact ledger entries, 64 primary slots inside 152 core executions, complete role
+  decomposition, 4,096 bootstrap draws, and independent resource limits.
+- Results: 77 focused tests pass. Forged integer `-0`, raw string statuses, roster mutations, lineage
+  mutations, over-budget declarations, and foreign evaluation slots reject. All 1,104 VR identities
+  generate in about 0.135 seconds from one immutable programme identity.
+- Conclusions: The Phase 5 programme boundary is deterministic and bounded. No candidate has been
+  evaluated and no validation claim exists.
+- Next Question: Can complete 1m rows produce byte-identical 1h/4h aggregate publications without
+  crossing gaps, segments, or partial periods?
+- Artifacts: Source checkpoint `8ee49b1184d46ae508e82688a14a73aa76baabb1`.

@@ -109,6 +109,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 14 — first real outcome-blind discovery | Complete and remotely checkpointed | Four immutable attempts are retained. Bounded `PG-000004` / `DR-000704` completed with a rejected programme vector, no holdout-row access, and no outcome attachment. Reviewed close-out checkpoint `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d` was pushed and remotely verified. |
 | Task 15 — separate Phase 5 validation plan | Complete and remotely checkpointed | The independently approved separate plan and test specification are `2026-07-22-phase5-validation.md` and `2026-07-22-phase5-validation-test-spec.md`; checkpoint `807ac28ac5616fb837c1ccea1e2bc47572ae3984` was pushed and remotely verified before Phase 5 source code. |
 | Phase 5 bounded implementation plan | Complete and remotely checkpointed | The independently approved eleven-work-unit plan is checkpointed at `e655152ab729b3e1e530f1bc044febca3509a6fd`; its tracked bytes are SHA-256 `d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111`. It contains no outcome result and authorises the bounded source TDD sequence only. |
+| Phase 5 work unit 1 — identities and bounds | Complete and remotely checkpointed | The exact roster/status/identity/work-budget boundary passed 77 focused tests and both independent reviews at `8ee49b1184d46ae508e82688a14a73aa76baabb1`; no outcome or holdout access exists. |
 
 ## Skill and workflow routing
 
