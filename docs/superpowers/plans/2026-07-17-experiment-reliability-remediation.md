@@ -106,7 +106,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 11 — semantic leakage evidence | Complete | Dependency/builder contracts, independent review receipts, negative tests, and pre-consumption guards are bound; residual manual review remains explicit. |
 | Task 12 — original Phase 4 hardening gate | Complete and remotely checkpointed | The evidence/review chain is complete through prerequisite-closure baseline `3cf3721f1ec694b61ec1da78d0b7be24fea93caf`; local and remote match. Task 12 authorizes only the explicitly instructed Task 13 audit, not Phase C. |
 | Task 13 — independent residual-risk verification | Complete and remotely checkpointed | Every finding was reproduced, confirmed defects were corrected, all three reviews and the final verification chain passed, and implementation checkpoint `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4` was pushed and remotely verified. |
-| Task 14 — first real outcome-blind discovery | Complete; final evidence checkpoint pending | Four immutable attempts are retained. Bounded `PG-000004` / `DR-000704` completed with a rejected programme vector, no holdout-row access, and no outcome attachment. |
+| Task 14 — first real outcome-blind discovery | Complete and remotely checkpointed | Four immutable attempts are retained. Bounded `PG-000004` / `DR-000704` completed with a rejected programme vector, no holdout-row access, and no outcome attachment. Reviewed close-out checkpoint `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d` was pushed and remotely verified. |
 | Task 15 — separate Phase 5 validation plan | Authorized next | The downstream instruction authorizes immediate plan publication after Task 14's verified checkpoint; no outcome code may precede the separate plan. |
 
 ## Skill and workflow routing

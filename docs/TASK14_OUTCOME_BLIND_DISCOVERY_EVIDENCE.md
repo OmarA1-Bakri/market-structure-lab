@@ -8,9 +8,10 @@ construct a strategy. The bounded terminal programme was scientifically **reject
 stability policy. That rejection is a valid empirical result, not an execution failure.
 
 The runtime implementation checkpoint was
-`6f49407c3cef96e5753dd26ef81ce9c793116a31`. The final Task 14 evidence checkpoint is recorded in a
-small follow-up after the evidence commit is pushed, so this document does not invent its own future
-commit identity.
+`6f49407c3cef96e5753dd26ef81ce9c793116a31`. The reviewed Task 14 close-out and evidence checkpoint
+is `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d`. It was pushed at `2026-07-22T10:02:26Z`; the local
+and `origin/agent/research-lab-foundation` SHAs matched exactly. This small evidence-only follow-up
+records that observed identity without rewriting the published checkpoint.
 
 ## Immutable attempt ledger
 
@@ -165,6 +166,15 @@ after the correction.
 - Edge validated or promoted: no.
 - Strategy, portfolio, execution, leverage, paper trading, or live trading started: no.
 - Generated snapshot, publication, trial, and programme rows committed to Git: no.
+
+## Checkpoint verification
+
+- Task 14 close-out checkpoint: `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d`.
+- Push target: `origin/agent/research-lab-foundation`.
+- Push time: `2026-07-22T10:02:26Z`.
+- Local SHA after push: `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d`.
+- Remote branch SHA after push: `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d`.
+- Local/remote equality: yes.
 
 ## Task 14 decision
 

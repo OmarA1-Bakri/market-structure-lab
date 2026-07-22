@@ -473,6 +473,9 @@ an overly strict programme-vector reservation check, and fresh bounded `PG-00000
   `6f49407c3cef96e5753dd26ef81ce9c793116a31` before `PG-000004` ran.
 - Exact identities, incident history, reviews, and verification are recorded in
   [`TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md`](TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md).
+- The reviewed Task 14 close-out checkpoint
+  `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d` was pushed and the remote branch resolved to the exact
+  local SHA before Task 15 planning began.
 
 The Phase 4 deterministic contracts remain in force: provenance is checked before matrix
 construction; cluster, motif, missingness, transition, work-budget, and semantic-leakage evidence is
