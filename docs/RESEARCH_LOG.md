@@ -105,3 +105,23 @@ evidence that the question, method, and conclusion can be reconstructed later.
 - Next Question: Can complete 1m rows produce byte-identical 1h/4h aggregate publications without
   crossing gaps, segments, or partial periods?
 - Artifacts: Source checkpoint `8ee49b1184d46ae508e82688a14a73aa76baabb1`.
+
+### 2026-07-22 - Publish only authenticated complete aggregate bars
+
+- Question: Can complete 1m rows produce deterministic 15m/1h/4h publications without crossing a
+  partial period, gap, segment, snapshot identity, memory bound, or filesystem trust boundary?
+- Hypothesis: None tested; this is causal source reconstruction for later validation.
+- Method: Strict TDD followed by independent specification and code-quality review, including
+  adversarial source substitution, byte-budget, same-inode mutation, symlink/reparse, no-clobber,
+  partial-claim, and native-Windows probes.
+- Dataset: Synthetic immutable snapshot partitions only; no real outcome or final-holdout rows.
+- Metrics: Exact OHLCV, ordered source count/bytes/digest, target-aware upper byte envelope,
+  <=256-row partitions, authenticated reverse record chain, canonical success/failure receipts.
+- Results: 73 focused POSIX tests pass; native Windows passes 72 with one expected POSIX-only skip.
+  The relevant expanded suite passes on both platforms. Final work unit checkpoint is
+  `388abdfdd9fb09a888785a9c55cc2ebb7f642592`.
+- Conclusions: Downstream detectors can consume only complete, parent-bound aggregate evidence.
+  This is not a candidate, outcome, validation, or edge result.
+- Next Question: Do the frozen A/B/G/E/D completed-bar detectors emit exact causal signals and
+  controls before outcomes exist?
+- Artifacts: Task 2 source/tests and immutable commit history ending at the checkpoint above.

@@ -545,3 +545,21 @@ found forged integer `-0` acceptance, repeated whole-roster hashing per VR, and 
 states; regression-first fixes now reject both invalid forms and generate all 1,104 unique VR IDs in
 about 0.135 seconds. No aggregate, candidate, outcome, holdout, strategy, or trading implementation
 was introduced.
+
+### Phase 5 work unit 2: aggregate bars and publication
+
+Work unit 2 is complete and remotely verified at
+`388abdfdd9fb09a888785a9c55cc2ebb7f642592`. Complete 1m rows now produce deterministic 15m/1h/4h
+aggregate publications with exact parent-snapshot partition membership, ordered row/content
+digests, segment/continuity identity, explicit memory and artefact envelopes, and no interpolation.
+Raw streams spool to authenticated reverse-chain records and cannot yield a bar before the complete
+source identity is established.
+
+The independent reviews reproduced and closed parent-provenance substitution, underdeclared bytes,
+manifest coercion, same-inode spool mutation, POSIX symlink/no-clobber races, Windows reparse/handle
+gaps, and unverifiable failed-claim evidence. Success and failure publications use canonical,
+hash-bound, bounded no-follow receipts; native Windows and POSIX paths retain equivalent safety.
+Final focused evidence is 73 POSIX passes and 72 native-Windows passes with one expected POSIX-only
+skip. The repository-wide Python run reached 1,453 passes and 8 skips; 13 PowerShell runner tests
+remain blocked only by the WSL host's signed-script policy. No candidate, outcome, final-holdout,
+strategy, or trading code was introduced.
