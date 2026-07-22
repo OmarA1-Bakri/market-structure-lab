@@ -173,6 +173,8 @@ def _validate_normalised(value: object) -> None:
             or re.fullmatch(r"-?(?:0|[1-9][0-9]*)", encoded_value) is None
         ):
             raise CanonicalIdentityError("canonical integer encoding is invalid")
+        if encoded_value == "-0":
+            raise CanonicalIdentityError("canonical integer encoding is invalid")
         return
     if value_type == "decimal":
         if not isinstance(encoded_value, str):

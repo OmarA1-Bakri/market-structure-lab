@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+import market_structure_lab.research.models as research_models
 from market_structure_lab.research.models import (
     EXPECTED_FAMILIES,
     VALIDATION_SLOT_ROSTER,
@@ -78,6 +79,17 @@ def test_statuses_use_exact_values_and_validate_orthogonal_terminal_state() -> N
         ValidationTerminalState(ExecutionStatus.COMPLETED, ScientificDecision.NOT_EVALUATED)
     with pytest.raises(ValueError, match="failed.*not_evaluated"):
         ValidationTerminalState(ExecutionStatus.FAILED, ScientificDecision.PROMOTED)
+
+
+def test_terminal_state_rejects_raw_strings_instead_of_coercing_them() -> None:
+    with pytest.raises(TypeError, match="ExecutionStatus"):
+        ValidationTerminalState(  # type: ignore[arg-type]
+            "completed", ScientificDecision.REJECTED
+        )
+    with pytest.raises(TypeError, match="ScientificDecision"):
+        ValidationTerminalState(  # type: ignore[arg-type]
+            ExecutionStatus.COMPLETED, "rejected"
+        )
 
 
 def test_default_work_budget_freezes_exact_counts_and_draws() -> None:
@@ -208,6 +220,22 @@ def test_programme_config_binds_lineage_code_data_policies_roster_and_budget() -
         ("split_sha256", "c" * 64),
     ):
         assert _config(**{field: value}).programme_id != config.programme_id
+
+
+def test_programme_identity_is_frozen_once_for_repeated_evaluation_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    expected = evaluation_id_for_slot(config, config.roster[0])
+
+    def recomputed_programme_identity(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("programme identity was recomputed")
+
+    monkeypatch.setattr(research_models, "programme_id", recomputed_programme_identity)
+
+    assert config.programme_id.startswith("VP-")
+    assert evaluation_id_for_slot(config, config.roster[0]) == expected
+    assert evaluation_id_for_slot(config, config.roster[-1]).startswith("VR-")
 
 
 @pytest.mark.parametrize(

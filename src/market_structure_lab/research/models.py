@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 import re
 from typing import cast
@@ -50,6 +50,10 @@ class ValidationTerminalState:
     decision: ScientificDecision
 
     def __post_init__(self) -> None:
+        if not isinstance(self.execution_status, ExecutionStatus):
+            raise TypeError("execution_status must be an ExecutionStatus")
+        if not isinstance(self.decision, ScientificDecision):
+            raise TypeError("decision must be a ScientificDecision")
         if self.execution_status is ExecutionStatus.COMPLETED:
             if self.decision is ScientificDecision.NOT_EVALUATED:
                 raise ValueError("completed execution cannot be not_evaluated")
@@ -615,6 +619,7 @@ class ValidationProgrammeConfig:
     families: tuple[str, ...]
     roster: tuple[ValidationSlot, ...]
     work_budget: ValidationWorkBudget
+    _programme_id: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         authoritative = {
@@ -655,6 +660,7 @@ class ValidationProgrammeConfig:
         freeze_validation_slot_roster(self.roster)
         if self.work_budget != ValidationWorkBudget():
             raise ValueError("validation work budget must match the frozen Phase 5 budget")
+        object.__setattr__(self, "_programme_id", programme_id(self.to_dict()))
 
     @property
     def sha256(self) -> str:
@@ -662,7 +668,7 @@ class ValidationProgrammeConfig:
 
     @property
     def programme_id(self) -> str:
-        return programme_id(self.to_dict())
+        return self._programme_id
 
     def to_dict(self) -> dict[str, object]:
         return {

@@ -130,6 +130,14 @@ def test_hash_canonical_json_rejects_forged_nonfinite_decimal_or_timestamp() -> 
         hash_canonical_json(forged_timestamp)
 
 
+def test_hash_canonical_json_rejects_forged_negative_zero_integer() -> None:
+    encoded = canonical_json("number", {"value": 0})
+    forged = encoded.replace(b'"value":"0"', b'"value":"-0"')
+
+    with pytest.raises(CanonicalIdentityError, match="integer"):
+        hash_canonical_json(forged)
+
+
 def test_canonical_json_is_sorted_compact_utf8_json() -> None:
     encoded = canonical_json("programme", {"z": "last", "a": "first"})
 
