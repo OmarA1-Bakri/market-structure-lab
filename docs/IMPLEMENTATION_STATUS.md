@@ -490,3 +490,22 @@ then consumed its separate authorization under the same outcome-blind boundaries
 The ignored runtime ledger now contains four checksum-verified real discovery receipts: two failed
 and two rejected. This is not a validated signal, predictive estimate, or edge. Task 15 is the next
 gate and must publish the separate Phase 5 validation plan before any outcome attachment.
+
+## Task 15: separate Phase 5 validation plan
+
+Task 15 is defined by two first-class tracked artefacts:
+
+- [`2026-07-22-phase5-validation.md`](superpowers/plans/2026-07-22-phase5-validation.md);
+- [`2026-07-22-phase5-validation-test-spec.md`](superpowers/plans/2026-07-22-phase5-validation-test-spec.md).
+
+They freeze the baseline-first order A -> B -> G -> E -> D, completed-bar information cutoffs,
+next-contiguous-bar entry, candidate-specific horizons, nested purged/embargoed walk-forward folds,
+unchanged temporal and asset holdouts, one programme-scoped final-access attempt, weekly block
+bootstrap, Holm correction, costs, negative controls, robustness, immutable receipts, and bounded
+work. BTCUSDT, ETHUSDT, and unresolved source-conflict symbols remain excluded. Task 14 produced no
+advancing behaviour, so the plan records the five families as preregistered human-origin candidates
+and does not invent discovery lineage.
+
+This planning checkpoint does not attach outcomes or claim support, validation, promotion, or an
+edge. Source implementation begins only after the Task 15 plan/test-spec commit is pushed and its
+remote SHA is verified, using a separate bounded implementation plan.

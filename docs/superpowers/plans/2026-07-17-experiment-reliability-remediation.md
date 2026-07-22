@@ -107,7 +107,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Task 12 — original Phase 4 hardening gate | Complete and remotely checkpointed | The evidence/review chain is complete through prerequisite-closure baseline `3cf3721f1ec694b61ec1da78d0b7be24fea93caf`; local and remote match. Task 12 authorizes only the explicitly instructed Task 13 audit, not Phase C. |
 | Task 13 — independent residual-risk verification | Complete and remotely checkpointed | Every finding was reproduced, confirmed defects were corrected, all three reviews and the final verification chain passed, and implementation checkpoint `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4` was pushed and remotely verified. |
 | Task 14 — first real outcome-blind discovery | Complete and remotely checkpointed | Four immutable attempts are retained. Bounded `PG-000004` / `DR-000704` completed with a rejected programme vector, no holdout-row access, and no outcome attachment. Reviewed close-out checkpoint `5db2705a1cba37ee10d5eb3bd1fa470a5b628e3d` was pushed and remotely verified. |
-| Task 15 — separate Phase 5 validation plan | Authorized next | The downstream instruction authorizes immediate plan publication after Task 14's verified checkpoint; no outcome code may precede the separate plan. |
+| Task 15 — separate Phase 5 validation plan | Complete; remote checkpoint pending | The independently approved separate plan and test specification are `2026-07-22-phase5-validation.md` and `2026-07-22-phase5-validation-test-spec.md`. No outcome code precedes their verified checkpoint. |
 
 ## Skill and workflow routing
 
@@ -910,35 +910,47 @@ and final-holdout rows and outcomes remain untouched. See
 
 ### Task 15: Create the separate Phase 5 validation plan
 
-Do not implement Phase 5 under this plan. After real behaviours are frozen, create a new consensus
-plan that defines:
+Do not implement Phase 5 under this canonical remediation plan. Task 14 froze no behaviour for
+advancement, so Task 15 uses explicitly preregistered human-origin OHLCV candidate families and must
+not fabricate a `DR-*` or behaviour lineage. The separate consensus plan and companion test
+specification are:
+
+- `docs/superpowers/plans/2026-07-22-phase5-validation.md`;
+- `docs/superpowers/plans/2026-07-22-phase5-validation-test-spec.md`.
+
+They define:
 
 - candidate-specific outcomes, horizons, and one causal information cutoff;
 - purging/embargo and chronological nested walk-forward folds;
 - untouched temporal and asset holdouts plus one-time final-holdout access;
 - effective-sample and power analysis before selecting a minimum event count;
 - dependence-aware block bootstrap and interval-width decision rules;
-- naive, unconditional, persistence, and simple linear/tree baselines before higher-capacity ML;
-- discrimination and calibration metrics appropriate to the frozen outcome, not generic accuracy;
+- naive, unconditional, persistence, and simple trend/breakout baselines before any higher-capacity
+  model; no higher-capacity ML is in the initial scope;
+- mean net event-return and paired incremental-lift estimands appropriate to the frozen continuous
+  outcomes; classification discrimination/calibration metrics are not claimed applicable;
 - shuffled labels, time shifts, random features, placebo behaviours, and other negative controls;
 - the complete trial/search count, family definitions, multiplicity correction, and false-discovery
   accounting;
 - factor/beta, momentum, volatility, liquidity, asset, and regime exposure diagnostics so disguised
   systematic exposure is not called edge;
-- parameter perturbation, specification curves or multiverse reporting where appropriate,
-  degradation across folds, probability of backtest overfitting, and deflated performance metrics;
+- parameter perturbation, the complete frozen specification count, and degradation across folds;
+  PBO and deflated Sharpe are explicitly inapplicable to this initial chronological mean-event-return
+  design unless a later separately authorised plan changes the estimand;
 - conservative fees, spread, slippage, funding, latency, fill probability, missed fills, turnover,
   market impact, and capacity stress;
 - promotion, rejection, inconclusive, and retirement rules fixed before outcomes are read;
 - a decision on the vetted `backtesting-frameworks` skill and any selected supplemental skill after
   source review, with no implicit package or service adoption.
 
-Use `ralplan` for this design, `quantitative-research` as an adversarial reviewer, and rerun
-`docs/RESEARCH_SKILL_WORKFLOW_SWEEP.md`. The resulting plan must prefer the simplest model capable of
-passing the frozen test; ML is optional, not presumed.
+The plans freeze the order A -> B -> G -> E -> D, with B/G/E/D subordinate to named simple controls,
+and prefer the simplest model capable of passing the frozen test. ML is not presumed.
 
-**Acceptance:** the Phase 5 plan is reviewed and explicitly approved before outcome attachment. No
-strategy or leverage work is included.
+**Acceptance:** the separate Phase 5 plan and test specification are independently reviewed,
+committed, pushed, and remotely verified before outcome attachment. The user's 2026-07-22 master
+prompt is the explicit downstream authorisation to proceed immediately into a separate bounded
+implementation plan after that checkpoint; it does not authorise strategy, leverage, paper/live
+trading, or history rewriting.
 
 ---
 
@@ -963,7 +975,7 @@ strategy or leverage work is included.
 | Model complexity overfit | Naive/simple baselines, fixed search budget, nested walk-forward | Higher-capacity model rejected without untouched incremental value |
 | Disguised systematic exposure | Frozen factor/beta/regime diagnostics | Candidate rejected when effect vanishes after exposure adjustment |
 | Universe/survivorship bias | Point-in-time eligible universe and admission audit | Current-survivor-only universe cannot support promotion |
-| Backtest selection bias | Complete trial ledger, multiplicity correction, PBO/deflated metrics where applicable | Attractive selected run cannot hide the search that produced it |
+| Validation selection bias | Complete trial ledger, fixed family grid, and within-family Holm correction | Attractive selected run cannot hide the search that produced it |
 | Cost/capacity fantasy | Conservative component cost model and adverse stress | Gross or zero-impact result cannot promote |
 
 ## Risks and mitigations
@@ -979,7 +991,7 @@ strategy or leverage work is included.
 | More bootstrap iterations create false confidence | Calibrate block policy and report effective support/sensitivity, not only iteration count |
 | Semantic leakage is claimed “solved” by metadata | Pair declared dependencies with adversarial tests and independent review; document residual limits |
 | Full-universe gaps bias experiments | Freeze only approved contiguous scoped intervals; never weaken gates or impute |
-| Phase boundaries are silently skipped | Written evidence and verified remote checkpoint through Task 13 before the already-authorized Task 14 |
+| Phase boundaries are silently skipped | Written evidence and verified remote checkpoints through Task 14, then a separate verified Task 15 plan before Phase 5 source code |
 | A popular skill injects unreviewed assumptions | Treat skills as checklists; record version and adoption decisions; preregister project-specific policy |
 | ML is introduced before a baseline earns it | Require naive and simple baselines, a fixed search budget, and untouched incremental evidence |
 | A discovered edge is beta, momentum, volatility, or liquidity exposure | Freeze exposure diagnostics and require residual robustness before promotion |

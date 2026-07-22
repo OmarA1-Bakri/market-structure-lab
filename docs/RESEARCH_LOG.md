@@ -44,3 +44,24 @@ evidence that the question, method, and conclusion can be reconstructed later.
   augmentations survive a separate Phase 5 validation protocol?
 - Artifacts:
   [`TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md`](TASK14_OUTCOME_BLIND_DISCOVERY_EVIDENCE.md).
+
+### 2026-07-22 - Freeze the separate Phase 5 validation design
+
+- Question: What bounded validation design can reject false structure and false alpha without
+  relaxing Task 14 provenance or holdout protections?
+- Hypothesis: None tested; this session froze the validation design before outcome attachment.
+- Method: Repository capability audit plus adversarial quantitative review of causal timing,
+  dependence, multiplicity, costs, controls, robustness, final-holdout access, and trial accounting.
+- Dataset: Metadata and existing repository contracts only; no validation or final-holdout outcomes
+  were read.
+- Results: A separate validation plan and test specification freeze the order A -> B -> G -> E -> D,
+  exact completed-bar signal clocks, nested walk-forward folds, synchronised weekly bootstrap,
+  baseline/control hierarchy, full search count, family kill rules, and one atomic final-access
+  capability.
+- Conclusions: Phase 5 implementation is sufficiently specified to begin from a separate bounded
+  implementation plan. Nothing is yet supported, validated, promoted, or an edge.
+- Next Question: Can the synthetic no-edge vertical lifecycle prove the causal, immutable, bounded
+  validation transaction before any real outcomes are attached?
+- Artifacts:
+  [`2026-07-22-phase5-validation.md`](superpowers/plans/2026-07-22-phase5-validation.md) and
+  [`2026-07-22-phase5-validation-test-spec.md`](superpowers/plans/2026-07-22-phase5-validation-test-spec.md).

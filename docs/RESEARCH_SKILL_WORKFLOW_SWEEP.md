@@ -133,14 +133,23 @@ must not enter frozen experiment policy without independent justification.
 
 ### Task 15 Phase 5 validation planning and later backtesting
 
-1. Create a separate consensus plan before outcomes are read.
-2. Review that plan with `quantitative-research` and, if separately approved and installed,
-   `backtesting-frameworks`.
-3. Require purging/embargo, chronological walk-forward, asset holdouts, effective-sample/power
-   analysis, dependence-aware uncertainty, negative controls, multiple-testing correction, factor
-   exposure, parameter perturbation, and conservative costs.
-4. Prefer a simple preregistered baseline over complex ML. Any ML model must beat naive and linear
-   baselines under identical untouched evaluation and calibration metrics.
+1. Separate tracked plan and test-spec artefacts were created before outcomes:
+   `docs/superpowers/plans/2026-07-22-phase5-validation.md` and
+   `docs/superpowers/plans/2026-07-22-phase5-validation-test-spec.md`.
+2. Repository-capability and adversarial quantitative review lanes challenged causal timing,
+   multi-asset folds, purge/embargo, costs, controls, multiplicity, robustness, final access, and
+   immutable receipt ownership. Confirmed gaps were repaired before checkpointing.
+3. No external threshold was imported. The initial 4,096-draw bound, family error allocation,
+   candidate grid, horizons, and work counts are repository-specific preregistration choices and are
+   falsifiable rather than claimed as financial truths.
+4. The optional `backtesting-frameworks` skill was not installed or adopted. No new dependency is
+   authorised; the required causal/provenance semantics are narrower than a general backtesting
+   framework.
+5. The resulting order is A -> B -> G -> E -> D. Naive, unconditional, persistence, and simple
+   trend/breakout controls precede any higher-capacity model; no higher-capacity ML is in this phase.
+6. The named external `quantitative-research` runtime was not separately invoked as an executable
+   skill; an equivalent adversarial quantitative review lane reviewed the exact plan and is recorded
+   accurately rather than misrepresented as external skill execution.
 
 ## Skill-governance rules
 
