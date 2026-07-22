@@ -526,3 +526,8 @@ verification/review chain. The plan creates no outcome evidence and makes no val
 Source implementation remains blocked until this bounded plan has its own pushed, remotely verified
 checkpoint. The first bounded real programme remains development-only with zero final-holdout
 access; synthetic tests will prove the one-time access state without touching real final rows.
+
+That planning checkpoint is `e655152ab729b3e1e530f1bc044febca3509a6fd`, pushed and remotely
+verified at `2026-07-22T10:36:29Z`. The checkpointed plan bytes have SHA-256
+`d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111`. Phase 5 source TDD may now
+begin against those exact identities.

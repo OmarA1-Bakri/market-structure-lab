@@ -84,3 +84,5 @@ evidence that the question, method, and conclusion can be reconstructed later.
   outcome code is allowed to run?
 - Artifacts:
   [`2026-07-22-phase5-bounded-implementation.md`](superpowers/plans/2026-07-22-phase5-bounded-implementation.md).
+  Remotely verified checkpoint `e655152ab729b3e1e530f1bc044febca3509a6fd`; tracked plan SHA-256
+  `d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111`.
