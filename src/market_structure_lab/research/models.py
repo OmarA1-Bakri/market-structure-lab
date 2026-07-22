@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
+from math import isfinite
 import re
 from typing import cast
 
@@ -21,6 +23,11 @@ _IMPLEMENTATION_PLAN_EVIDENCE = "6da307a0d4756c61ddcabdf01f00d828afb55d7e"
 _IMPLEMENTATION_PLAN_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111"
 _GIT_SHA = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _require_sha256(value: object, label: str) -> None:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        raise ValueError(f"{label} must be a lower-case SHA-256")
 
 
 class ExecutionStatus(StrEnum):
@@ -577,6 +584,12 @@ def _build_validation_slot_roster() -> tuple[ValidationSlot, ...]:
 
 VALIDATION_SLOT_ROSTER = _build_validation_slot_roster()
 
+FROZEN_A_SELECTOR_GRID = tuple(
+    hash_json("A-selector-grid-entry-v1", slot.to_dict())
+    for slot in VALIDATION_SLOT_ROSTER
+    if slot.kind is ValidationSlotKind.CORE and slot.family == "A" and slot.primary
+)
+
 
 def freeze_validation_slot_roster(slots: Iterable[ValidationSlot]) -> tuple[ValidationSlot, ...]:
     """Accept only the exact frozen roster, including order and every field."""
@@ -597,6 +610,178 @@ def validation_roster_sha256(slots: Sequence[ValidationSlot]) -> str:
 
     frozen = freeze_validation_slot_roster(slots)
     return hash_json("validation-slot-roster", [slot.to_dict() for slot in frozen])
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateDefinition:
+    """One immutable outcome-blind detector/comparator identity."""
+
+    slot: ValidationSlot
+    source_publication_sha256: str
+    source_segment_id: int
+    aggregate_config_version: str
+    a_selector_grid: tuple[str, ...]
+    origin: str = "human_origin"
+    profile_bin_step: float | None = None
+    profile_definition_id: str | None = None
+    candidate_id: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.slot not in VALIDATION_SLOT_ROSTER:
+            raise ValueError("candidate slot must belong to the frozen validation roster")
+        _require_sha256(self.source_publication_sha256, "source_publication_sha256")
+        if (
+            isinstance(self.source_segment_id, bool)
+            or not isinstance(self.source_segment_id, int)
+            or self.source_segment_id < 0
+        ):
+            raise ValueError("source_segment_id must be a non-negative integer")
+        if not self.aggregate_config_version:
+            raise ValueError("aggregate_config_version must not be empty")
+        if self.origin != "human_origin":
+            raise ValueError("Task 14 advanced no behaviour; candidate origin must be human_origin")
+        if self.slot.family == "A":
+            if self.a_selector_grid:
+                raise ValueError("family A cannot claim a subordinate A selector grid")
+        elif self.a_selector_grid != FROZEN_A_SELECTOR_GRID:
+            raise ValueError("subordinate candidates require the full frozen A selector grid")
+        if len(self.a_selector_grid) != len(set(self.a_selector_grid)):
+            raise ValueError("A selector grid entries must be unique")
+        for identity in self.a_selector_grid:
+            _require_sha256(identity, "A selector grid identity")
+        if self.slot.family == "B":
+            if (
+                self.profile_bin_step is None
+                or not isfinite(self.profile_bin_step)
+                or self.profile_bin_step <= 0
+            ):
+                raise ValueError("family B requires a positive verified profile bin step")
+            parameters = dict(self.slot.parameters)
+            profile_bars = _target_bars(int(parameters["profile_hours"]), self.slot.timeframe)
+            if (
+                self.slot.kind is ValidationSlotKind.PERTURBATION
+                and parameters.get("perturbed_parameter") == "profile_hours"
+            ):
+                profile_bars = int(parameters["candidate_bars"])
+            window_hours = profile_bars * (1 if self.slot.timeframe == "1h" else 4)
+            expected_profile = (
+                "rolling-1m:uniform-touched-v1:value-area=0.70:"
+                f"window-hours={window_hours}:fixed-step={self.profile_bin_step}:"
+                f"source-config={self.aggregate_config_version}"
+            )
+            if self.profile_definition_id != expected_profile:
+                raise ValueError("family B profile definition does not match its frozen parameters")
+        elif self.profile_bin_step is not None or self.profile_definition_id is not None:
+            raise ValueError("profile configuration belongs only to family B")
+        object.__setattr__(
+            self,
+            "candidate_id",
+            f"HC-{hash_json('human-origin-candidate-v1', self.to_dict())}",
+        )
+
+    @property
+    def family(self) -> str:
+        return self.slot.family
+
+    @property
+    def family_order(self) -> int:
+        return EXPECTED_FAMILIES.index(self.family) + 1
+
+    @property
+    def role(self) -> str:
+        return self.slot.role
+
+    @property
+    def timeframe(self) -> str:
+        return self.slot.timeframe
+
+    @property
+    def direction(self) -> int:
+        return 1 if self.slot.direction == "long" else -1
+
+    @property
+    def horizon_hours(self) -> int:
+        return self.slot.horizon_hours
+
+    @property
+    def parameters(self) -> tuple[tuple[str, str], ...]:
+        return self.slot.parameters
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "origin": self.origin,
+            "family_order": self.family_order,
+            "slot": self.slot.to_dict(),
+            "source_publication_sha256": self.source_publication_sha256,
+            "source_segment_id": self.source_segment_id,
+            "aggregate_config_version": self.aggregate_config_version,
+            "a_selector_grid": list(self.a_selector_grid),
+            "profile_bin_step": self.profile_bin_step,
+            "profile_definition_id": self.profile_definition_id,
+            "task14_closeout_commit": _TASK14_CLOSEOUT,
+            "task14_evidence_commit": _TASK14_EVIDENCE,
+            "task15_plan_commit": _TASK15_PLAN,
+            "task15_evidence_commit": _TASK15_EVIDENCE,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSignal:
+    """One causal completed-bar signal with no outcome-bearing fields."""
+
+    signal_id: str = field(init=False)
+    candidate_id: str
+    family: str
+    symbol: str
+    timeframe: str
+    direction: int
+    feature_start: datetime
+    information_cutoff: datetime
+    legal_entry: datetime
+    source_publication_sha256: str
+    segment_id: int
+
+    def __post_init__(self) -> None:
+        if not self.candidate_id.startswith("HC-"):
+            raise ValueError("candidate_id must identify a human-origin candidate")
+        if self.family not in EXPECTED_FAMILIES:
+            raise ValueError("candidate signal family is unsupported")
+        if self.timeframe not in ("1h", "4h"):
+            raise ValueError("candidate signal timeframe must be 1h or 4h")
+        if self.direction not in (-1, 1):
+            raise ValueError("candidate signal direction must be -1 or +1")
+        for name in ("feature_start", "information_cutoff", "legal_entry"):
+            value = getattr(self, name)
+            offset = value.utcoffset()
+            if value.tzinfo is None or offset is None or offset.total_seconds():
+                raise ValueError(f"{name} must be UTC-aware")
+        if self.feature_start >= self.information_cutoff:
+            raise ValueError("feature_start must precede the information cutoff")
+        if self.legal_entry < self.information_cutoff:
+            raise ValueError("legal_entry cannot precede the information cutoff")
+        _require_sha256(self.source_publication_sha256, "source_publication_sha256")
+        if isinstance(self.segment_id, bool) or self.segment_id < 0:
+            raise ValueError("segment_id must be a non-negative integer")
+        object.__setattr__(
+            self,
+            "signal_id",
+            f"CS-{hash_json('candidate-signal-v1', self.to_dict())}",
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "candidate_id": self.candidate_id,
+            "family": self.family,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "direction": self.direction,
+            "feature_start": self.feature_start,
+            "information_cutoff": self.information_cutoff,
+            "legal_entry": self.legal_entry,
+            "source_publication_sha256": self.source_publication_sha256,
+            "segment_id": self.segment_id,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,7 +890,10 @@ def evaluation_id_for_slot(
 
 
 __all__ = [
+    "CandidateDefinition",
+    "CandidateSignal",
     "EXPECTED_FAMILIES",
+    "FROZEN_A_SELECTOR_GRID",
     "VALIDATION_SLOT_ROSTER",
     "ExecutionStatus",
     "ScientificDecision",

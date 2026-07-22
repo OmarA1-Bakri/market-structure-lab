@@ -1,6 +1,8 @@
 """Narrow public Phase 5 validation contracts."""
 
 from market_structure_lab.research.models import (
+    CandidateDefinition,
+    CandidateSignal,
     EXPECTED_FAMILIES,
     VALIDATION_SLOT_ROSTER,
     ExecutionStatus,
@@ -18,6 +20,8 @@ from market_structure_lab.research.models import (
 )
 
 __all__ = [
+    "CandidateDefinition",
+    "CandidateSignal",
     "EXPECTED_FAMILIES",
     "VALIDATION_SLOT_ROSTER",
     "ExecutionStatus",
