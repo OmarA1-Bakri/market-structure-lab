@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from market_structure_lab.core.config import CandleSourceMapping, MarketDataSett
 from market_structure_lab.data.export import (
     SnapshotIdentity,
     SnapshotManifest,
+    SnapshotResearchBinding,
     export_partitioned_snapshot,
 )
 from market_structure_lab.data.freshness_sync import (
@@ -27,6 +28,7 @@ from market_structure_lab.data.recovery import (
     RECOVERY_ADVISORY_LOCK_NAME,
     RecoveryRepository,
 )
+from market_structure_lab.data.segments import SegmentBoundary, segment_boundaries_sha256
 
 
 class SnapshotPublicationPolicy(StrEnum):
@@ -96,6 +98,7 @@ def build_freshness_snapshot_identity(
     config_version: str,
     code_commit: str,
     policy: SnapshotPublicationPolicy,
+    research_binding: SnapshotResearchBinding | None = None,
 ) -> SnapshotIdentity:
     """Bind the generic snapshot identity to the reviewed freshness evidence."""
     return SnapshotIdentity(
@@ -110,6 +113,7 @@ def build_freshness_snapshot_identity(
         compatibility_manifest_sha256=report.compatibility_manifest_sha256,
         freshness_as_of=report.as_of,
         publication_policy=policy.value,
+        research_binding=research_binding,
     )
 
 
@@ -171,6 +175,119 @@ def publish_freshness_snapshot(
             )
 
 
+def publish_scoped_freshness_snapshot(
+    engine: Engine,
+    report: FreshnessReport,
+    *,
+    output_root: str | Path,
+    dataset_version: str,
+    config_version: str,
+    code_commit: str,
+    symbols: tuple[str, ...],
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    boundaries: tuple[SegmentBoundary, ...],
+    research_binding: SnapshotResearchBinding,
+    batch_size: int = 10_000,
+    mapping: CandleSourceMapping | None = None,
+    settings: MarketDataSettings | None = None,
+) -> SnapshotManifest:
+    """Publish only a preregistered healthy discovery/development scope."""
+    if not report.coverage_conserved:
+        raise ValueError("freshness report does not conserve planned coverage")
+    if not symbols or symbols != tuple(sorted(set(symbols))):
+        raise ValueError("scoped snapshot symbols must use canonical deterministic ordering")
+    if timeframe != "1m":
+        raise ValueError("scoped snapshot currently supports the canonical 1m timeframe")
+    start_offset = start.utcoffset()
+    if start.tzinfo is None or start_offset is None or start_offset.total_seconds() != 0:
+        raise ValueError("scoped snapshot start must use UTC")
+    end_offset = end.utcoffset()
+    if end.tzinfo is None or end_offset is None or end_offset.total_seconds() != 0:
+        raise ValueError("scoped snapshot end must use UTC")
+    start = start.astimezone(UTC)
+    end = end.astimezone(UTC)
+    if start >= end:
+        raise ValueError("scoped snapshot start must precede end")
+    cutoff = datetime.fromisoformat(report.as_of.replace("Z", "+00:00"))
+    if end > cutoff:
+        raise ValueError("scoped snapshot extends beyond the verified freshness cutoff")
+    by_key = {(item.symbol, item.timeframe): item for item in report.symbols}
+    for symbol in symbols:
+        item = by_key.get((symbol, timeframe))
+        if item is None:
+            raise ValueError("scoped snapshot symbol is absent from freshness evidence")
+        if (
+            item.status not in _HEALTHY
+            or item.compatibility_state is not ProvenanceState.COMPATIBLE
+            or not item.current_through_cutoff
+        ):
+            raise ValueError("scoped snapshot requires healthy compatible current symbols")
+    if not isinstance(research_binding, SnapshotResearchBinding):
+        raise TypeError("scoped snapshot requires a research provenance binding")
+    if segment_boundaries_sha256(boundaries) != research_binding.gap_boundaries_sha256:
+        raise ValueError("scoped snapshot gap boundary identity mismatch")
+    gap_minutes = 0
+    for boundary in boundaries:
+        if (
+            boundary.symbol not in symbols
+            or boundary.timeframe != timeframe
+            or boundary.start < start
+            or boundary.end > end
+        ):
+            raise ValueError("scoped snapshot gap boundary is outside the selected scope")
+        seconds = int((boundary.end - boundary.start).total_seconds())
+        if seconds % 60:
+            raise ValueError("scoped snapshot gap boundary must align to canonical minutes")
+        gap_minutes += seconds // 60
+    total_seconds = int((end - start).total_seconds())
+    if total_seconds % 60:
+        raise ValueError("scoped snapshot range must align to canonical minutes")
+    expected_rows = (total_seconds // 60) * len(symbols) - gap_minutes
+    if expected_rows < 1:
+        raise ValueError("scoped snapshot must contain at least one expected candle")
+    if report.recovery_logical_hash is None:
+        raise ValueError("freshness report does not pin the canonical supplement state")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    active_settings = settings or MarketDataSettings.from_env()
+    source_mapping = mapping or active_settings.candles
+    canonical_mapping = canonical_view_mapping(source_mapping)
+    with engine.connect() as raw_connection:
+        connection = _snapshot_connection(raw_connection)
+        with connection.begin():
+            _acquire_snapshot_lock(connection)
+            recovery_sha256 = RecoveryRepository(connection).logical_supplement_hash()
+            if recovery_sha256 != report.recovery_logical_hash:
+                raise ValueError("database supplement state differs from the freshness report")
+            identity = build_freshness_snapshot_identity(
+                report,
+                dataset_version=dataset_version,
+                recovery_sha256=recovery_sha256,
+                mapping_version=source_mapping.version,
+                config_version=config_version,
+                code_commit=code_commit,
+                policy=SnapshotPublicationPolicy.REQUIRE_HEALTHY,
+                research_binding=research_binding,
+            )
+            return export_partitioned_snapshot(
+                _iter_scoped_batches(
+                    connection,
+                    symbols=symbols,
+                    timeframe=timeframe,
+                    start=start,
+                    end=end,
+                    mapping=canonical_mapping,
+                    batch_size=batch_size,
+                ),
+                output_root=output_root,
+                identity=identity,
+                boundaries=boundaries,
+                expected_row_count=expected_rows,
+            )
+
+
 def _iter_report_batches(
     connection: Connection,
     report: FreshnessReport,
@@ -184,6 +301,28 @@ def _iter_report_batches(
             symbol=item.symbol,
             timeframe=item.timeframe,
             end=cutoff,
+            batch_size=batch_size,
+            engine=connection,
+            mapping=mapping,
+        )
+
+
+def _iter_scoped_batches(
+    connection: Connection,
+    *,
+    symbols: tuple[str, ...],
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    mapping: CandleSourceMapping,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    for symbol in symbols:
+        yield from iter_candle_batches(
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
             batch_size=batch_size,
             engine=connection,
             mapping=mapping,
@@ -213,5 +352,6 @@ __all__ = [
     "SnapshotPublicationPolicy",
     "build_freshness_snapshot_identity",
     "publish_freshness_snapshot",
+    "publish_scoped_freshness_snapshot",
     "validate_snapshot_publication",
 ]

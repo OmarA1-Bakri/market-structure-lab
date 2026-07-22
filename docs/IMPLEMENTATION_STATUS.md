@@ -458,6 +458,16 @@ The Phase 4 implementation remains synthetic software-fixture evidence only. The
 complete at the software boundary, and the explicitly authorized Task 14 may now create the first
 real outcome-blind discovery evidence without accessing holdout rows or outcomes:
 
+- Task 14 now has a test-first operational path: promotion-bound universe selection, optional
+  research snapshot identity, exact gap binding, scoped freshness publication, frozen search-grid
+  and programme budgets, deterministic Phase 3 feature/event publication, discovery-only
+  normalization, immutable terminal trial linkage, and bounded reliability-vector publication.
+- `msl-run-discovery-program` is the thin non-interactive entry point. Its default pilot scope
+  materializes APTUSDT discovery/development rows only; IMXUSDT and the later temporal interval are
+  frozen as metadata-only holdouts.
+- The real `DR-*` evidence and final Task 14 review/checkpoint remain pending until this code is
+  committed and executed from the clean committed identity required by the runtime provenance gate.
+
 - concrete snapshot, publication, registry, normalizer, split, commit, and lock identities are
   verified before matrix construction;
 - cluster evidence covers adjacent frequency, centroid, within-cluster scale, margin drift, and

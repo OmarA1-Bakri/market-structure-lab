@@ -9,6 +9,22 @@ and remotely checkpointed at `59a9814a8e2a609bf1ea0bd5d0320ed0f7b33ee4`. The fir
 outcome-blind run is Task 14; it is now authorized, while holdout rows, outcomes, validation, and
 strategy work remain inaccessible and unstarted.
 
+## Task 14 real-program boundary
+
+The first real run uses `msl-run-discovery-program`. Before any detector attempt it freezes a
+promotion-bound `SelectedUniverse`, metadata-only chronological and asset holdouts, an exact trial
+grid, project-specific stability and missingness policies, negative controls, naive baselines, and
+aggregate work budgets. The selected snapshot identity binds the verified RR-000008 receipt, the
+exact scope, and the canonical gap-boundary digest while retaining byte-compatible legacy snapshot
+identities when no research binding is present.
+
+The command materializes only the discovery and development interval. It builds the deterministic
+rolling auction state, audited feature publication, discovery-fitted normalizer, and one-row causal
+event publication; verifies the complete provenance chain; executes every preregistered `DR-*`
+attempt; and publishes an immutable reliability vector reconciling the exact terminal receipts.
+It has no holdout-row or outcome input and cannot attach outcomes, estimate accuracy, validate an
+edge, or construct a strategy.
+
 ## Pipeline and access boundary
 
 The implemented path is:

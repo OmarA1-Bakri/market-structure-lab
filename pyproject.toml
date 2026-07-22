@@ -28,6 +28,7 @@ dependencies = [
 msl-backfill-candles = "market_structure_lab.cli.backfill_candles:main"
 msl-db-inspect = "market_structure_lab.cli.inspect_database:main"
 msl-reconcile-candles = "market_structure_lab.cli.reconcile_candles:main"
+msl-run-discovery-program = "market_structure_lab.cli.run_discovery_program:main"
 msl-sync-candles = "market_structure_lab.cli.sync_candles:main"
 
 [tool.hatch.build.targets.wheel]

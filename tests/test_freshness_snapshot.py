@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
 
 from market_structure_lab.core.config import CandleSourceMapping
-from market_structure_lab.data.export import verify_snapshot
+from market_structure_lab.data.export import SnapshotResearchBinding, verify_snapshot
 from market_structure_lab.data.freshness_snapshot import (
     SnapshotPublicationPolicy,
     build_freshness_snapshot_identity,
     publish_freshness_snapshot,
+    publish_scoped_freshness_snapshot,
     validate_snapshot_publication,
 )
 from market_structure_lab.data.freshness_sync import (
@@ -256,3 +259,68 @@ def test_publish_rejects_database_state_newer_than_freshness_report(
             config_version="freshness-snapshot-v1",
             code_commit="0123456789abcdef",
         )
+
+
+def test_scoped_publish_admits_only_selected_healthy_series_and_binds_research_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("POSTGRES_PASSWORD", "test-only")
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE candles_canonical ("
+                "id INTEGER PRIMARY KEY, symbol TEXT, interval TEXT, open_time INTEGER, "
+                "open REAL, high REAL, low REAL, close REAL, volume REAL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO candles_canonical VALUES "
+                "(1, 'BTCUSDT', '1m', 1784205120000, 1, 2, 1, 2, 3), "
+                "(2, 'BTCUSDT', '1m', 1784205180000, 2, 3, 2, 3, 4), "
+                "(3, 'BTCUSDT', '1m', 1784205240000, 3, 4, 3, 4, 5)"
+            )
+        )
+    monkeypatch.setattr(
+        "market_structure_lab.data.freshness_snapshot.RecoveryRepository.logical_supplement_hash",
+        lambda _repository: "d" * 64,
+    )
+    report = _report(
+        _symbol_report("BTCUSDT"),
+        _symbol_report(
+            "ETHUSDT",
+            status=FreshnessRunStatus.PROVIDER_ABSENT,
+            provenance=ProvenanceState.COMPATIBLE,
+        ),
+    )
+    binding = SnapshotResearchBinding(
+        selected_universe_sha256="1" * 64,
+        promotion_receipt_content_sha256="2" * 64,
+        promotion_receipt_artifact_sha256="3" * 64,
+        promotion_canonical_logical_sha256="4" * 64,
+        gap_boundaries_sha256=hashlib.sha256(b"[]").hexdigest(),
+    )
+
+    manifest = publish_scoped_freshness_snapshot(
+        engine,
+        report,
+        output_root=tmp_path,
+        dataset_version="task14-selected-v1",
+        config_version="task14-snapshot-v1",
+        code_commit="0123456789abcdef",
+        symbols=("BTCUSDT",),
+        timeframe="1m",
+        start=datetime(2026, 7, 16, 12, 32, tzinfo=UTC),
+        end=datetime(2026, 7, 16, 12, 34, tzinfo=UTC),
+        boundaries=(),
+        research_binding=binding,
+        mapping=CandleSourceMapping(schema="main", table="candles"),
+        batch_size=1,
+    )
+
+    assert manifest.row_count == 2
+    assert manifest.identity.research_binding == binding
+    assert manifest.min_timestamp == "2026-07-16T12:32:00Z"
+    assert manifest.max_timestamp == "2026-07-16T12:33:00Z"
+    verify_snapshot(tmp_path / "dataset_version=task14-selected-v1")

@@ -24,7 +24,11 @@ from market_structure_lab.data.canonical import (
     CANONICAL_SCHEMA,
     validate_candle_frame,
 )
-from market_structure_lab.data.segments import CandleSegmenter, SegmentBoundary
+from market_structure_lab.data.segments import (
+    CandleSegmenter,
+    SegmentBoundary,
+    segment_boundaries_sha256,
+)
 
 _PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -33,6 +37,40 @@ SUCCESS_NAME = "_SUCCESS"
 _IDENTITY_NAME = ".snapshot-identity.json"
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_SNAPSHOT_ENTRIES = 1_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotResearchBinding:
+    """Optional complete research provenance extension for a snapshot identity."""
+
+    selected_universe_sha256: str
+    promotion_receipt_content_sha256: str
+    promotion_receipt_artifact_sha256: str
+    promotion_canonical_logical_sha256: str
+    gap_boundaries_sha256: str
+
+    def __post_init__(self) -> None:
+        for field in (
+            "selected_universe_sha256",
+            "promotion_receipt_content_sha256",
+            "promotion_receipt_artifact_sha256",
+            "promotion_canonical_logical_sha256",
+            "gap_boundaries_sha256",
+        ):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not _SHA256.fullmatch(value):
+                raise ValueError("research identity hashes must be SHA-256 hex digests")
+            object.__setattr__(self, field, value.lower())
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": "research-snapshot-binding-v1",
+            "selected_universe_sha256": self.selected_universe_sha256,
+            "promotion_receipt_content_sha256": self.promotion_receipt_content_sha256,
+            "promotion_receipt_artifact_sha256": self.promotion_receipt_artifact_sha256,
+            "promotion_canonical_logical_sha256": self.promotion_canonical_logical_sha256,
+            "gap_boundaries_sha256": self.gap_boundaries_sha256,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +86,7 @@ class SnapshotIdentity:
     compatibility_manifest_sha256: str | None = None
     freshness_as_of: str | None = None
     publication_policy: str | None = None
+    research_binding: SnapshotResearchBinding | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not _PATH_COMPONENT.fullmatch(self.dataset_version):
@@ -103,10 +142,34 @@ class SnapshotIdentity:
                 "allow_provenance_blocked",
             }:
                 raise ValueError("unsupported freshness snapshot publication policy")
+        if isinstance(self.research_binding, Mapping):
+            payload = dict(self.research_binding)
+            if payload.pop("schema_version", None) != "research-snapshot-binding-v1":
+                raise ValueError("unsupported research snapshot binding schema")
+            expected = {
+                "selected_universe_sha256",
+                "promotion_receipt_content_sha256",
+                "promotion_receipt_artifact_sha256",
+                "promotion_canonical_logical_sha256",
+                "gap_boundaries_sha256",
+            }
+            if set(payload) != expected or any(
+                not isinstance(value, str) for value in payload.values()
+            ):
+                raise ValueError("research snapshot binding fields are invalid")
+            object.__setattr__(
+                self,
+                "research_binding",
+                SnapshotResearchBinding(**cast(dict[str, str], payload)),
+            )
+        elif self.research_binding is not None and not isinstance(
+            self.research_binding, SnapshotResearchBinding
+        ):
+            raise TypeError("research_binding must be a SnapshotResearchBinding")
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, object]:
         """Preserve the original identity shape for pre-freshness snapshots."""
-        payload = {
+        payload: dict[str, object] = {
             "dataset_version": self.dataset_version,
             "dump_sha256": self.dump_sha256,
             "recovery_sha256": self.recovery_sha256,
@@ -124,6 +187,8 @@ class SnapshotIdentity:
                     "publication_policy": cast(str, self.publication_policy),
                 }
             )
+        if isinstance(self.research_binding, SnapshotResearchBinding):
+            payload["research_binding"] = self.research_binding.to_dict()
         return payload
 
 
@@ -191,8 +256,18 @@ def export_partitioned_snapshot(
     output_root: str | Path,
     identity: SnapshotIdentity,
     boundaries: tuple[SegmentBoundary, ...] | list[SegmentBoundary] = (),
+    expected_row_count: int | None = None,
 ) -> SnapshotManifest:
     """Write a pinned snapshot in bounded UTC-day partitions and publish atomically."""
+    if expected_row_count is not None and (
+        isinstance(expected_row_count, bool)
+        or not isinstance(expected_row_count, int)
+        or expected_row_count < 0
+    ):
+        raise ValueError("expected_row_count must be a non-negative integer or None")
+    if isinstance(identity.research_binding, SnapshotResearchBinding):
+        if segment_boundaries_sha256(boundaries) != identity.research_binding.gap_boundaries_sha256:
+            raise ValueError("snapshot boundary identity does not match declared boundaries")
     root = Path(output_root)
     final = root / f"dataset_version={identity.dataset_version}"
     if final.exists():
@@ -276,6 +351,11 @@ def export_partitioned_snapshot(
             minimum = timestamp if minimum is None else min(minimum, timestamp)
             maximum = timestamp if maximum is None else max(maximum, timestamp)
     flush()
+
+    if expected_row_count is not None and total_rows != expected_row_count:
+        raise ValueError(
+            "snapshot row count does not match the exact selected-universe expectation"
+        )
 
     ordered_records = tuple(sorted(records, key=lambda item: item.path))
     expected_paths = {item.path for item in ordered_records}

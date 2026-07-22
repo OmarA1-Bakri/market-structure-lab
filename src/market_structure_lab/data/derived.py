@@ -48,6 +48,7 @@ SUCCESS_NAME = "_SUCCESS"
 LEAKAGE_AUDIT_NAME = "leakage-audit.json"
 _IDENTITY_NAME = ".publication-identity.json"
 _PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_IDENTITY_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@;=+-]{0,2047}$")
 _DATASET_ID = re.compile(r"^DS-[0-9]{6}$")
 _FEATURE_SET_ID = re.compile(r"^FS-[0-9]{6}$")
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -422,7 +423,9 @@ class DerivedPublicationIdentity:
             raise ValueError("code_commit must be a hexadecimal Git object ID")
         object.__setattr__(self, "code_commit", self.code_commit.lower())
         for name in ("config_version", "profile_version", "window_policy_id", "event_version"):
-            _safe_component(cast(str, getattr(self, name)), name)
+            value = cast(str, getattr(self, name))
+            if _IDENTITY_COMPONENT.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a safe identity component")
         if self.normalizer_artifact_sha256 is not None:
             if _SHA256.fullmatch(self.normalizer_artifact_sha256) is None:
                 raise ValueError("normalizer_artifact_sha256 must be a SHA-256 hex digest or None")

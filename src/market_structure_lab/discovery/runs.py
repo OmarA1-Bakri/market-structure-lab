@@ -209,6 +209,7 @@ class DiscoveryRunConfig:
     code_commit: str
     lock_sha256: str
     parent_run_ids: tuple[str, ...] = ()
+    preregistration_sha256: str | None = None
     feature_publication_id: str | None = None
     feature_publication_sha256: str | None = None
     normalizer_id: str | None = None
@@ -325,6 +326,8 @@ class DiscoveryRunConfig:
             raise ValueError("parent_run_ids must be a unique tuple")
         for parent in self.parent_run_ids:
             _require_pattern(parent, _RUN_ID, "parent_run_id")
+        if self.preregistration_sha256 is not None:
+            _require_sha256(self.preregistration_sha256, "preregistration_sha256")
         object.__setattr__(self, "tolerance", float(self.tolerance))
         object.__setattr__(self, "parent_run_ids", tuple(sorted(self.parent_run_ids)))
 
@@ -1022,7 +1025,12 @@ def _verify_runtime_code_identity(
         "--porcelain=v1",
         "--untracked-files=all",
     )
-    if status:
+    unsafe_status = tuple(
+        line
+        for line in status.splitlines()
+        if not (line.startswith("?? .codacy/") or line.startswith("?? .vscode/"))
+    )
+    if unsafe_status:
         raise ValueError("runtime Git worktree is dirty")
     lock_path = repository_root / "uv.lock"
     try:
@@ -1228,6 +1236,7 @@ def _config_payload(config: DiscoveryRunConfig) -> dict[str, object]:
         "code_commit": config.code_commit,
         "lock_sha256": config.lock_sha256,
         "parent_run_ids": list(config.parent_run_ids),
+        "preregistration_sha256": config.preregistration_sha256,
         "orchestration_parameters": {
             "subsample_fraction": _SUBSAMPLE_FRACTION,
             "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,

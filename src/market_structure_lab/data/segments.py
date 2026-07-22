@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -95,6 +97,28 @@ def assign_segment_ids(
     frame: pl.DataFrame, boundaries: tuple[SegmentBoundary, ...] | list[SegmentBoundary]
 ) -> pl.DataFrame:
     return CandleSegmenter(boundaries).apply(frame)
+
+
+def segment_boundaries_sha256(
+    boundaries: tuple[SegmentBoundary, ...] | list[SegmentBoundary],
+) -> str:
+    """Return the canonical logical identity of an exact unresolved-gap set."""
+    ordered = sorted(
+        boundaries,
+        key=lambda item: (item.symbol, item.timeframe, item.start, item.end, item.reason),
+    )
+    payload = [
+        {
+            "symbol": item.symbol,
+            "timeframe": item.timeframe,
+            "start": item.start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "end": item.end.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "reason": item.reason,
+        }
+        for item in ordered
+    ]
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def load_canonical_gap_boundaries(

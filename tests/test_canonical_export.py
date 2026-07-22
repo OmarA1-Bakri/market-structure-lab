@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,7 @@ from market_structure_lab.data.export import (
     SnapshotIdentity,
     export_partitioned_snapshot,
     read_snapshot_manifest,
+    SnapshotResearchBinding,
     verify_snapshot,
 )
 from market_structure_lab.data.gaps import GapRange
@@ -50,6 +52,35 @@ def snapshot_identity(version: str = "test-v1") -> SnapshotIdentity:
         config_version="config-v1",
         code_commit="0123456789abcdef",
     )
+
+
+def research_snapshot_identity(version: str = "research-v1") -> SnapshotIdentity:
+    return SnapshotIdentity(
+        dataset_version=version,
+        dump_sha256="a" * 64,
+        recovery_sha256="b" * 64,
+        mapping_version="candles-v1",
+        config_version="config-v1",
+        code_commit="0123456789abcdef",
+        research_binding=SnapshotResearchBinding(
+            selected_universe_sha256="c" * 64,
+            promotion_receipt_content_sha256="d" * 64,
+            promotion_receipt_artifact_sha256="e" * 64,
+            promotion_canonical_logical_sha256="f" * 64,
+            gap_boundaries_sha256=hashlib.sha256(b"[]").hexdigest(),
+        ),
+    )
+
+
+def test_snapshot_identity_without_research_binding_preserves_legacy_shape() -> None:
+    assert snapshot_identity().to_dict() == {
+        "dataset_version": "test-v1",
+        "dump_sha256": "a" * 64,
+        "recovery_sha256": "b" * 64,
+        "mapping_version": "candles-v1",
+        "config_version": "config-v1",
+        "code_commit": "0123456789abcdef",
+    }
 
 
 def test_unresolved_gap_creates_hard_segment_boundary() -> None:
@@ -130,6 +161,79 @@ def test_export_is_partitioned_atomic_and_deterministic(tmp_path: Path) -> None:
     assert (published / "_SUCCESS").is_file()
     assert read_snapshot_manifest(published / "manifest.json") == first
     verify_snapshot(published)
+
+
+def test_research_snapshot_identity_binds_universe_promotion_and_boundaries(
+    tmp_path: Path,
+) -> None:
+    identity = research_snapshot_identity()
+
+    manifest = export_partitioned_snapshot(
+        [candle_frame([0, 1])],
+        output_root=tmp_path,
+        identity=identity,
+        boundaries=(),
+    )
+
+    assert manifest.identity == identity
+    assert (
+        read_snapshot_manifest(tmp_path / "dataset_version=research-v1" / "manifest.json").identity
+        == identity
+    )
+    binding = identity.to_dict()["research_binding"]
+    assert binding["selected_universe_sha256"] == "c" * 64
+    assert binding["promotion_receipt_content_sha256"] == "d" * 64
+
+
+def test_research_snapshot_identity_rejects_partial_or_mismatched_boundary_binding(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="research identity hashes"):
+        SnapshotResearchBinding(
+            selected_universe_sha256="not-a-hash",
+            promotion_receipt_content_sha256="d" * 64,
+            promotion_receipt_artifact_sha256="e" * 64,
+            promotion_canonical_logical_sha256="f" * 64,
+            gap_boundaries_sha256=hashlib.sha256(b"[]").hexdigest(),
+        )
+
+    boundary = SegmentBoundary(
+        symbol="BTCUSDT",
+        timeframe="1m",
+        start=datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+        end=datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+        reason="canonical_missing_candles:1",
+    )
+    with pytest.raises(ValueError, match="boundary identity"):
+        export_partitioned_snapshot(
+            [candle_frame([0, 1, 3])],
+            output_root=tmp_path,
+            identity=research_snapshot_identity("mismatch-v1"),
+            boundaries=(boundary,),
+        )
+
+
+def test_research_snapshot_rejects_boundary_mismatch_before_iteration(tmp_path: Path) -> None:
+    class ExplodingBatches:
+        def __iter__(self):
+            raise AssertionError("snapshot batches were touched")
+
+    boundary = SegmentBoundary(
+        symbol="BTCUSDT",
+        timeframe="1m",
+        start=datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+        end=datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+        reason="canonical_missing_candles:1",
+    )
+
+    with pytest.raises(ValueError, match="boundary identity"):
+        export_partitioned_snapshot(
+            ExplodingBatches(),
+            output_root=tmp_path,
+            identity=research_snapshot_identity("early-reject-v1"),
+            boundaries=(boundary,),
+        )
+    assert not (tmp_path / ".dataset_version=early-reject-v1.partial").exists()
 
 
 def test_export_resumes_an_interrupted_partial_snapshot(tmp_path: Path) -> None:

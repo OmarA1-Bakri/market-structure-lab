@@ -580,6 +580,7 @@ def _fixture(
         event_publication_sha256=event_publication.publication_sha256,
         normalizer_id="NZ-000501",
         normalizer_sha256=normalizer.artifact_sha256,
+        preregistration_sha256="f" * 64,
         provenance=provenance,
         started_at=datetime(2026, 7, 17, 3, 0, tzinfo=UTC),
         completed_at=datetime(2026, 7, 17, 3, 1, tzinfo=UTC),
@@ -730,6 +731,7 @@ def test_discovery_run_is_atomic_reproducible_and_idempotent(tmp_path) -> None:
     assert published_missingness["discovery"]["excluded_row_count"] == 0
     assert published_missingness["development"]["excluded_row_count"] == 0
     assert published_config["work_budget"]["sha256"] == arguments["config"].work_budget.sha256
+    assert published_config["preregistration_sha256"] == "f" * 64
     assert published_metrics["work_budget"]["budget_sha256"] == (
         arguments["config"].work_budget.sha256
     )
@@ -1312,6 +1314,20 @@ def test_dirty_runtime_worktree_is_rejected_before_matrix_construction(
     monkeypatch.setattr(discovery_runs, "build_feature_matrix", matrix_was_touched)
     with pytest.raises(ValueError, match="dirty"):
         _run(arguments)
+
+
+def test_user_owned_editor_and_quality_metadata_do_not_falsify_runtime_code_identity(
+    tmp_path,
+) -> None:
+    arguments = _fixture(tmp_path)
+    for directory in (".codacy", ".vscode"):
+        path = arguments["repository_root"] / directory
+        path.mkdir()
+        (path / "settings.json").write_text("{}\n", encoding="utf-8")
+
+    manifest = _run(arguments)
+
+    assert manifest.status == "completed"
 
 
 def test_ignored_runtime_module_absent_from_head_is_rejected_before_matrix_construction(
