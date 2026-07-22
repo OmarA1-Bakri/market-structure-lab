@@ -545,6 +545,47 @@ def test_partition_row_buffer_is_explicitly_capped_before_source_iteration(
     assert not (tmp_path / "output").exists()
 
 
+def test_old_artifact_byte_floor_rejects_before_large_source_iteration_or_output(
+    tmp_path: Path,
+) -> None:
+    frame = minute_frame(256 * 60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+
+    class ExplodingBatches:
+        def __init__(self) -> None:
+            self.iterations = 0
+
+        def __iter__(self) -> Iterator[pl.DataFrame]:
+            self.iterations += 1
+            raise AssertionError("underdeclared publication must not iterate caller batches")
+            yield
+
+    batches = ExplodingBatches()
+    declared = publication_demand(
+        frame,
+        256,
+        artifacts=1,
+        artifact_bytes=81_920,
+    )
+    with pytest.raises(ValueError, match="artifact_bytes.*upper envelope"):
+        publish_aggregate_bars(
+            batches,
+            output_root=tmp_path / "output",
+            parent_snapshot_directory=parent_directory,
+            parent_snapshot_manifest=source_manifest,
+            symbol="SOLUSDT",
+            segment_id=0,
+            target_timeframe="1h",
+            expected_source_sha256=source_rows_sha256(rows(frame)),
+            config_version="aggregate-config-v1",
+            demand=declared,
+            budget=ValidationWorkBudget(),
+            max_rows_per_partition=256,
+        )
+    assert batches.iterations == 0
+    assert not (tmp_path / "output").exists()
+
+
 def test_manifest_schema_timestamp_numeric_source_order_parent_and_byte_mutations_reject(
     tmp_path: Path,
 ) -> None:

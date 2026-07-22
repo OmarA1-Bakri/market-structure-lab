@@ -55,8 +55,34 @@ _MAX_PUBLICATION_ENTRIES = 2_000_010
 _MAX_PARENT_PARTITION_BYTES = 64 * 1024 * 1024
 _MAX_PARENT_PARTITION_ROWS = 2_000
 MAX_AGGREGATE_ROWS_PER_PARTITION: Final = 256
-_MIN_DECLARED_BYTES_PER_AGGREGATE_ROW = 256
-_MIN_DECLARED_BYTES_PER_PARTITION = 16 * 1024
+_MAX_IDENTITY_COMPONENT_BYTES = 128
+# The publication schema has eight 64-bit scalar fields, nine bounded text fields,
+# one list offset, and bounded per-row definition/validity metadata. Text offsets
+# use eight bytes here even though Arrow commonly uses four, keeping admission
+# independent of the writer's internal offset width.
+_PARQUET_SCALAR_BYTES = 8
+_PARQUET_TEXT_OFFSET_BYTES = 8
+_MAX_TIMESTAMP_TEXT_BYTES = 32
+_MAX_TIMEFRAME_TEXT_BYTES = 8
+_MAX_CONTINUITY_TEXT_BYTES = 64
+_SHA256_TEXT_BYTES = 64
+_PARQUET_ROW_METADATA_UPPER_BYTES = 512
+_FIXED_AGGREGATE_PARQUET_ROW_UPPER_BYTES = (
+    8 * _PARQUET_SCALAR_BYTES
+    + 2 * _MAX_TIMESTAMP_TEXT_BYTES
+    + _MAX_IDENTITY_COMPONENT_BYTES
+    + 2 * _MAX_TIMEFRAME_TEXT_BYTES
+    + _MAX_CONTINUITY_TEXT_BYTES
+    + 3 * _SHA256_TEXT_BYTES
+    + 9 * _PARQUET_TEXT_OFFSET_BYTES
+    + _PARQUET_TEXT_OFFSET_BYTES
+    + _PARQUET_ROW_METADATA_UPPER_BYTES
+)
+_SOURCE_ID_PARQUET_UPPER_BYTES = _SHA256_TEXT_BYTES + _PARQUET_TEXT_OFFSET_BYTES
+# One bounded row group is written per partition. This covers Parquet magic,
+# page/column headers, statistics, encodings, and footer metadata independently
+# of compression effectiveness.
+_PARQUET_PARTITION_OVERHEAD_UPPER_BYTES = 256 * 1024
 _ARTIFACT_SCOPE = "aggregate-parquet-partitions-v1"
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -82,6 +108,7 @@ class AggregateSourceSelectionReceipt:
         _require_sha256(self.source_sha256, "source sha256")
         if _SAFE_COMPONENT.fullmatch(self.symbol) is None:
             raise ValueError("parent source selection symbol is invalid")
+        _require_bounded_component(self.symbol, "parent source selection symbol")
         if self.source_timeframe != "1m":
             raise ValueError("parent source selection timeframe must be 1m")
         if isinstance(self.segment_id, bool) or self.segment_id < 0:
@@ -171,6 +198,7 @@ class AggregatePublicationManifest:
         _require_sha256(self.source_sha256, "source sha256")
         if _SAFE_COMPONENT.fullmatch(self.symbol) is None:
             raise ValueError("aggregate publication symbol must be a safe component")
+        _require_bounded_component(self.symbol, "aggregate publication symbol")
         if self.source_timeframe != "1m":
             raise ValueError("aggregate publication source timeframe must be 1m")
         target_minutes = target_timeframe_minutes(self.target_timeframe)
@@ -180,6 +208,7 @@ class AggregatePublicationManifest:
             raise ValueError("aggregate publication continuity identity is unsupported")
         if _SAFE_COMPONENT.fullmatch(self.config_version) is None:
             raise ValueError("aggregate config_version must be a safe identity component")
+        _require_bounded_component(self.config_version, "aggregate config_version")
         if self.aggregate_bar_count < 1:
             raise ValueError("aggregate publication must contain at least one complete bar")
         if self.source_bytes < 1:
@@ -227,12 +256,13 @@ class AggregatePublicationManifest:
             raise ValueError("actual artifacts do not match aggregate partitions")
         if self.actual_artifact_count > self.declared_artifact_count:
             raise ValueError("actual artifacts exceed the declared artifact count")
-        minimum_artifact_bytes = _minimum_artifact_byte_envelope(
+        artifact_byte_upper = _conservative_artifact_byte_upper(
             self.aggregate_bar_count,
             expected_artifact_count,
+            target_minutes,
         )
-        if self.declared_artifact_bytes < minimum_artifact_bytes:
-            raise ValueError("declared artifact_bytes are below the conservative envelope")
+        if self.declared_artifact_bytes < artifact_byte_upper:
+            raise ValueError("declared artifact_bytes are below the conservative upper envelope")
         if self.declared_artifact_bytes > self.artifact_byte_limit:
             raise ValueError("declared artifact_bytes exceed the frozen artifact byte limit")
         if self.actual_artifact_bytes < 1:
@@ -333,11 +363,13 @@ def publish_aggregate_bars(
 
     if _SAFE_COMPONENT.fullmatch(symbol) is None:
         raise ValueError("symbol must be a safe path component")
+    _require_bounded_component(symbol, "symbol")
     if isinstance(segment_id, bool) or not isinstance(segment_id, int) or segment_id < 0:
         raise ValueError("segment_id must be a non-negative integer")
     target_timeframe_minutes(target_timeframe)
     if _SAFE_COMPONENT.fullmatch(config_version) is None:
         raise ValueError("config_version must be a safe identity component")
+    _require_bounded_component(config_version, "config_version")
     if not isinstance(demand, ValidationWorkDemand):
         raise TypeError("demand must be a ValidationWorkDemand")
     if not isinstance(budget, ValidationWorkBudget):
@@ -385,13 +417,14 @@ def publish_aggregate_bars(
     )
     expected_artifacts = math.ceil(expected_aggregate_bars / max_rows_per_partition)
     _require_exact_demand("artifacts", demand.artifacts, expected_artifacts)
-    minimum_artifact_bytes = _minimum_artifact_byte_envelope(
+    artifact_byte_upper = _conservative_artifact_byte_upper(
         expected_aggregate_bars,
         expected_artifacts,
+        target_timeframe_minutes(target_timeframe),
     )
-    if demand.artifact_bytes < minimum_artifact_bytes:
+    if demand.artifact_bytes < artifact_byte_upper:
         raise ValueError(
-            "artifact_bytes declaration is below the conservative aggregate partition envelope"
+            "artifact_bytes declaration is below the conservative aggregate partition upper envelope"
         )
 
     root = Path(output_root)
@@ -793,16 +826,28 @@ def _partition_artifact_metrics(
     return len(actual), sum(_regular_file_size(directory / path) for path in actual)
 
 
-def _minimum_artifact_byte_envelope(aggregate_bars: int, artifacts: int) -> int:
-    return (
-        aggregate_bars * _MIN_DECLARED_BYTES_PER_AGGREGATE_ROW
-        + artifacts * _MIN_DECLARED_BYTES_PER_PARTITION
+def _conservative_artifact_byte_upper(
+    aggregate_bars: int,
+    artifacts: int,
+    source_rows_per_aggregate: int,
+) -> int:
+    """Bound partition bytes from validated field widths and fixed Parquet structure."""
+
+    maximum_row_bytes = (
+        _FIXED_AGGREGATE_PARQUET_ROW_UPPER_BYTES
+        + source_rows_per_aggregate * _SOURCE_ID_PARQUET_UPPER_BYTES
     )
+    return aggregate_bars * maximum_row_bytes + artifacts * _PARQUET_PARTITION_OVERHEAD_UPPER_BYTES
 
 
 def _require_exact_demand(stage: str, declared: int, required: int) -> None:
     if declared != required:
         raise ValueError(f"{stage} declaration must equal the verified requirement {required}")
+
+
+def _require_bounded_component(value: str, label: str) -> None:
+    if len(value.encode("utf-8")) > _MAX_IDENTITY_COMPONENT_BYTES:
+        raise ValueError(f"{label} exceeds the bounded identity width")
 
 
 def _regular_file_size(path: Path) -> int:
