@@ -2,7 +2,9 @@
 
 from market_structure_lab.data.aggregate_bars import (
     CanonicalAggregateBar,
+    VerifiedAggregateBarSpool,
     iter_complete_aggregate_bars,
+    spool_complete_aggregate_bars,
 )
 from market_structure_lab.data.aggregate_publication import (
     AggregatePublicationManifest,
@@ -60,6 +62,7 @@ __all__ = [
     "CandleQuality",
     "CanonicalSeriesState",
     "CanonicalAggregateBar",
+    "VerifiedAggregateBarSpool",
     "ColumnInspection",
     "DatabaseInspectionError",
     "FreshnessManifest",
@@ -81,6 +84,7 @@ __all__ = [
     "inspect_database",
     "iter_candle_batches",
     "iter_complete_aggregate_bars",
+    "spool_complete_aggregate_bars",
     "load_candles",
     "load_canonical_gap_boundaries",
     "publish_freshness_snapshot",

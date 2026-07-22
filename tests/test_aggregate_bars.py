@@ -3,15 +3,21 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+import hashlib
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import polars as pl
 import pytest
 
 from market_structure_lab.core.identity import canonical_json, hash_canonical_json
+import market_structure_lab.data.aggregate_bars as aggregate_bars_module
 from market_structure_lab.data.aggregate_bars import (
     CanonicalAggregateBar,
     canonical_source_row_identity,
     iter_complete_aggregate_bars,
+    spool_complete_aggregate_bars,
     source_rows_sha256,
 )
 from market_structure_lab.research.models import (
@@ -98,9 +104,10 @@ def aggregate(
     parent_snapshot_sha256: str = PARENT_SHA256,
 ) -> list[CanonicalAggregateBar]:
     combined = pl.concat(batches)
-    return list(
-        iter_complete_aggregate_bars(
+    with TemporaryDirectory(prefix="market-structure-lab-test-aggregate-") as temporary:
+        spool = spool_complete_aggregate_bars(
             batches,
+            spool_path=Path(temporary) / "bars.jsonl",
             target_timeframe=target_timeframe,
             expected_source_sha256=(expected_source_sha256 or source_rows_sha256(rows(combined))),
             parent_snapshot_sha256=parent_snapshot_sha256,
@@ -111,7 +118,7 @@ def aggregate(
             ),
             budget=budget,
         )
-    )
+        return list(iter_complete_aggregate_bars(spool))
 
 
 def minutes(timeframe: str) -> int:
@@ -219,6 +226,52 @@ def test_source_digest_tampering_is_rejected() -> None:
         )
 
 
+def test_wrong_terminal_digest_never_exposes_provisional_bars(tmp_path) -> None:
+    frame = minute_frame(30)
+    spool_writer = getattr(aggregate_bars_module, "spool_complete_aggregate_bars", None)
+
+    assert callable(spool_writer)
+    with pytest.raises(ValueError, match="source digest"):
+        spool_writer(
+            [frame],
+            spool_path=tmp_path / "aggregate-bars.jsonl",
+            target_timeframe="15m",
+            expected_source_sha256="f" * 64,
+            parent_snapshot_sha256=PARENT_SHA256,
+            demand=demand(frame, 2),
+            budget=ValidationWorkBudget(),
+        )
+    assert not (tmp_path / "aggregate-bars.jsonl").exists()
+
+
+def test_public_iterator_validates_every_spooled_record_before_first_yield(tmp_path) -> None:
+    frame = minute_frame(30)
+    path = tmp_path / "aggregate-bars.jsonl"
+    spool = spool_complete_aggregate_bars(
+        [frame],
+        spool_path=path,
+        target_timeframe="15m",
+        expected_source_sha256=source_rows_sha256(rows(frame)),
+        parent_snapshot_sha256=PARENT_SHA256,
+        demand=demand(frame, 2),
+        budget=ValidationWorkBudget(),
+    )
+    lines = path.read_bytes().splitlines(keepends=True)
+    second = json.loads(lines[1])
+    second["row_sha256"] = "f" * 64
+    lines[1] = (json.dumps(second, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    changed = b"".join(lines)
+    path.write_bytes(changed)
+    forged = replace(
+        spool,
+        artifact_sha256=hashlib.sha256(changed).hexdigest(),
+        artifact_bytes=len(changed),
+    )
+
+    with pytest.raises(ValueError, match="row identity"):
+        next(iter_complete_aggregate_bars(forged))
+
+
 class ExplodingBatches:
     def __init__(self) -> None:
         self.iterations = 0
@@ -238,22 +291,25 @@ class ExplodingBatches:
     ),
 )
 def test_over_budget_declaration_rejects_before_source_iteration(
-    demand_override: dict[str, int], budget_override: dict[str, int], stage: str
+    tmp_path,
+    demand_override: dict[str, int],
+    budget_override: dict[str, int],
+    stage: str,
 ) -> None:
     batches = ExplodingBatches()
     declared = ValidationWorkDemand(**demand_override)
     budget = replace(ValidationWorkBudget(), **budget_override)
 
-    iterator = iter_complete_aggregate_bars(
-        batches,
-        target_timeframe="15m",
-        expected_source_sha256="a" * 64,
-        parent_snapshot_sha256=PARENT_SHA256,
-        demand=declared,
-        budget=budget,
-    )
     with pytest.raises(ValidationWorkBudgetViolation, match=stage):
-        next(iterator)
+        spool_complete_aggregate_bars(
+            batches,
+            spool_path=tmp_path / "bars.jsonl",
+            target_timeframe="15m",
+            expected_source_sha256="a" * 64,
+            parent_snapshot_sha256=PARENT_SHA256,
+            demand=declared,
+            budget=budget,
+        )
     assert batches.iterations == 0
 
 

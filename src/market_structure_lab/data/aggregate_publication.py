@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
+from io import BytesIO
 import json
 import math
 import os
@@ -12,6 +14,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+from tempfile import TemporaryDirectory
 from typing import Any, Final, cast
 
 import polars as pl
@@ -32,6 +35,7 @@ from market_structure_lab.data.aggregate_bars import (
     canonical_source_row_identity,
     canonical_source_row_payload,
     iter_complete_aggregate_bars,
+    spool_complete_aggregate_bars,
     target_timeframe_minutes,
 )
 from market_structure_lab.data.canonical import CANONICAL_SCHEMA, validate_candle_frame
@@ -427,21 +431,40 @@ def publish_aggregate_bars(
             "artifact_bytes declaration is below the conservative aggregate partition upper envelope"
         )
 
-    root = Path(output_root)
-    created_root = False
-    if path_exists_no_follow(root):
-        require_regular_directory(root)
-    else:
-        root.mkdir(parents=True)
-        created_root = True
-        require_regular_directory(root)
-    final = root / f"symbol={symbol}" / f"timeframe={target_timeframe}" / f"segment={segment_id}"
-    if path_exists_no_follow(final):
-        raise FileExistsError("aggregate publication already exists")
-    staging = root / f".{symbol}-{target_timeframe}-{segment_id}.partial"
-    if path_exists_no_follow(staging):
-        raise FileExistsError("incomplete aggregate publication already exists")
-    staging.mkdir()
+    spool_directory = TemporaryDirectory(prefix="market-structure-lab-aggregate-")
+    try:
+        spool = spool_complete_aggregate_bars(
+            batches,
+            spool_path=Path(spool_directory.name) / "bars.jsonl",
+            target_timeframe=target_timeframe,
+            expected_source_sha256=expected_source_sha256,
+            parent_snapshot_sha256=parent_snapshot_manifest.snapshot_sha256,
+            demand=demand,
+            budget=budget,
+        )
+        root = Path(output_root)
+        created_root = False
+        if path_exists_no_follow(root):
+            require_regular_directory(root)
+        else:
+            root.mkdir(parents=True)
+            created_root = True
+            require_regular_directory(root)
+        final = (
+            root
+            / f"symbol={symbol}"
+            / f"timeframe={target_timeframe}"
+            / f"segment={segment_id}"
+        )
+        if path_exists_no_follow(final):
+            raise FileExistsError("aggregate publication already exists")
+        staging = root / f".{symbol}-{target_timeframe}-{segment_id}.partial"
+        if path_exists_no_follow(staging):
+            raise FileExistsError("incomplete aggregate publication already exists")
+        staging.mkdir()
+    except Exception:
+        spool_directory.cleanup()
+        raise
 
     records: list[PartitionRecord] = []
     buffered: list[CanonicalAggregateBar] = []
@@ -477,14 +500,7 @@ def publish_aggregate_bars(
         buffered = []
 
     try:
-        for bar in iter_complete_aggregate_bars(
-            batches,
-            target_timeframe=target_timeframe,
-            expected_source_sha256=expected_source_sha256,
-            parent_snapshot_sha256=parent_snapshot_manifest.snapshot_sha256,
-            demand=demand,
-            budget=budget,
-        ):
+        for bar in iter_complete_aggregate_bars(spool):
             if bar.symbol != symbol or bar.segment_id != segment_id:
                 raise ValueError("aggregate row does not match publication symbol or segment")
             buffered.append(bar)
@@ -563,11 +579,18 @@ def publish_aggregate_bars(
             f"{manifest.publication_sha256}\n".encode("utf-8"),
         )
         verify_aggregate_publication(staging, manifest)
-        final.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            staging.replace(final)
-        except FileExistsError:
-            raise FileExistsError("aggregate publication was published concurrently") from None
+        _publish_staged_no_clobber(
+            staging,
+            root,
+            symbol=symbol,
+            target_timeframe=target_timeframe,
+            segment_id=segment_id,
+            manifest=manifest,
+        )
+        verify_aggregate_publication(final, manifest)
+        require_regular_directory(staging)
+        shutil.rmtree(staging)
+        spool_directory.cleanup()
         return manifest
     except Exception:
         if path_exists_no_follow(staging):
@@ -578,6 +601,7 @@ def publish_aggregate_bars(
                 root.rmdir()
             except OSError:
                 pass
+        spool_directory.cleanup()
         raise
 
 
@@ -587,7 +611,8 @@ def read_aggregate_publication_manifest(
     """Read and reconstruct one bounded aggregate publication manifest."""
 
     try:
-        payload = json.loads(read_bounded_regular(Path(path), _MAX_MANIFEST_BYTES))
+        recorded_bytes = read_bounded_regular(Path(path), _MAX_MANIFEST_BYTES)
+        payload = json.loads(recorded_bytes)
         expected_keys = {
             "schema_version",
             "parent_snapshot_identity",
@@ -633,7 +658,7 @@ def read_aggregate_publication_manifest(
             not isinstance(item, dict) or set(item) != {"path", "sha256"} for item in bindings_raw
         ):
             raise ValueError("aggregate parent partition bindings are invalid")
-        return AggregatePublicationManifest(
+        manifest = AggregatePublicationManifest(
             schema_version=int(payload["schema_version"]),
             parent_snapshot_identity=SnapshotIdentity(**payload["parent_snapshot_identity"]),
             parent_snapshot_sha256=str(payload["parent_snapshot_sha256"]),
@@ -668,6 +693,9 @@ def read_aggregate_publication_manifest(
             partitions=tuple(PartitionRecord(**item) for item in partitions_raw),
             publication_sha256=str(payload["publication_sha256"]),
         )
+        if recorded_bytes != manifest.to_json().encode("utf-8"):
+            raise ValueError("aggregate publication manifest is not exact canonical JSON")
+        return manifest
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid aggregate publication manifest: {path}") from error
 
@@ -744,9 +772,10 @@ def _build_parent_source_selection(
         if partition.row_count > _MAX_PARENT_PARTITION_ROWS:
             raise ValueError("parent source partition row count exceeds the bounded daily limit")
         partition_path = parent_directory / partition.path
-        if _regular_file_size(partition_path) > _MAX_PARENT_PARTITION_BYTES:
-            raise ValueError("parent source partition exceeds the bounded byte limit")
-        frame = pl.read_parquet(partition_path)
+        partition_bytes = read_bounded_regular(partition_path, _MAX_PARENT_PARTITION_BYTES)
+        if hashlib.sha256(partition_bytes).hexdigest() != partition.sha256:
+            raise ValueError("parent source partition bytes differ from the verified manifest")
+        frame = pl.read_parquet(BytesIO(partition_bytes))
         if frame.schema != expected_schema:
             raise ValueError("parent source partition schema is invalid")
         if frame.height != partition.row_count:
@@ -848,6 +877,111 @@ def _require_exact_demand(stage: str, declared: int, required: int) -> None:
 def _require_bounded_component(value: str, label: str) -> None:
     if len(value.encode("utf-8")) > _MAX_IDENTITY_COMPONENT_BYTES:
         raise ValueError(f"{label} exceeds the bounded identity width")
+
+
+def _publish_staged_no_clobber(
+    staging: Path,
+    root: Path,
+    *,
+    symbol: str,
+    target_timeframe: str,
+    segment_id: int,
+    manifest: AggregatePublicationManifest,
+) -> None:
+    """Claim and fill a publication with directory-relative no-follow operations."""
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not no_follow or not directory:
+        raise RuntimeError("safe aggregate publication requires no-follow directory operations")
+    directory_flags = os.O_RDONLY | no_follow | directory
+    root_fd = os.open(root, directory_flags)
+    try:
+        symbol_fd = _create_or_open_directory_at(root_fd, f"symbol={symbol}", directory_flags)
+        try:
+            timeframe_fd = _create_or_open_directory_at(
+                symbol_fd,
+                f"timeframe={target_timeframe}",
+                directory_flags,
+            )
+            try:
+                final_name = f"segment={segment_id}"
+                try:
+                    os.mkdir(final_name, dir_fd=timeframe_fd)
+                except FileExistsError as error:
+                    raise FileExistsError("aggregate publication already exists") from error
+                final_fd = os.open(final_name, directory_flags, dir_fd=timeframe_fd)
+                try:
+                    for partition in manifest.partitions:
+                        relative = Path(partition.path)
+                        if len(relative.parts) != 2:
+                            raise ValueError("aggregate partition path is not canonical")
+                        chunk_fd = _create_directory_at(final_fd, relative.parts[0], directory_flags)
+                        try:
+                            content = read_bounded_regular(
+                                staging / relative,
+                                manifest.declared_artifact_bytes,
+                            )
+                            if hashlib.sha256(content).hexdigest() != partition.sha256:
+                                raise ValueError(
+                                    f"staged aggregate partition changed: {partition.path}"
+                                )
+                            _write_exclusive_at(chunk_fd, relative.parts[1], content)
+                        finally:
+                            os.close(chunk_fd)
+                    manifest_bytes = read_bounded_regular(
+                        staging / AGGREGATE_MANIFEST_NAME,
+                        _MAX_MANIFEST_BYTES,
+                    )
+                    if manifest_bytes != manifest.to_json().encode("utf-8"):
+                        raise ValueError("staged aggregate manifest changed")
+                    _write_exclusive_at(final_fd, AGGREGATE_MANIFEST_NAME, manifest_bytes)
+                    success_bytes = read_bounded_regular(
+                        staging / AGGREGATE_SUCCESS_NAME,
+                        128,
+                    )
+                    expected_success = f"{manifest.publication_sha256}\n".encode("utf-8")
+                    if success_bytes != expected_success:
+                        raise ValueError("staged aggregate completion marker changed")
+                    _write_exclusive_at(final_fd, AGGREGATE_SUCCESS_NAME, success_bytes)
+                    os.fsync(final_fd)
+                finally:
+                    os.close(final_fd)
+                os.fsync(timeframe_fd)
+            finally:
+                os.close(timeframe_fd)
+        finally:
+            os.close(symbol_fd)
+    finally:
+        os.close(root_fd)
+
+
+def _create_or_open_directory_at(parent_fd: int, name: str, flags: int) -> int:
+    try:
+        os.mkdir(name, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    return os.open(name, flags, dir_fd=parent_fd)
+
+
+def _create_directory_at(parent_fd: int, name: str, flags: int) -> int:
+    os.mkdir(name, dir_fd=parent_fd)
+    return os.open(name, flags, dir_fd=parent_fd)
+
+
+def _write_exclusive_at(parent_fd: int, name: str, content: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    file_fd = os.open(name, flags, 0o644, dir_fd=parent_fd)
+    try:
+        view = memoryview(content)
+        while view:
+            written = os.write(file_fd, view)
+            if written < 1:
+                raise OSError("aggregate artifact write made no progress")
+            view = view[written:]
+        os.fsync(file_fd)
+    finally:
+        os.close(file_fd)
 
 
 def _regular_file_size(path: Path) -> int:

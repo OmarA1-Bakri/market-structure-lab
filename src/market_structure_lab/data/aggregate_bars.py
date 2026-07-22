@@ -5,9 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
 import json
 import math
+import os
+from pathlib import Path
 import re
+import stat
 from typing import Any, Final, cast
 
 import polars as pl
@@ -30,6 +34,8 @@ SUPPORTED_TARGET_TIMEFRAMES: Final = ("15m", "1h", "4h")
 CONTINUITY_ID: Final = "complete-contiguous-1m-v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_SCHEMA = pl.Schema(cast(Any, {**CANONICAL_SCHEMA, "segment_id": pl.UInt64}))
+_MAX_SPOOL_LINE_BYTES: Final = 128 * 1024
+_SPOOL_CHUNK_BYTES: Final = 1024 * 1024
 
 
 class OrderedSourceIdentity:
@@ -270,6 +276,38 @@ class CanonicalAggregateBar:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedAggregateBarSpool:
+    """Receipt for a fully validated, bounded on-disk aggregate-bar stream."""
+
+    path: Path
+    artifact_sha256: str
+    artifact_bytes: int
+    bar_count: int
+    target_timeframe: str
+    source_sha256: str
+    parent_snapshot_sha256: str
+    max_line_bytes: int = _MAX_SPOOL_LINE_BYTES
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, Path):
+            raise TypeError("aggregate spool path must be a Path")
+        _require_sha256(self.artifact_sha256, "aggregate spool sha256")
+        _require_sha256(self.source_sha256, "aggregate spool source sha256")
+        _require_sha256(self.parent_snapshot_sha256, "aggregate spool parent snapshot sha256")
+        target_timeframe_minutes(self.target_timeframe)
+        if isinstance(self.artifact_bytes, bool) or self.artifact_bytes < 0:
+            raise ValueError("aggregate spool artifact_bytes must be non-negative")
+        if isinstance(self.bar_count, bool) or self.bar_count < 0:
+            raise ValueError("aggregate spool bar_count must be non-negative")
+        if (
+            isinstance(self.max_line_bytes, bool)
+            or self.max_line_bytes < 1
+            or self.max_line_bytes > _MAX_SPOOL_LINE_BYTES
+        ):
+            raise ValueError("aggregate spool line bound is invalid")
+
+
 def target_timeframe_minutes(target_timeframe: str) -> int:
     if target_timeframe not in SUPPORTED_TARGET_TIMEFRAMES:
         raise ValueError(
@@ -283,7 +321,120 @@ def target_timeframe_minutes(target_timeframe: str) -> int:
     return quotient
 
 
+def spool_complete_aggregate_bars(
+    batches: Iterable[pl.DataFrame],
+    *,
+    spool_path: str | Path,
+    target_timeframe: str,
+    expected_source_sha256: str,
+    parent_snapshot_sha256: str,
+    demand: ValidationWorkDemand,
+    budget: ValidationWorkBudget,
+) -> VerifiedAggregateBarSpool:
+    """Write provisional bars to disk and return only after terminal verification."""
+
+    path = Path(spool_path)
+    parent = path.parent
+    metadata = parent.lstat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise RuntimeError("aggregate spool parent must be a regular directory")
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not no_follow or not directory:
+        raise RuntimeError("safe aggregate spooling requires no-follow filesystem operations")
+    parent_fd = os.open(parent, os.O_RDONLY | no_follow | directory)
+    file_fd: int | None = None
+    created = False
+    try:
+        file_fd = os.open(
+            path.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        created = True
+        digest = hashlib.sha256()
+        artifact_bytes = 0
+        bar_count = 0
+        maximum_spool_bytes = min(
+            budget.max_source_bytes,
+            demand.source_bytes,
+            demand.aggregate_bars * _MAX_SPOOL_LINE_BYTES,
+        )
+        for bar in _iter_provisional_aggregate_bars(
+            batches,
+            target_timeframe=target_timeframe,
+            expected_source_sha256=expected_source_sha256,
+            parent_snapshot_sha256=parent_snapshot_sha256,
+            demand=demand,
+            budget=budget,
+        ):
+            line = bar.to_json_line()
+            if len(line) > _MAX_SPOOL_LINE_BYTES + 1:
+                raise RuntimeError("aggregate spool record exceeds its bounded width")
+            artifact_bytes += len(line)
+            if artifact_bytes > maximum_spool_bytes:
+                raise ValidationWorkBudgetViolation(
+                    "aggregate_spool_bytes",
+                    artifact_bytes,
+                    maximum_spool_bytes,
+                )
+            _write_all(file_fd, line)
+            digest.update(line)
+            bar_count += 1
+        os.fsync(file_fd)
+        os.close(file_fd)
+        file_fd = None
+        return VerifiedAggregateBarSpool(
+            path=path,
+            artifact_sha256=digest.hexdigest(),
+            artifact_bytes=artifact_bytes,
+            bar_count=bar_count,
+            target_timeframe=target_timeframe,
+            source_sha256=expected_source_sha256,
+            parent_snapshot_sha256=parent_snapshot_sha256,
+        )
+    except Exception:
+        if file_fd is not None:
+            os.close(file_fd)
+        if created:
+            os.unlink(path.name, dir_fd=parent_fd)
+        raise
+    finally:
+        os.close(parent_fd)
+
+
 def iter_complete_aggregate_bars(
+    spool: VerifiedAggregateBarSpool,
+) -> Iterator[CanonicalAggregateBar]:
+    """Yield bars only after the exact spool bytes and every record are verified."""
+
+    if not isinstance(spool, VerifiedAggregateBarSpool):
+        raise TypeError("spool must be a VerifiedAggregateBarSpool")
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow:
+        raise RuntimeError("safe aggregate spool reading requires no-follow filesystem operations")
+    descriptor = os.open(spool.path, os.O_RDONLY | no_follow)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != spool.artifact_bytes:
+            raise RuntimeError("aggregate spool is not the recorded regular file")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, _SPOOL_CHUNK_BYTES):
+            digest.update(chunk)
+        if digest.hexdigest() != spool.artifact_sha256:
+            raise ValueError("aggregate spool checksum mismatch")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        _validate_spool_records(descriptor, spool)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            for line in handle:
+                yield CanonicalAggregateBar.from_mapping(json.loads(line))
+    finally:
+        os.close(descriptor)
+
+
+def _iter_provisional_aggregate_bars(
     batches: Iterable[pl.DataFrame],
     *,
     target_timeframe: str,
@@ -292,7 +443,7 @@ def iter_complete_aggregate_bars(
     demand: ValidationWorkDemand,
     budget: ValidationWorkBudget,
 ) -> Iterator[CanonicalAggregateBar]:
-    """Stream complete target bars and reject any continuity or identity ambiguity."""
+    """Generate provisional bars whose stream identity is checked only at exhaustion."""
 
     target_minutes = target_timeframe_minutes(target_timeframe)
     _require_sha256(expected_source_sha256, "expected source sha256")
@@ -379,6 +530,49 @@ def iter_complete_aggregate_bars(
         raise ValueError("source digest mismatch")
 
 
+def _validate_spool_records(descriptor: int, spool: VerifiedAggregateBarSpool) -> None:
+    count = 0
+    source_identity = OrderedSourceIdentity()
+    series_key: tuple[str, str, int] | None = None
+    previous_close: datetime | None = None
+    with os.fdopen(descriptor, "rb", closefd=False) as handle:
+        while line := handle.readline(spool.max_line_bytes + 2):
+            if len(line) > spool.max_line_bytes + 1 or not line.endswith(b"\n"):
+                raise RuntimeError("aggregate spool record exceeds its bound or lacks a newline")
+            bar = CanonicalAggregateBar.from_mapping(json.loads(line))
+            if line != bar.to_json_line():
+                raise ValueError("aggregate spool record is not exact canonical JSON")
+            if (
+                bar.target_timeframe != spool.target_timeframe
+                or bar.parent_snapshot_sha256 != spool.parent_snapshot_sha256
+            ):
+                raise ValueError("aggregate spool record metadata differs from its receipt")
+            current_key = (bar.symbol, bar.source_timeframe, bar.segment_id)
+            if series_key is None:
+                series_key = current_key
+            elif current_key != series_key or bar.timestamp != previous_close:
+                raise ValueError("aggregate spool records are not one contiguous source series")
+            previous_close = bar.bar_close
+            for source_row_id in bar.source_row_ids:
+                source_identity.update(source_row_id)
+            count += 1
+            if count > spool.bar_count:
+                raise ValueError("aggregate spool contains more rows than its receipt")
+    if count != spool.bar_count:
+        raise ValueError("aggregate spool row count differs from its receipt")
+    if source_identity.hexdigest() != spool.source_sha256:
+        raise ValueError("aggregate spool source digest differs from its receipt")
+
+
+def _write_all(descriptor: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(descriptor, view)
+        if written < 1:
+            raise OSError("aggregate spool write made no progress")
+        view = view[written:]
+
+
 def _aggregate_rows(
     rows: list[dict[str, object]],
     source_row_ids: tuple[str, ...],
@@ -450,9 +644,11 @@ __all__ = [
     "CanonicalAggregateBar",
     "OrderedSourceIdentity",
     "SUPPORTED_TARGET_TIMEFRAMES",
+    "VerifiedAggregateBarSpool",
     "canonical_source_row_identity",
     "canonical_source_row_payload",
     "iter_complete_aggregate_bars",
+    "spool_complete_aggregate_bars",
     "source_rows_sha256",
     "target_timeframe_minutes",
 ]

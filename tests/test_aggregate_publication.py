@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
 from collections.abc import Iterator
 
 import polars as pl
 import pytest
+import market_structure_lab.data.aggregate_publication as aggregate_publication_module
 
 from market_structure_lab.core.identity import canonical_json
 from market_structure_lab.data.aggregate_bars import source_rows_sha256
@@ -320,6 +322,38 @@ def test_verifier_rejects_corrupt_missing_extra_or_changed_artifacts(
         verify_aggregate_publication(directory)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ("schema-string", "numeric-string", "whitespace", "crlf"),
+)
+def test_manifest_must_be_exact_canonical_json_bytes(tmp_path: Path, mutation: str) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    publish(
+        [frame],
+        output_root=tmp_path / "output",
+        parent_directory=parent_directory,
+        parent_manifest=source_manifest,
+    )
+    directory = published_directory(tmp_path / "output")
+    manifest_path = directory / AGGREGATE_MANIFEST_NAME
+    payload = json.loads(manifest_path.read_bytes())
+    if mutation == "schema-string":
+        payload["schema_version"] = "1"
+        changed = json.dumps(payload, indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+    elif mutation == "numeric-string":
+        payload["source_row_count"] = "60"
+        changed = json.dumps(payload, indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+    elif mutation == "whitespace":
+        changed = manifest_path.read_text(encoding="utf-8") + "\n"
+    else:
+        changed = manifest_path.read_text(encoding="utf-8").replace("\n", "\r\n")
+    manifest_path.write_bytes(changed.encode("utf-8"))
+
+    with pytest.raises(ValueError, match="canonical|manifest"):
+        verify_aggregate_publication(directory)
+
+
 def test_verifier_rejects_symlinked_artifact(tmp_path: Path) -> None:
     frame = minute_frame(60)
     parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
@@ -533,6 +567,156 @@ def test_symlinked_output_root_rejects_before_publication(tmp_path: Path) -> Non
             parent_manifest=source_manifest,
         )
     assert not any(real_output.iterdir())
+
+
+@pytest.mark.parametrize("race", ("swap", "symlink"))
+def test_parent_partition_is_parsed_from_the_same_verified_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    race: str,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    original_read = aggregate_publication_module.read_bounded_regular
+    raced = False
+
+    def read_then_race(path: Path, maximum: int) -> bytes:
+        nonlocal raced
+        content = original_read(path, maximum)
+        if path.name == "part.parquet" and not raced:
+            raced = True
+            external = tmp_path / "raced-parent.parquet"
+            if race == "swap":
+                changed = frame.drop("segment_id").with_columns(
+                    (pl.col("high") + 10.0).alias("high")
+                )
+                changed = changed.with_columns(pl.lit(0, dtype=pl.UInt64).alias("segment_id"))
+                changed.write_parquet(external)
+                external.replace(path)
+            else:
+                path.replace(external)
+                path.symlink_to(external)
+        return content
+
+    monkeypatch.setattr(aggregate_publication_module, "read_bounded_regular", read_then_race)
+    manifest = publish(
+        [frame],
+        output_root=tmp_path / "output",
+        parent_directory=parent_directory,
+        parent_manifest=source_manifest,
+    )
+
+    assert raced is True
+    verify_aggregate_publication(published_directory(tmp_path / "output"), manifest)
+
+
+def test_concurrently_claimed_empty_final_directory_is_never_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
+    final = published_directory(output_root)
+    original_verify = aggregate_publication_module.verify_aggregate_publication
+    injected = False
+
+    def verify_then_claim(directory: Path, manifest=None) -> None:
+        nonlocal injected
+        original_verify(directory, manifest)
+        if Path(directory).name.endswith(".partial") and not injected:
+            injected = True
+            final.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        aggregate_publication_module,
+        "verify_aggregate_publication",
+        verify_then_claim,
+    )
+    with pytest.raises(FileExistsError, match="claim|exists|publication"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+    assert injected is True
+    assert final.is_dir()
+    assert not any(final.iterdir())
+
+
+def test_symbol_ancestor_symlink_race_cannot_escape_output_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
+    external = tmp_path / "external"
+    external.mkdir()
+    original_verify = aggregate_publication_module.verify_aggregate_publication
+    injected = False
+
+    def verify_then_link(directory: Path, manifest=None) -> None:
+        nonlocal injected
+        original_verify(directory, manifest)
+        if Path(directory).name.endswith(".partial") and not injected:
+            injected = True
+            (output_root / "symbol=SOLUSDT").symlink_to(external, target_is_directory=True)
+
+    monkeypatch.setattr(
+        aggregate_publication_module,
+        "verify_aggregate_publication",
+        verify_then_link,
+    )
+    with pytest.raises((FileExistsError, RuntimeError, OSError)):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+    assert injected is True
+    assert not any(external.iterdir())
+
+
+def test_partial_final_claim_is_terminal_and_retry_never_overwrites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    output_root = tmp_path / "output"
+    final = published_directory(output_root)
+    original_write = aggregate_publication_module._write_exclusive_at
+    writes = 0
+
+    def write_then_fail(parent_fd: int, name: str, content: bytes) -> None:
+        nonlocal writes
+        original_write(parent_fd, name, content)
+        writes += 1
+        if writes == 1:
+            raise OSError("injected publication copy failure")
+
+    monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_at", write_then_fail)
+    with pytest.raises(OSError, match="injected"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+
+    assert final.is_dir()
+    assert not (final / "_SUCCESS").exists()
+    monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_at", original_write)
+    with pytest.raises(FileExistsError, match="publication"):
+        publish(
+            [frame],
+            output_root=output_root,
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
 
 
 def test_partition_row_buffer_is_explicitly_capped_before_source_iteration(
