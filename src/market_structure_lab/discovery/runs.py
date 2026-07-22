@@ -401,7 +401,7 @@ def run_discovery(
     trial_config = _trial_config(config, discovery, development, registry)
     try:
         _preflight_discovery_work(config, discovery, development)
-        _verify_runtime_code_identity(
+        verify_runtime_code_identity(
             code_commit=config.code_commit,
             lockfile_bytes=lockfile_bytes,
         )
@@ -982,7 +982,7 @@ def _verify_artifact_provenance(
     return RobustNormalizer.from_json(normalizer_artifact)
 
 
-def _verify_runtime_code_identity(
+def verify_runtime_code_identity(
     *,
     code_commit: str,
     lockfile_bytes: bytes | None,

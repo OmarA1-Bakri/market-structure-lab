@@ -300,6 +300,7 @@ def test_scoped_publish_admits_only_selected_healthy_series_and_binds_research_i
         promotion_receipt_artifact_sha256="3" * 64,
         promotion_canonical_logical_sha256="4" * 64,
         gap_boundaries_sha256=hashlib.sha256(b"[]").hexdigest(),
+        eligibility_audit_sha256="5" * 64,
     )
 
     manifest = publish_scoped_freshness_snapshot(

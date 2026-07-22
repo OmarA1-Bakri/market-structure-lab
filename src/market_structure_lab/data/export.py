@@ -48,6 +48,7 @@ class SnapshotResearchBinding:
     promotion_receipt_artifact_sha256: str
     promotion_canonical_logical_sha256: str
     gap_boundaries_sha256: str
+    eligibility_audit_sha256: str
 
     def __post_init__(self) -> None:
         for field in (
@@ -56,6 +57,7 @@ class SnapshotResearchBinding:
             "promotion_receipt_artifact_sha256",
             "promotion_canonical_logical_sha256",
             "gap_boundaries_sha256",
+            "eligibility_audit_sha256",
         ):
             value = getattr(self, field)
             if not isinstance(value, str) or not _SHA256.fullmatch(value):
@@ -70,6 +72,7 @@ class SnapshotResearchBinding:
             "promotion_receipt_artifact_sha256": self.promotion_receipt_artifact_sha256,
             "promotion_canonical_logical_sha256": self.promotion_canonical_logical_sha256,
             "gap_boundaries_sha256": self.gap_boundaries_sha256,
+            "eligibility_audit_sha256": self.eligibility_audit_sha256,
         }
 
 
@@ -152,6 +155,7 @@ class SnapshotIdentity:
                 "promotion_receipt_artifact_sha256",
                 "promotion_canonical_logical_sha256",
                 "gap_boundaries_sha256",
+                "eligibility_audit_sha256",
             }
             if set(payload) != expected or any(
                 not isinstance(value, str) for value in payload.values()
@@ -275,6 +279,10 @@ def export_partitioned_snapshot(
         if manifest.identity != identity:
             raise FileExistsError("dataset version already exists with a different identity")
         verify_snapshot(final, manifest)
+        if expected_row_count is not None and manifest.row_count != expected_row_count:
+            raise ValueError(
+                "existing snapshot row count does not match the exact selected-universe expectation"
+            )
         return manifest
 
     staging = root / f".dataset_version={identity.dataset_version}.partial"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,12 +15,15 @@ from market_structure_lab.data.export import SnapshotIdentity, export_partitione
 from market_structure_lab.data.segments import SegmentBoundary
 from market_structure_lab.discovery.program import (
     DiscoveryProgramBudget,
+    Phase3ExecutionContract,
     build_phase3_publications,
     build_preregistered_trial_grid,
+    canonical_policy_sha256,
     freeze_discovery_preregistration,
     freeze_selected_universe,
     publish_reliability_vector,
 )
+from market_structure_lab.discovery.runs import DiscoveryWorkBudget
 from market_structure_lab.discovery.splits import (
     PartitionRole,
     TimePartition,
@@ -83,6 +86,7 @@ def _freeze(path: Path, **changes: object):
         "survivorship_policy": "point_in_time_freshness_recovered_only_v1",
         "optional_field_policy": "ignore_unavailable_optional_trade_fields_v1",
         "zero_volume_policy": "retain_observed_zero_volume_v1",
+        "eligibility_audit_sha256": _sha("9"),
     }
     values.update(changes)
     return freeze_selected_universe(**values)
@@ -201,6 +205,33 @@ def _program_budget(maximum_trials: int = 4) -> DiscoveryProgramBudget:
     )
 
 
+def _phase3_contract() -> Phase3ExecutionContract:
+    return Phase3ExecutionContract(
+        config_version="task14-auction-v1",
+        bin_step=0.1,
+        rolling_bars=20,
+        event_width=1,
+        maximum_rows=100,
+    )
+
+
+def _run_budget() -> DiscoveryWorkBudget:
+    return DiscoveryWorkBudget(
+        budget_id="task14-test-run-budget-v1",
+        maximum_materialized_rows=200,
+        maximum_feature_cells=1_000,
+        maximum_pca_rows=100,
+        maximum_pca_features=10,
+        maximum_pca_cells=1_000,
+        maximum_clusters=5,
+        maximum_seeds=5,
+        maximum_kmeans_iterations=100,
+        maximum_total_stability_fits=20,
+        maximum_serialized_evidence_bytes=4 * 1024 * 1024,
+        maximum_bundle_entries=100,
+    )
+
+
 def test_trial_grid_is_exact_deterministic_and_bounded() -> None:
     trials = build_preregistered_trial_grid(
         run_ids=("DR-000701", "DR-000702", "DR-000703", "DR-000704"),
@@ -232,6 +263,24 @@ def test_trial_grid_is_exact_deterministic_and_bounded() -> None:
         )
 
 
+def test_trial_grid_rejects_oversized_cardinality_before_iteration() -> None:
+    class ExplodingSequence:
+        def __len__(self) -> int:
+            return 10_000
+
+        def __getitem__(self, _index: int) -> int:
+            raise AssertionError("oversized trial dimension was iterated")
+
+    with pytest.raises(ValueError, match="trial budget"):
+        build_preregistered_trial_grid(
+            run_ids=("DR-000701",),
+            pca_components=ExplodingSequence(),
+            cluster_counts=(2,),
+            seed_sets=((7, 11),),
+            budget=_program_budget(maximum_trials=4),
+        )
+
+
 def test_preregistration_binds_outcome_blind_policy_and_exact_trials(tmp_path: Path) -> None:
     selected = _freeze(_write_promotion_receipt(tmp_path / "receipt.json"))
     budget = _program_budget(maximum_trials=1)
@@ -254,11 +303,18 @@ def test_preregistration_binds_outcome_blind_policy_and_exact_trials(tmp_path: P
         feature_names=("auction_location", "poc_migration_bins", "value_width_bins"),
         trials=trials,
         budget=budget,
+        phase3_execution=_phase3_contract(),
+        run_work_budget=_run_budget(),
+        run_max_rows=100,
+        run_max_iterations=100,
+        run_tolerance=1e-12,
         stability_policy_sha256=_sha("2"),
+        adjacent_period_policy_sha256=_sha("8"),
         motif_policy_sha256=_sha("3"),
         transition_policy_sha256=_sha("4"),
         missingness_policy_sha256=_sha("5"),
         regime_contract_sha256=_sha("6"),
+        orchestration_parameters_sha256=_sha("a"),
         negative_controls=("seed_perturbation", "time_order_preserving_null"),
         naive_baselines=("single_cluster", "unconditional_recurrence"),
         rejection_rules=("missingness_policy_violation", "stability_policy_rejection"),
@@ -286,11 +342,18 @@ def test_preregistration_binds_outcome_blind_policy_and_exact_trials(tmp_path: P
         feature_names=("auction_location", "poc_migration_bins", "value_width_bins"),
         trials=trials,
         budget=budget,
+        phase3_execution=_phase3_contract(),
+        run_work_budget=_run_budget(),
+        run_max_rows=100,
+        run_max_iterations=100,
+        run_tolerance=1e-12,
         stability_policy_sha256=_sha("2"),
+        adjacent_period_policy_sha256=_sha("8"),
         motif_policy_sha256=_sha("3"),
         transition_policy_sha256=_sha("4"),
         missingness_policy_sha256=_sha("5"),
         regime_contract_sha256=_sha("6"),
+        orchestration_parameters_sha256=_sha("a"),
         negative_controls=("seed_perturbation",),
         naive_baselines=("single_cluster", "unconditional_recurrence"),
         rejection_rules=("missingness_policy_violation", "stability_policy_rejection"),
@@ -340,11 +403,18 @@ def test_phase3_publications_bind_snapshot_features_normalizer_and_events(
         feature_names=("log_return_1", "range_close_fraction"),
         trials=trials,
         budget=budget,
+        phase3_execution=_phase3_contract(),
+        run_work_budget=_run_budget(),
+        run_max_rows=100,
+        run_max_iterations=100,
+        run_tolerance=1e-12,
         stability_policy_sha256=_sha("2"),
+        adjacent_period_policy_sha256=_sha("8"),
         motif_policy_sha256=_sha("3"),
         transition_policy_sha256=_sha("4"),
         missingness_policy_sha256=_sha("5"),
         regime_contract_sha256=_sha("6"),
+        orchestration_parameters_sha256=_sha("a"),
         negative_controls=("seed_perturbation",),
         naive_baselines=("single_cluster",),
         rejection_rules=("stability_policy_rejection",),
@@ -412,13 +482,52 @@ def test_phase3_publications_bind_snapshot_features_normalizer_and_events(
     )
 
     assert bundle.feature_manifest.row_count == 60
-    assert bundle.event_manifest.row_count == 60
+    assert bundle.event_manifest.row_count == 28
     assert bundle.normalizer.selected_features == preregistration.feature_names
     assert bundle.feature_manifest.identity.dataset_snapshot_sha256 == snapshot.snapshot_sha256
     assert (
         bundle.event_manifest.source_feature_publication_sha256
         == bundle.feature_manifest.publication_sha256
     )
+
+    holdout_frame = pl.DataFrame(
+        [
+            (
+                end,
+                "APTUSDT",
+                "1m",
+                11.0,
+                11.2,
+                10.9,
+                11.1,
+                100.0,
+            )
+        ],
+        schema=CANONICAL_SCHEMA,
+        orient="row",
+    )
+    foreign_snapshot = export_partitioned_snapshot(
+        [holdout_frame],
+        output_root=tmp_path / "foreign-snapshots",
+        identity=snapshot.identity,
+        boundaries=(),
+    )
+    with pytest.raises(ValueError, match="outside the frozen selected universe"):
+        build_phase3_publications(
+            preregistration=preregistration,
+            selected_universe=selected,
+            snapshot_directory=(tmp_path / "foreign-snapshots" / "dataset_version=DS-000701"),
+            snapshot_manifest=foreign_snapshot,
+            output_root=tmp_path / "foreign-derived",
+            work_root=tmp_path / "foreign-work",
+            registry=registry,
+            leakage_approval=approval,
+            bin_step=0.1,
+            rolling_bars=20,
+            event_width=1,
+            maximum_rows=100,
+            lockfile_bytes=Path("uv.lock").read_bytes(),
+        )
 
 
 def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: Path) -> None:
@@ -431,6 +540,21 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
         seed_sets=((7, 11),),
         budget=budget,
     )
+    stability = {"policy_id": "stability-test-v1"}
+    adjacent = {"policy_id": "adjacent-test-v1"}
+    motif = {"policy_id": "motif-test-v1"}
+    transition = {"policy_id": "transition-test-v1"}
+    missingness = {"policy_id": "missingness-test-v1"}
+    regime = {
+        "algorithm_version": "regime-test-v1",
+        "information_policy": "contemporaneous",
+        "regime_universe": ["all_observed"],
+    }
+    orchestration = {
+        "subsample_fraction": 0.75,
+        "stability_algorithm_version": "stability-test-v1",
+        "motif_algorithm_version": "motif-test-v1",
+    }
     preregistration = freeze_discovery_preregistration(
         preregistration_id="PG-000001",
         selected_universe=selected,
@@ -442,11 +566,18 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
         feature_names=("auction_location", "poc_migration_bins"),
         trials=trials,
         budget=budget,
-        stability_policy_sha256=_sha("2"),
-        motif_policy_sha256=_sha("3"),
-        transition_policy_sha256=_sha("4"),
-        missingness_policy_sha256=_sha("5"),
-        regime_contract_sha256=_sha("6"),
+        phase3_execution=_phase3_contract(),
+        run_work_budget=_run_budget(),
+        run_max_rows=100,
+        run_max_iterations=100,
+        run_tolerance=1e-12,
+        stability_policy_sha256=canonical_policy_sha256(stability),
+        adjacent_period_policy_sha256=canonical_policy_sha256(adjacent),
+        motif_policy_sha256=canonical_policy_sha256(motif),
+        transition_policy_sha256=canonical_policy_sha256(transition),
+        missingness_policy_sha256=canonical_policy_sha256(missingness),
+        regime_contract_sha256=canonical_policy_sha256(regime),
+        orchestration_parameters_sha256=canonical_policy_sha256(orchestration),
         negative_controls=("seed_perturbation",),
         naive_baselines=("single_cluster",),
         rejection_rules=("stability_policy_rejection",),
@@ -454,12 +585,14 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
         lock_sha256=_sha("7"),
     )
     identity = ArtifactIdentity("artifact-v1", _sha("8"))
+    dataset_identity = ArtifactIdentity(preregistration.dataset_snapshot_id, _sha("8"))
+    registry_identity = ArtifactIdentity("registry-v1", preregistration.registry_sha256)
     config = ExperimentConfig(
         run_id="DR-000701",
         mode=ExperimentMode.DISCOVERY,
-        dataset_snapshot=identity,
+        dataset_snapshot=dataset_identity,
         feature_publication=identity,
-        feature_registry=identity,
+        feature_registry=registry_identity,
         normalizer=identity,
         frozen_split={"sha256": preregistration.split.sha256},
         detector_version="task14-detector-v1",
@@ -467,7 +600,36 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
         candidate_version=None,
         code_commit=preregistration.code_commit,
         lock_sha256=preregistration.lock_sha256,
-        canonical_config={"preregistration_sha256": preregistration.sha256},
+        canonical_config={
+            "preregistration_sha256": preregistration.sha256,
+            "run_id": "DR-000701",
+            "dataset_snapshot_id": preregistration.dataset_snapshot_id,
+            "feature_set_id": preregistration.feature_set_id,
+            "registry_sha256": preregistration.registry_sha256,
+            "config_version": preregistration.phase3_execution.config_version,
+            "split": {"sha256": preregistration.split.sha256},
+            "feature_names": list(preregistration.feature_names),
+            "pca_components": trials[0].pca_components,
+            "clusters": trials[0].clusters,
+            "seeds": list(trials[0].seeds),
+            "max_rows": preregistration.run_max_rows,
+            "max_iterations": preregistration.run_max_iterations,
+            "tolerance": preregistration.run_tolerance,
+            "stability_policy": stability,
+            "adjacent_period_stability_policy": adjacent,
+            "motif_stability_policy": motif,
+            "transition_uncertainty_policy": transition,
+            "missingness_policy": missingness,
+            "motif_regime_assignments": {**regime, "assignments": []},
+            "work_budget": {
+                "schema_version": "discovery-work-budget-v1",
+                **asdict(preregistration.run_work_budget),
+                "sha256": preregistration.run_work_budget.sha256,
+            },
+            "orchestration_parameters": orchestration,
+            "code_commit": preregistration.code_commit,
+            "lock_sha256": preregistration.lock_sha256,
+        },
         seed=7,
         symbols=("APTUSDT",),
         timeframes=("1m",),
@@ -482,6 +644,25 @@ def test_reliability_vector_reconciles_exact_terminal_trial_receipts(tmp_path: P
         parent_ids=(),
         metrics_schema={"status": "string"},
     )
+    bad_config = replace(
+        config,
+        canonical_config={**config.canonical_config, "clusters": 999},
+    )
+    save_experiment_result(
+        config=bad_config,
+        status=TerminalStatus.REJECTED,
+        metrics={"status": "rejected_unstable"},
+        conclusion="Mismatched configuration must not count.",
+        started_at=datetime(2026, 7, 22, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 22, 0, 1, tzinfo=UTC),
+        root=tmp_path / "bad-trials",
+    )
+    with pytest.raises(ValueError, match="clusters"):
+        publish_reliability_vector(
+            preregistration=preregistration,
+            trial_root=tmp_path / "bad-trials",
+            destination=tmp_path / "bad-reliability-vector.json",
+        )
     save_experiment_result(
         config=config,
         status=TerminalStatus.REJECTED,

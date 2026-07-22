@@ -68,6 +68,7 @@ def research_snapshot_identity(version: str = "research-v1") -> SnapshotIdentity
             promotion_receipt_artifact_sha256="e" * 64,
             promotion_canonical_logical_sha256="f" * 64,
             gap_boundaries_sha256=hashlib.sha256(b"[]").hexdigest(),
+            eligibility_audit_sha256="1" * 64,
         ),
     )
 
@@ -195,6 +196,7 @@ def test_research_snapshot_identity_rejects_partial_or_mismatched_boundary_bindi
             promotion_receipt_artifact_sha256="e" * 64,
             promotion_canonical_logical_sha256="f" * 64,
             gap_boundaries_sha256=hashlib.sha256(b"[]").hexdigest(),
+            eligibility_audit_sha256="1" * 64,
         )
 
     boundary = SegmentBoundary(
@@ -279,6 +281,24 @@ def test_completed_export_is_idempotent_and_detects_tampering(tmp_path: Path) ->
     partition.write_bytes(partition.read_bytes() + b"tampered")
     with pytest.raises(ValueError, match="checksum"):
         export_partitioned_snapshot([], output_root=tmp_path, identity=identity)
+
+
+def test_completed_export_revalidates_the_exact_expected_row_count(tmp_path: Path) -> None:
+    identity = snapshot_identity("expected-row-reuse-v1")
+    export_partitioned_snapshot(
+        [candle_frame([0])],
+        output_root=tmp_path,
+        identity=identity,
+        expected_row_count=1,
+    )
+
+    with pytest.raises(ValueError, match="existing snapshot row count"):
+        export_partitioned_snapshot(
+            [],
+            output_root=tmp_path,
+            identity=identity,
+            expected_row_count=2,
+        )
 
 
 def test_export_rejects_duplicate_keys_across_batches(tmp_path: Path) -> None:

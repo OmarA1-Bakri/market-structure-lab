@@ -16,6 +16,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from market_structure_lab.cli.errors import database_error_message
+from market_structure_lab.core.artifact_io import (
+    path_exists_no_follow,
+    regular_file_matches,
+    require_regular_directory,
+)
 from market_structure_lab.core.config import load_settings
 from market_structure_lab.data.derived import (
     LeakageAuditApproval,
@@ -28,11 +33,13 @@ from market_structure_lab.data.segments import SegmentBoundary
 from market_structure_lab.discovery.behaviours import BehaviourEventBinding
 from market_structure_lab.discovery.matrix import MissingnessPolicy
 from market_structure_lab.discovery.motifs import (
+    MOTIF_ALGORITHM_VERSION,
     MotifStabilityPolicy,
     freeze_motif_regime_assignments,
 )
 from market_structure_lab.discovery.program import (
     DiscoveryProgramBudget,
+    Phase3ExecutionContract,
     build_phase3_publications,
     build_preregistered_trial_grid,
     canonical_policy_sha256,
@@ -44,6 +51,7 @@ from market_structure_lab.discovery.runs import (
     DiscoveryRunConfig,
     DiscoveryWorkBudget,
     run_discovery,
+    verify_runtime_code_identity,
 )
 from market_structure_lab.discovery.splits import (
     PartitionRole,
@@ -54,6 +62,7 @@ from market_structure_lab.discovery.splits import (
 )
 from market_structure_lab.discovery.stability import (
     AdjacentPeriodStabilityPolicy,
+    STABILITY_ALGORITHM_VERSION,
     StabilityPolicy,
 )
 from market_structure_lab.discovery.transitions import TransitionUncertaintyPolicy
@@ -66,9 +75,9 @@ DEFAULT_PROMOTION_RECEIPT = Path(
     "data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json"
 )
 DEFAULT_SNAPSHOT_ROOT = Path("data/exports/snapshots")
-DEFAULT_DERIVED_ROOT = Path("data/exports/derived/task14-PG-000001")
-DEFAULT_PROGRAM_ROOT = Path("data/exports/discovery-programs/PG-000001")
-DEFAULT_TRIAL_ROOT = Path("data/exports/trials/task14-PG-000001")
+DEFAULT_DERIVED_ROOT = Path("data/exports/derived/task14-PG-000002")
+DEFAULT_PROGRAM_ROOT = Path("data/exports/discovery-programs/PG-000002")
+DEFAULT_TRIAL_ROOT = Path("data/exports/trials/task14-PG-000002")
 AUCTION_CONFIG_VERSION = "task14-auction-v1"
 
 
@@ -103,8 +112,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _execute(args: argparse.Namespace) -> dict[str, object]:
     code_commit = _git("rev-parse", "HEAD")
     lockfile_bytes = Path("uv.lock").read_bytes()
+    verify_runtime_code_identity(code_commit=code_commit, lockfile_bytes=lockfile_bytes)
     lock_sha256 = hashlib.sha256(lockfile_bytes).hexdigest()
     report = read_freshness_report(args.freshness_report)
+    eligibility_audit = _eligibility_audit(report)
+    eligibility_audit_sha256 = _sha_json(eligibility_audit)
+    _publish_json(
+        args.program_root / "eligibility-audit.json",
+        eligibility_audit,
+        eligibility_audit_sha256,
+    )
     registry = builtin_feature_registry()
     start = datetime(2025, 2, 1, tzinfo=UTC)
     discovery_end = datetime(2025, 2, 8, tzinfo=UTC)
@@ -112,7 +129,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     holdout_end = datetime(2025, 2, 22, tzinfo=UTC)
     boundaries = _selected_boundaries(report, "APTUSDT", start, development_end)
     selected = freeze_selected_universe(
-        selection_id="SU-000701",
+        selection_id="SU-000702",
         promotion_receipt_path=args.promotion_receipt,
         symbols=("APTUSDT",),
         timeframe="1m",
@@ -122,9 +139,10 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         survivorship_policy="point_in_time_freshness_recovered_only_v1",
         optional_field_policy="ignore_unavailable_optional_trade_fields_v1",
         zero_volume_policy="retain_observed_zero_volume_v1",
+        eligibility_audit_sha256=eligibility_audit_sha256,
     )
     split = freeze_split(
-        split_id="task14-first-real-discovery-v1",
+        split_id="task14-first-real-discovery-v2",
         discovery=TimePartition(PartitionRole.DISCOVERY, start, discovery_end, selected.symbols),
         development=TimePartition(
             PartitionRole.DEVELOPMENT,
@@ -205,13 +223,13 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         "vwap_distance_close",
     )
     program_budget = DiscoveryProgramBudget(
-        budget_id="task14-program-budget-v1",
+        budget_id="task14-program-budget-v2",
         maximum_trials=1,
         maximum_total_stability_fits=8,
         maximum_serialized_evidence_bytes=64 * 1024 * 1024,
     )
     trials = build_preregistered_trial_grid(
-        run_ids=("DR-000701",),
+        run_ids=("DR-000702",),
         pca_components=(3,),
         cluster_counts=(3,),
         seed_sets=((7, 11, 13),),
@@ -222,22 +240,55 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         "information_policy": "contemporaneous",
         "regime_universe": ["all_observed"],
     }
+    phase3_execution = Phase3ExecutionContract(
+        config_version=AUCTION_CONFIG_VERSION,
+        bin_step=0.001,
+        rolling_bars=1_440,
+        event_width=1,
+        maximum_rows=25_000,
+    )
+    work_budget = DiscoveryWorkBudget(
+        budget_id="task14-run-budget-v2",
+        maximum_materialized_rows=50_000,
+        maximum_feature_cells=300_000,
+        maximum_pca_rows=25_000,
+        maximum_pca_features=len(feature_names),
+        maximum_pca_cells=150_000,
+        maximum_clusters=3,
+        maximum_seeds=3,
+        maximum_kmeans_iterations=100,
+        maximum_total_stability_fits=8,
+        maximum_serialized_evidence_bytes=64 * 1024 * 1024,
+        maximum_bundle_entries=100,
+    )
+    orchestration_parameters = {
+        "subsample_fraction": 0.75,
+        "stability_algorithm_version": STABILITY_ALGORITHM_VERSION,
+        "motif_algorithm_version": MOTIF_ALGORITHM_VERSION,
+    }
     preregistration = freeze_discovery_preregistration(
-        preregistration_id="PG-000001",
+        preregistration_id="PG-000002",
         selected_universe=selected,
         split=split,
-        dataset_snapshot_id="DS-000701",
+        dataset_snapshot_id="DS-000702",
         feature_set_id=registry.feature_set_id,
         registry_sha256=registry.sha256,
         normalizer_policy_id="robust-discovery-fit-only-v1",
         feature_names=feature_names,
         trials=trials,
         budget=program_budget,
+        phase3_execution=phase3_execution,
+        run_work_budget=work_budget,
+        run_max_rows=25_000,
+        run_max_iterations=100,
+        run_tolerance=1e-12,
         stability_policy_sha256=canonical_policy_sha256(stability),
+        adjacent_period_policy_sha256=canonical_policy_sha256(adjacent),
         motif_policy_sha256=canonical_policy_sha256(motif),
         transition_policy_sha256=canonical_policy_sha256(transition),
-        missingness_policy_sha256=missingness.sha256,
+        missingness_policy_sha256=canonical_policy_sha256(missingness),
         regime_contract_sha256=_sha_json(regime_policy),
+        orchestration_parameters_sha256=_sha_json(orchestration_parameters),
         negative_controls=("seed_perturbation", "time_order_preserving_null"),
         naive_baselines=("single_cluster", "unconditional_recurrence"),
         rejection_rules=(
@@ -288,10 +339,10 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         work_root=args.program_root / "work",
         registry=registry,
         leakage_approval=approval,
-        bin_step=0.001,
-        rolling_bars=1_440,
-        event_width=1,
-        maximum_rows=25_000,
+        bin_step=phase3_execution.bin_step,
+        rolling_bars=phase3_execution.rolling_bars,
+        event_width=phase3_execution.event_width,
+        maximum_rows=phase3_execution.maximum_rows,
         lockfile_bytes=lockfile_bytes,
     )
     discovery_rows = tuple(
@@ -305,7 +356,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         rows=discovery_rows,
         registry=registry,
         purpose="fit",
-        max_rows=25_000,
+        max_rows=preregistration.run_max_rows,
         publication_manifest=phase3.feature_manifest,
     )
     development_input = make_discovery_input(
@@ -313,7 +364,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         rows=development_rows,
         registry=registry,
         purpose="stability",
-        max_rows=25_000,
+        max_rows=preregistration.run_max_rows,
         publication_manifest=phase3.feature_manifest,
     )
     selected_rows = tuple(
@@ -323,7 +374,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     )
     selected_ids = {_row_id(row) for row in selected_rows}
     regimes = freeze_motif_regime_assignments(
-        contract_id="task14-contemporaneous-regimes-v1",
+        contract_id="task14-contemporaneous-regimes-v2",
         algorithm_version="constant-contemporaneous-regime-v1",
         information_policy="contemporaneous",
         outcome_policy="outcome_blind",
@@ -354,20 +405,6 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         if item.row_id in selected_ids and split.discovery.contains(_row_timestamp(item.row_id))
     )
     trial = preregistration.trials[0]
-    work_budget = DiscoveryWorkBudget(
-        budget_id="task14-run-budget-v1",
-        maximum_materialized_rows=50_000,
-        maximum_feature_cells=300_000,
-        maximum_pca_rows=25_000,
-        maximum_pca_features=len(feature_names),
-        maximum_pca_cells=150_000,
-        maximum_clusters=3,
-        maximum_seeds=3,
-        maximum_kmeans_iterations=100,
-        maximum_total_stability_fits=8,
-        maximum_serialized_evidence_bytes=64 * 1024 * 1024,
-        maximum_bundle_entries=100,
-    )
     config = DiscoveryRunConfig(
         run_id=trial.run_id,
         dataset_snapshot_id=preregistration.dataset_snapshot_id,
@@ -380,53 +417,58 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         pca_components=trial.pca_components,
         clusters=trial.clusters,
         seeds=trial.seeds,
-        max_rows=25_000,
-        max_iterations=100,
-        tolerance=1e-12,
+        max_rows=preregistration.run_max_rows,
+        max_iterations=preregistration.run_max_iterations,
+        tolerance=preregistration.run_tolerance,
         stability_policy=stability,
         adjacent_period_stability_policy=adjacent,
         motif_stability_policy=motif,
         motif_regime_assignments=regimes,
         transition_uncertainty_policy=transition,
         missingness_policy=missingness,
-        work_budget=work_budget,
-        event_publication_id="EP-000701",
+        work_budget=preregistration.run_work_budget,
+        event_publication_id="EP-000702",
         event_publication_sha256=phase3.event_manifest.publication_sha256,
         code_commit=code_commit,
         lock_sha256=lock_sha256,
-        feature_publication_id="FP-000701",
+        feature_publication_id="FP-000702",
         feature_publication_sha256=phase3.feature_manifest.publication_sha256,
-        normalizer_id="NZ-000701",
+        normalizer_id="NZ-000702",
         normalizer_sha256=phase3.normalizer.artifact_sha256,
         provenance=provenance,
         preregistration_sha256=preregistration.sha256,
         started_at=datetime(2026, 7, 22, 12, 0, tzinfo=UTC),
         completed_at=datetime(2026, 7, 22, 12, 1, tzinfo=UTC),
     )
-    manifest = run_discovery(
-        config=config,
-        discovery=discovery_input,
-        development=development_input,
-        registry=registry,
-        event_bindings=event_bindings,
-        output_root=args.trial_root,
-        snapshot_directory=snapshot_directory,
-        snapshot_manifest=snapshot,
-        feature_publication_directory=phase3.feature_directory,
-        feature_publication=phase3.feature_manifest,
-        event_publication_directory=phase3.event_directory,
-        event_publication=phase3.event_manifest,
-        normalizer_artifact=phase3.normalizer.canonical_json(),
-        lockfile_bytes=lockfile_bytes,
-    )
+    manifest = None
+    execution_error_type: str | None = None
+    try:
+        manifest = run_discovery(
+            config=config,
+            discovery=discovery_input,
+            development=development_input,
+            registry=registry,
+            event_bindings=event_bindings,
+            output_root=args.trial_root,
+            snapshot_directory=snapshot_directory,
+            snapshot_manifest=snapshot,
+            feature_publication_directory=phase3.feature_directory,
+            feature_publication=phase3.feature_manifest,
+            event_publication_directory=phase3.event_directory,
+            event_publication=phase3.event_manifest,
+            normalizer_artifact=phase3.normalizer.canonical_json(),
+            lockfile_bytes=lockfile_bytes,
+        )
+    except Exception as error:
+        execution_error_type = type(error).__name__
     vector = publish_reliability_vector(
         preregistration=preregistration,
         trial_root=args.trial_root,
         destination=args.program_root / "reliability-vector.json",
     )
     return {
-        "run_id": manifest.run_id,
-        "run_status": manifest.status,
+        "run_id": trial.run_id,
+        "run_status": manifest.status if manifest is not None else vector.trials[0].status,
         "preregistration_sha256": preregistration.sha256,
         "snapshot_sha256": snapshot.snapshot_sha256,
         "feature_publication_sha256": phase3.feature_manifest.publication_sha256,
@@ -435,6 +477,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         "reliability_vector_sha256": vector.sha256,
         "reliability_conclusion": vector.conclusion,
         "holdout_rows_accessed": False,
+        "execution_error_type": execution_error_type,
     }
 
 
@@ -482,6 +525,37 @@ def _leakage_approval(registry, program_root: Path) -> LeakageAuditApproval:
     return approval
 
 
+def _eligibility_audit(report) -> dict[str, object]:
+    candidates: list[dict[str, object]] = []
+    for item in report.symbols:
+        if item.symbol == "APTUSDT":
+            decision = "selected_discovery_development"
+        elif item.symbol == "IMXUSDT":
+            decision = "metadata_only_asset_holdout"
+        else:
+            decision = "excluded_from_single_asset_pilot"
+        candidates.append(
+            {
+                "symbol": item.symbol,
+                "timeframe": item.timeframe,
+                "freshness_status": item.status.value,
+                "compatibility_state": item.compatibility_state.value,
+                "current_through_cutoff": item.current_through_cutoff,
+                "after_missing_minutes": item.after_missing_minutes,
+                "decision": decision,
+            }
+        )
+    return {
+        "schema_version": "task14-eligibility-audit-v1",
+        "freshness_report_sha256": report.sha256(),
+        "freshness_as_of": report.as_of,
+        "selection_rule": "healthy_compatible_current_single_asset_pilot_v1",
+        "selected_symbols": ["APTUSDT"],
+        "asset_holdouts": ["IMXUSDT"],
+        "candidates": candidates,
+    }
+
+
 def _publish_json(path: Path, payload: dict[str, object], sha256: str) -> None:
     encoded = (
         json.dumps(
@@ -493,8 +567,10 @@ def _publish_json(path: Path, payload: dict[str, object], sha256: str) -> None:
         + "\n"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_text(encoding="utf-8") != encoded:
+    require_regular_directory(path.parent)
+    encoded_bytes = encoded.encode("utf-8")
+    if path_exists_no_follow(path):
+        if not regular_file_matches(path, encoded_bytes):
             raise FileExistsError(f"immutable Task 14 artifact conflict: {path.name}")
         return
     temporary = path.with_name(f".{path.name}.tmp")
