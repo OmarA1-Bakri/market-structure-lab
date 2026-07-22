@@ -43,7 +43,7 @@ def minute_frame(count: int) -> pl.DataFrame:
                 "low": value - 1.0,
                 "close": value + 1.0,
                 "volume": float(offset + 1),
-                "segment_id": 3,
+                "segment_id": 0,
             }
         )
     return pl.DataFrame(
@@ -75,6 +75,21 @@ def demand(frame: pl.DataFrame, aggregate_bars: int) -> ValidationWorkDemand:
             for row in source_rows
         ),
         aggregate_bars=aggregate_bars,
+    )
+
+
+def publication_demand(
+    frame: pl.DataFrame,
+    aggregate_bars: int,
+    *,
+    artifacts: int | None = None,
+    artifact_bytes: int = 1024 * 1024,
+) -> ValidationWorkDemand:
+    base = demand(frame, aggregate_bars)
+    return replace(
+        base,
+        artifacts=aggregate_bars if artifacts is None else artifacts,
+        artifact_bytes=artifact_bytes,
     )
 
 
@@ -117,11 +132,11 @@ def publish(
         parent_snapshot_directory=parent_directory,
         parent_snapshot_manifest=parent_manifest,
         symbol="SOLUSDT",
-        segment_id=3,
+        segment_id=0,
         target_timeframe="1h",
         expected_source_sha256=expected_source_sha256 or source_rows_sha256(rows(combined)),
         config_version=config_version,
-        demand=declared or demand(combined, combined.height // 60),
+        demand=declared or publication_demand(combined, combined.height // 60),
         budget=ValidationWorkBudget(),
         max_rows_per_partition=1,
     )
@@ -136,7 +151,7 @@ def tree_bytes(root: Path) -> dict[str, bytes]:
 
 
 def published_directory(root: Path) -> Path:
-    return root / "symbol=SOLUSDT" / "timeframe=1h" / "segment=3"
+    return root / "symbol=SOLUSDT" / "timeframe=1h" / "segment=0"
 
 
 def test_clean_root_publication_is_byte_identical_across_source_chunking(tmp_path: Path) -> None:
@@ -164,14 +179,27 @@ def test_clean_root_publication_is_byte_identical_across_source_chunking(tmp_pat
     assert first.symbol == "SOLUSDT"
     assert first.source_timeframe == "1m"
     assert first.target_timeframe == "1h"
-    assert first.segment_id == 3
+    assert first.segment_id == 0
     assert first.continuity == "complete-contiguous-1m-v1"
     assert first.config_version == "aggregate-config-v1"
+    assert first.parent_partition_bindings == tuple(
+        (partition.path, partition.sha256) for partition in source_manifest.partitions
+    )
+    assert len(first.parent_source_selection_sha256) == 64
+    assert first.artifact_scope == "aggregate-parquet-partitions-v1"
+    assert first.declared_artifact_count == first.actual_artifact_count == 2
+    assert first.actual_artifact_bytes == sum(
+        (published_directory(tmp_path / "first") / partition.path).stat().st_size
+        for partition in first.partitions
+    )
+    assert 0 < first.actual_artifact_bytes <= first.declared_artifact_bytes
     assert tree_bytes(tmp_path / "first") == tree_bytes(tmp_path / "second")
     verify_aggregate_publication(published_directory(tmp_path / "first"), first)
 
 
-def test_publication_identity_changes_with_parent_config_or_row_content(tmp_path: Path) -> None:
+def test_publication_identity_changes_with_config_and_rejects_non_parent_row_content(
+    tmp_path: Path,
+) -> None:
     frame = minute_frame(60)
     parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
     first = publish(
@@ -204,13 +232,14 @@ def test_publication_identity_changes_with_parent_config_or_row_content(tmp_path
         .otherwise(pl.col("high"))
         .alias("high")
     )
-    changed_rows = publish(
-        [changed],
-        output_root=tmp_path / "changed-row",
-        parent_directory=parent_directory,
-        parent_manifest=source_manifest,
-    )
-    assert first.publication_sha256 != changed_rows.publication_sha256
+    with pytest.raises(ValueError, match="parent source selection"):
+        publish(
+            [changed],
+            output_root=tmp_path / "changed-row",
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+    assert not (tmp_path / "changed-row").exists()
 
 
 def test_existing_publication_rejects_without_overwrite(tmp_path: Path) -> None:
@@ -310,8 +339,109 @@ def test_source_digest_mismatch_publishes_no_final_artifact(tmp_path: Path) -> N
     assert not published_directory(tmp_path / "output").exists()
 
 
+@pytest.mark.parametrize("mutation", ("numeric", "arbitrary", "reordered"))
+def test_publication_rejects_rows_not_proven_by_parent_snapshot(
+    tmp_path: Path, mutation: str
+) -> None:
+    parent_frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", parent_frame)
+    if mutation == "numeric":
+        supplied = parent_frame.with_columns(
+            pl.when(pl.int_range(pl.len()) == 30)
+            .then(pl.col("high") + 1.0)
+            .otherwise(pl.col("high"))
+            .alias("high")
+        )
+    elif mutation == "arbitrary":
+        supplied = parent_frame.with_columns(
+            (pl.col("open") + 1_000.0).alias("open"),
+            (pl.col("high") + 1_000.0).alias("high"),
+            (pl.col("low") + 1_000.0).alias("low"),
+            (pl.col("close") + 1_000.0).alias("close"),
+        )
+    else:
+        supplied = pl.concat(
+            (
+                parent_frame.slice(0, 20),
+                parent_frame.slice(21, 1),
+                parent_frame.slice(20, 1),
+                parent_frame.slice(22),
+            )
+        )
+
+    with pytest.raises(ValueError, match="parent source selection"):
+        publish(
+            [supplied],
+            output_root=tmp_path / "output",
+            parent_directory=parent_directory,
+            parent_manifest=source_manifest,
+        )
+    assert not (tmp_path / "output").exists()
+
+
+def test_parent_digest_cannot_authorize_changed_batches_or_leave_output(tmp_path: Path) -> None:
+    parent_frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", parent_frame)
+    changed = parent_frame.with_columns(
+        pl.when(pl.int_range(pl.len()) == 30)
+        .then(pl.col("high") + 1.0)
+        .otherwise(pl.col("high"))
+        .alias("high")
+    )
+
+    with pytest.raises(ValueError, match="source digest"):
+        publish_aggregate_bars(
+            [changed],
+            output_root=tmp_path / "output",
+            parent_snapshot_directory=parent_directory,
+            parent_snapshot_manifest=source_manifest,
+            symbol="SOLUSDT",
+            segment_id=0,
+            target_timeframe="1h",
+            expected_source_sha256=source_rows_sha256(rows(parent_frame)),
+            config_version="aggregate-config-v1",
+            demand=publication_demand(parent_frame, 1),
+            budget=ValidationWorkBudget(),
+            max_rows_per_partition=1,
+        )
+    assert not (tmp_path / "output").exists()
+
+
+def test_publication_rejects_segment_not_present_in_parent_snapshot(tmp_path: Path) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    foreign_segment = frame.with_columns(pl.lit(3, dtype=pl.UInt64).alias("segment_id"))
+
+    with pytest.raises(ValueError, match="parent source selection|segment"):
+        publish_aggregate_bars(
+            [foreign_segment],
+            output_root=tmp_path / "output",
+            parent_snapshot_directory=parent_directory,
+            parent_snapshot_manifest=source_manifest,
+            symbol="SOLUSDT",
+            segment_id=3,
+            target_timeframe="1h",
+            expected_source_sha256=source_rows_sha256(rows(foreign_segment)),
+            config_version="aggregate-config-v1",
+            demand=publication_demand(foreign_segment, 1),
+            budget=ValidationWorkBudget(),
+            max_rows_per_partition=1,
+        )
+    assert not (tmp_path / "output").exists()
+
+
+@pytest.mark.parametrize(
+    "underdeclared",
+    (
+        "source_rows",
+        "artifacts",
+        "artifact_bytes",
+        "artifact_count_limit",
+        "artifact_byte_limit",
+    ),
+)
 def test_publication_budget_rejects_before_source_iteration_or_output_creation(
-    tmp_path: Path,
+    tmp_path: Path, underdeclared: str
 ) -> None:
     frame = minute_frame(60)
     parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
@@ -326,19 +456,36 @@ def test_publication_budget_rejects_before_source_iteration_or_output_creation(
             yield
 
     batches = ExplodingBatches()
-    with pytest.raises(ValidationWorkBudgetViolation, match="source_rows"):
+    declared = publication_demand(frame, 1)
+    budget = ValidationWorkBudget()
+    if underdeclared == "source_rows":
+        declared = replace(declared, source_rows=2)
+        budget = replace(budget, max_source_rows=1)
+    elif underdeclared == "artifacts":
+        declared = replace(declared, artifacts=0)
+    elif underdeclared == "artifact_bytes":
+        declared = replace(declared, artifact_bytes=12 * 1024)
+    elif underdeclared == "artifact_count_limit":
+        budget = replace(budget, max_artifacts=0)
+    else:
+        budget = replace(budget, max_artifact_bytes=1)
+    expected_stage = {
+        "artifact_count_limit": "artifacts",
+        "artifact_byte_limit": "artifact_bytes",
+    }.get(underdeclared, underdeclared)
+    with pytest.raises((ValidationWorkBudgetViolation, ValueError), match=expected_stage):
         publish_aggregate_bars(
             batches,
             output_root=tmp_path / "output",
             parent_snapshot_directory=parent_directory,
             parent_snapshot_manifest=source_manifest,
             symbol="SOLUSDT",
-            segment_id=3,
+            segment_id=0,
             target_timeframe="1h",
-            expected_source_sha256="a" * 64,
+            expected_source_sha256=source_rows_sha256(rows(frame)),
             config_version="aggregate-config-v1",
-            demand=ValidationWorkDemand(source_rows=2),
-            budget=replace(ValidationWorkBudget(), max_source_rows=1),
+            demand=declared,
+            budget=budget,
             max_rows_per_partition=1,
         )
     assert batches.iterations == 0
@@ -363,6 +510,41 @@ def test_symlinked_output_root_rejects_before_publication(tmp_path: Path) -> Non
     assert not any(real_output.iterdir())
 
 
+def test_partition_row_buffer_is_explicitly_capped_before_source_iteration(
+    tmp_path: Path,
+) -> None:
+    frame = minute_frame(60)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+
+    class ExplodingBatches:
+        def __init__(self) -> None:
+            self.iterations = 0
+
+        def __iter__(self) -> Iterator[pl.DataFrame]:
+            self.iterations += 1
+            raise AssertionError("source must not be iterated")
+            yield
+
+    batches = ExplodingBatches()
+    with pytest.raises(ValueError, match="memory-bounded"):
+        publish_aggregate_bars(
+            batches,
+            output_root=tmp_path / "output",
+            parent_snapshot_directory=parent_directory,
+            parent_snapshot_manifest=source_manifest,
+            symbol="SOLUSDT",
+            segment_id=0,
+            target_timeframe="1h",
+            expected_source_sha256=source_rows_sha256(rows(frame)),
+            config_version="aggregate-config-v1",
+            demand=publication_demand(frame, 1),
+            budget=ValidationWorkBudget(),
+            max_rows_per_partition=257,
+        )
+    assert batches.iterations == 0
+    assert not (tmp_path / "output").exists()
+
+
 def test_manifest_schema_timestamp_numeric_source_order_parent_and_byte_mutations_reject(
     tmp_path: Path,
 ) -> None:
@@ -382,6 +564,8 @@ def test_manifest_schema_timestamp_numeric_source_order_parent_and_byte_mutation
         {"source_row_count": 61},
         {"source_sha256": "e" * 64},
         {"parent_snapshot_sha256": "e" * 64},
+        {"actual_artifact_bytes": 1},
+        {"declared_artifact_bytes": 2},
     ):
         try:
             changed = replace(manifest, **fields, publication_sha256="")
