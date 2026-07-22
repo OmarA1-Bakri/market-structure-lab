@@ -24,14 +24,13 @@ from market_structure_lab.data.aggregate_bars import (
 from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
 from market_structure_lab.data.canonical import CANONICAL_SCHEMA, validate_candle_frame
 from market_structure_lab.data.export import read_snapshot_manifest, verify_snapshot
-from market_structure_lab.data.price_precision import VerifiedSourcePricePrecision
+from market_structure_lab.data.price_precision import read_source_price_precision_manifest
 from market_structure_lab.profiles import BinContribution, ProfileAccumulator, UniformAllocation
 from market_structure_lab.profiles.binning import FixedStepBins
 from market_structure_lab.profiles.models import Candle, ProfileSnapshot
 from market_structure_lab.research.models import (
     FROZEN_A_SELECTOR_GRID,
     CandidateDefinition,
-    CandidateSignal,
     ValidationProgrammeConfig,
     ValidationSlot,
     ValidationSlotKind,
@@ -46,9 +45,141 @@ _MAX_PROFILE_PARENT_PARTITION_BYTES = 64 * 1024 * 1024
 _MAX_PROFILE_PARENT_PARTITION_ROWS = 2_000
 _FROZEN_PROFILE_SEAL = object()
 _VERIFIED_PROFILE_STREAM_SEAL = object()
+_CANDIDATE_SIGNAL_ISSUANCE_CAPABILITY = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _SignalIssuanceEntry:
+    token: object
+    capability: object
+    payload_sha256: str
+
+
+_SIGNAL_ISSUANCE_REGISTRY: dict[int, _SignalIssuanceEntry] = {}
 
 
 A_SELECTOR_GRID = FROZEN_A_SELECTOR_GRID
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSignal:
+    """One causal completed-bar signal issued once by the active detector closure."""
+
+    signal_id: str = field(init=False)
+    candidate_id: str
+    family: str
+    symbol: str
+    timeframe: str
+    direction: int
+    feature_start: datetime
+    information_cutoff: datetime
+    legal_entry: datetime
+    source_publication_sha256: str
+    source_series_sha256: str
+    segment_id: int
+    candidate_slot_id: str
+    issuance_token: InitVar[object]
+
+    def __post_init__(self, issuance_token: object) -> None:
+        payload = self.to_dict()
+        entry = _SIGNAL_ISSUANCE_REGISTRY.pop(id(issuance_token), None)
+        if (
+            entry is None
+            or entry.token is not issuance_token
+            or entry.capability is not _CANDIDATE_SIGNAL_ISSUANCE_CAPABILITY
+            or entry.payload_sha256 != hash_json("candidate-signal-issuance-v1", payload)
+        ):
+            raise TypeError("CandidateSignal requires a detector-owned one-use issuance token")
+        if not self.candidate_id.startswith("HC-"):
+            raise ValueError("candidate_id must identify a human-origin candidate")
+        if self.family not in ("A", "B", "G", "E", "D"):
+            raise ValueError("candidate signal family is unsupported")
+        if self.timeframe not in ("1h", "4h"):
+            raise ValueError("candidate signal timeframe must be 1h or 4h")
+        if self.direction not in (-1, 1):
+            raise ValueError("candidate signal direction must be -1 or +1")
+        for name in ("feature_start", "information_cutoff", "legal_entry"):
+            value = getattr(self, name)
+            offset = value.utcoffset()
+            if value.tzinfo is None or offset is None or offset.total_seconds():
+                raise ValueError(f"{name} must be UTC-aware")
+        if self.feature_start >= self.information_cutoff:
+            raise ValueError("feature_start must precede the information cutoff")
+        if self.legal_entry < self.information_cutoff:
+            raise ValueError("legal_entry cannot precede the information cutoff")
+        _require_sha256(self.source_publication_sha256, "source_publication_sha256")
+        _require_sha256(self.source_series_sha256, "source_series_sha256")
+        if isinstance(self.segment_id, bool) or self.segment_id < 0:
+            raise ValueError("segment_id must be a non-negative integer")
+        object.__setattr__(
+            self,
+            "signal_id",
+            f"CS-{hash_json('candidate-signal-v1', payload)}",
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "candidate_id": self.candidate_id,
+            "family": self.family,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "direction": self.direction,
+            "feature_start": self.feature_start,
+            "information_cutoff": self.information_cutoff,
+            "legal_entry": self.legal_entry,
+            "source_publication_sha256": self.source_publication_sha256,
+            "source_series_sha256": self.source_series_sha256,
+            "segment_id": self.segment_id,
+            "candidate_slot_id": self.candidate_slot_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileValueReferences:
+    """Compact integer-bin inputs for the pure family B acceptance formula."""
+
+    poc_index: int | None
+    value_area_low_index: int | None
+    value_area_high_index: int | None
+    value_area_mid_index: float | None
+
+
+def value_migration_acceptance(
+    previous: ProfileValueReferences,
+    current: ProfileValueReferences,
+    *,
+    prior_close_bin: int,
+    current_close_bin: int,
+    direction: int,
+) -> bool:
+    """Evaluate B deterministically without issuing a candidate or claiming metadata authority."""
+
+    if direction not in (-1, 1):
+        raise ValueError("family B direction must be -1 or +1")
+    references = (
+        previous.poc_index,
+        previous.value_area_low_index,
+        previous.value_area_high_index,
+        previous.value_area_mid_index,
+        current.poc_index,
+        current.value_area_low_index,
+        current.value_area_high_index,
+        current.value_area_mid_index,
+    )
+    if any(value is None for value in references):
+        return False
+    prior_poc = cast(int, previous.poc_index)
+    poc = cast(int, current.poc_index)
+    prior_mid = cast(float, previous.value_area_mid_index)
+    midpoint = cast(float, current.value_area_mid_index)
+    low = cast(int, current.value_area_low_index)
+    high = cast(int, current.value_area_high_index)
+    migration = (
+        poc > prior_poc and midpoint > prior_mid
+        if direction == 1
+        else poc < prior_poc and midpoint < prior_mid
+    )
+    return migration and low <= prior_close_bin <= high and low <= current_close_bin <= high
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +330,7 @@ class VerifiedProfileStream:
     bin_step: float
     bin_origin: float
     bin_definition_id: str
-    price_precision_receipt_sha256: str
+    source_price_precision_manifest_sha256: str
     window_hours: int
     source_row_count: int
     source_sha256: str
@@ -222,7 +353,7 @@ class VerifiedProfileStream:
             "profile_config_sha256",
             "bin_metadata_sha256",
             "source_sha256",
-            "price_precision_receipt_sha256",
+            "source_price_precision_manifest_sha256",
         ):
             _require_sha256(getattr(self, name), name)
         cutoffs = tuple(profile.information_cutoff for profile in self.profiles)
@@ -276,7 +407,9 @@ class VerifiedProfileStream:
                 "bin_step": self.bin_step,
                 "bin_origin": self.bin_origin,
                 "bin_definition_id": self.bin_definition_id,
-                "price_precision_receipt_sha256": self.price_precision_receipt_sha256,
+                "source_price_precision_manifest_sha256": (
+                    self.source_price_precision_manifest_sha256
+                ),
                 "window_hours": self.window_hours,
                 "source_row_count": self.source_row_count,
                 "source_sha256": self.source_sha256,
@@ -321,8 +454,6 @@ def build_verified_profile_stream(
     *,
     window_hours: int,
     profile_config_bytes: bytes,
-    price_precision_bytes: bytes,
-    price_precision_receipt: VerifiedSourcePricePrecision,
 ) -> VerifiedProfileStream:
     """Build rolling profiles only from exact verified parent one-minute publication rows."""
 
@@ -330,24 +461,23 @@ def build_verified_profile_stream(
         raise TypeError("profile builder requires a VerifiedAggregateSeries capability")
     if not isinstance(programme, ValidationProgrammeConfig):
         raise TypeError("profile builder requires its frozen ValidationProgrammeConfig")
-    if not isinstance(price_precision_receipt, VerifiedSourcePricePrecision):
-        raise TypeError("profile builder requires a verified source price precision receipt")
     if programme.dataset_sha256 != series.parent_snapshot_manifest.snapshot_sha256:
         raise ValueError("validation programme dataset does not match the profile source snapshot")
+    price_precision_manifest = read_source_price_precision_manifest(series)
     if hashlib.sha256(profile_config_bytes).hexdigest() != programme.profile_config_sha256:
         raise ValueError("profile config artifact bytes differ from the frozen expectation")
-    if hashlib.sha256(price_precision_bytes).hexdigest() != programme.source_price_precision_sha256:
+    if price_precision_manifest.artifact_sha256 != programme.source_price_precision_sha256:
         raise ValueError("source price precision differs from the frozen programme hash")
     if (
-        price_precision_receipt.artifact_sha256 != programme.source_price_precision_sha256
-        or price_precision_receipt.aggregate_series_sha256 != series.series_sha256
-        or price_precision_receipt.source_snapshot_sha256
+        price_precision_manifest.source_snapshot_sha256
         != series.parent_snapshot_manifest.snapshot_sha256
-        or price_precision_receipt.symbol != series.symbol
+        or price_precision_manifest.symbol != series.symbol
+        or price_precision_manifest.source_mapping_version
+        != series.parent_snapshot_manifest.identity.mapping_version
     ):
-        raise ValueError("price precision receipt does not own the verified snapshot symbol")
+        raise ValueError("price precision manifest does not own the verified snapshot symbol")
     budget = programme.work_budget
-    config_bytes = len(profile_config_bytes) + len(price_precision_bytes)
+    config_bytes = len(profile_config_bytes) + price_precision_manifest.artifact_bytes
     _require_profile_budget("profile_config_bytes", config_bytes, budget.max_profile_config_bytes)
     config = _parse_artifact(profile_config_bytes, "profile config")
     expected_config_fields = {
@@ -373,9 +503,9 @@ def build_verified_profile_stream(
     ):
         raise ValueError("profile config artifact differs from the frozen rolling policy")
     profile_config_sha256 = hashlib.sha256(profile_config_bytes).hexdigest()
-    bin_metadata_sha256 = hashlib.sha256(price_precision_bytes).hexdigest()
-    bin_step = price_precision_receipt.step
-    bin_origin = price_precision_receipt.origin
+    bin_metadata_sha256 = price_precision_manifest.artifact_sha256
+    bin_step = price_precision_manifest.step
+    bin_origin = price_precision_manifest.origin
     binning = FixedStepBins(
         step=bin_step,
         origin=bin_origin,
@@ -580,7 +710,7 @@ def build_verified_profile_stream(
             "bin_step": bin_step,
             "bin_origin": bin_origin,
             "bin_definition_id": binning.definition_id,
-            "price_precision_receipt_sha256": price_precision_receipt.receipt_sha256,
+            "source_price_precision_manifest_sha256": (price_precision_manifest.manifest_sha256),
             "window_hours": window_hours,
             "source_row_count": series.manifest.source_row_count,
             "source_sha256": series.manifest.source_sha256,
@@ -601,7 +731,7 @@ def build_verified_profile_stream(
         bin_step=bin_step,
         bin_origin=bin_origin,
         bin_definition_id=binning.definition_id,
-        price_precision_receipt_sha256=price_precision_receipt.receipt_sha256,
+        source_price_precision_manifest_sha256=price_precision_manifest.manifest_sha256,
         window_hours=window_hours,
         source_row_count=series.manifest.source_row_count,
         source_sha256=series.manifest.source_sha256,
@@ -646,19 +776,6 @@ def detect_candidate_signals(
             cutoff_index: int
             capability: object
 
-        class IssuanceToken:
-            __slots__ = ("_expected", "_used")
-
-            def __init__(self, expected: str) -> None:
-                self._expected = expected
-                self._used = False
-
-            def consume(self, observed: str) -> bool:
-                if self._used or observed != self._expected:
-                    return False
-                self._used = True
-                return True
-
         def issue(evidence: DetectorEvidence) -> CandidateSignal:
             if (
                 type(evidence) is not DetectorEvidence
@@ -702,8 +819,16 @@ def detect_candidate_signals(
                 "segment_id": definition.source_segment_id,
                 "candidate_slot_id": definition.slot.slot_id,
             }
-            token = IssuanceToken(hash_json("candidate-signal-issuance-v1", payload))
-            return CandidateSignal(**payload, issuance_token=token)  # type: ignore[arg-type]
+            token = object()
+            _SIGNAL_ISSUANCE_REGISTRY[id(token)] = _SignalIssuanceEntry(
+                token=token,
+                capability=_CANDIDATE_SIGNAL_ISSUANCE_CAPABILITY,
+                payload_sha256=hash_json("candidate-signal-issuance-v1", payload),
+            )
+            try:
+                return CandidateSignal(**payload, issuance_token=token)  # type: ignore[arg-type]
+            finally:
+                _SIGNAL_ISSUANCE_REGISTRY.pop(id(token), None)
 
         def record_event(
             event_index: int, feature_start_index: int, cutoff_index: int
@@ -872,27 +997,23 @@ def _detect_b(
             definition, current, window_hours
         ):
             continue
-        references = (
-            previous.poc_index,
-            previous.value_area_low_index,
-            previous.value_area_high_index,
-            current.poc_index,
-            current.value_area_low_index,
-            current.value_area_high_index,
-        )
-        if any(value is None for value in references):
-            continue
-        prior_poc, prior_low, prior_high, poc, low, high = cast(tuple[int, ...], references)
-        migration = (
-            poc > prior_poc and low + high > prior_low + prior_high
-            if definition.direction == 1
-            else poc < prior_poc and low + high < prior_low + prior_high
-        )
-        accepted = (
-            low <= profile_stream.bin_index(bars[index - 1].close) <= high
-            and low <= profile_stream.bin_index(bars[index].close) <= high
-        )
-        if migration and accepted:
+        if value_migration_acceptance(
+            ProfileValueReferences(
+                poc_index=previous.poc_index,
+                value_area_low_index=previous.value_area_low_index,
+                value_area_high_index=previous.value_area_high_index,
+                value_area_mid_index=previous.value_area_mid_index,
+            ),
+            ProfileValueReferences(
+                poc_index=current.poc_index,
+                value_area_low_index=current.value_area_low_index,
+                value_area_high_index=current.value_area_high_index,
+                value_area_mid_index=current.value_area_mid_index,
+            ),
+            prior_close_bin=profile_stream.bin_index(bars[index - 1].close),
+            current_close_bin=profile_stream.bin_index(bars[index].close),
+            direction=definition.direction,
+        ):
             selected.append((opportunity, index))
     role = definition.role
     all_opportunities = [
@@ -1363,11 +1484,14 @@ def _require_sha256(value: object, label: str) -> None:
 
 __all__ = [
     "A_SELECTOR_GRID",
+    "CandidateSignal",
     "FrozenProfile",
+    "ProfileValueReferences",
     "VerifiedProfileStream",
     "build_verified_profile_stream",
     "candidate_definition_for_slot",
     "detect_candidate_signals",
     "profile_config_artifact_bytes",
     "target_bars",
+    "value_migration_acceptance",
 ]

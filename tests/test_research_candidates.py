@@ -14,7 +14,6 @@ import pytest
 import market_structure_lab.research.candidates as research_candidates
 import market_structure_lab.research.models as research_models
 
-from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import (
     CONTINUITY_ID,
     CanonicalAggregateBar,
@@ -30,27 +29,29 @@ from market_structure_lab.data.aggregate_publication import (
     read_verified_aggregate_series,
 )
 from market_structure_lab.data.export import PartitionRecord, SnapshotIdentity, SnapshotManifest
-from market_structure_lab.data.price_precision import verify_source_price_precision
-from market_structure_lab.profiles import ProfileAccumulator
+from market_structure_lab.data.price_precision import (
+    SourcePricePrecisionUnavailable,
+    read_source_price_precision_manifest,
+)
 from market_structure_lab.research.candidates import (
     A_SELECTOR_GRID,
-    VerifiedProfileStream,
+    CandidateSignal,
+    ProfileValueReferences,
     build_verified_profile_stream,
     candidate_definition_for_slot,
     detect_candidate_signals,
     profile_config_artifact_bytes,
     target_bars,
+    value_migration_acceptance,
 )
 from market_structure_lab.research.models import (
     VALIDATION_SLOT_ROSTER,
     CandidateDefinition,
-    CandidateSignal,
     EXPECTED_FAMILIES,
     ValidationProgrammeConfig,
     ValidationSlot,
     ValidationSlotKind,
     ValidationWorkBudget,
-    ValidationWorkBudgetViolation,
 )
 
 PARENT = "b" * 64
@@ -425,33 +426,12 @@ def _parent_a_slot(slot: ValidationSlot) -> ValidationSlot:
     raise AssertionError("matching parent A Donchian slot not found")
 
 
-def _price_precision_bytes(
-    series: VerifiedAggregateSeries, *, step: float = 1.0, origin: float = 0.0
-) -> bytes:
-    return json.dumps(
-        {
-            "schema_version": 1,
-            "source_snapshot_sha256": series.parent_snapshot_manifest.snapshot_sha256,
-            "source_snapshot_identity_sha256": hash_json(
-                "source-snapshot-identity-v1",
-                series.parent_snapshot_manifest.identity.to_dict(),
-            ),
-            "symbol": series.symbol,
-            "binning_version": "fixed-step-v1",
-            "step": step,
-            "origin": origin,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
 def _programme(
     series: VerifiedAggregateSeries,
     profile_config: bytes,
-    price_precision: bytes,
     *,
     budget: ValidationWorkBudget | None = None,
+    source_price_precision_sha256: str = "8" * 64,
 ) -> ValidationProgrammeConfig:
     return ValidationProgrammeConfig(
         task14_closeout_commit=TASK14_CLOSEOUT,
@@ -468,36 +448,10 @@ def _programme(
         control_policy_sha256="5" * 64,
         split_sha256="6" * 64,
         profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
-        source_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+        source_price_precision_sha256=source_price_precision_sha256,
         families=EXPECTED_FAMILIES,
         roster=VALIDATION_SLOT_ROSTER,
         work_budget=budget or ValidationWorkBudget(),
-    )
-
-
-def _profile_stream(
-    series: VerifiedAggregateSeries,
-    slot: ValidationSlot,
-    *,
-    step: float = 1.0,
-    origin: float = 0.0,
-) -> VerifiedProfileStream:
-    window_hours = _effective_bars(slot, "profile_hours") * {"1h": 1, "4h": 4}[slot.timeframe]
-    profile_config = profile_config_artifact_bytes()
-    price_precision = _price_precision_bytes(series, step=step, origin=origin)
-    programme = _programme(series, profile_config, price_precision)
-    receipt = verify_source_price_precision(
-        series,
-        price_precision,
-        expected_artifact_sha256=programme.source_price_precision_sha256,
-    )
-    return build_verified_profile_stream(
-        series,
-        programme,
-        window_hours=window_hours,
-        profile_config_bytes=profile_config,
-        price_precision_bytes=price_precision,
-        price_precision_receipt=receipt,
     )
 
 
@@ -508,8 +462,6 @@ def _definition(
 ) -> CandidateDefinition:
     if slot.family in ("B", "E") and "parent_a_candidate" not in kwargs:
         kwargs["parent_a_candidate"] = _definition(_parent_a_slot(slot), series)
-    if slot.family == "B" and "profile_stream" not in kwargs:
-        kwargs["profile_stream"] = _profile_stream(series, slot)
     return candidate_definition_for_slot(slot, series, **kwargs)  # type: ignore[arg-type]
 
 
@@ -577,6 +529,36 @@ def test_flat_donchian_cannot_direct_mint_through_models_index_helper() -> None:
         )
 
 
+def test_reviewer_fake_token_cannot_reverse_a_detector_direction() -> None:
+    series = _series(_bars([100.0] * 24 + [102.0]))
+    definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+
+    class FakeToken:
+        def consume(self, _observed: str) -> bool:
+            return True
+
+    FakeToken.__module__ = "market_structure_lab.research.candidates"
+    FakeToken.__qualname__ = (
+        "detect_candidate_signals.<locals>.detector_signal_issuer.<locals>.IssuanceToken"
+    )
+    with pytest.raises(TypeError, match="issuance"):
+        CandidateSignal(
+            candidate_id=definition.candidate_id,
+            family=definition.family,
+            symbol=series.symbol,
+            timeframe=definition.timeframe,
+            direction=-definition.direction,
+            feature_start=series.bars[0].timestamp,
+            information_cutoff=series.bars[-1].bar_close,
+            legal_entry=series.bars[-1].bar_close,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            segment_id=series.segment_id,
+            candidate_slot_id=definition.slot.slot_id,
+            issuance_token=FakeToken(),
+        )
+
+
 @pytest.mark.parametrize(
     ("feature_start", "cutoff_offset", "entry_offset"),
     (
@@ -634,7 +616,7 @@ def test_non_detector_evaluation_slots_cannot_issue_candidate_definitions(
 def test_candidate_identity_binds_publication_segment_role_parameters_and_full_a_grid() -> None:
     bars = _bars([100.0] * 25)
     series = _series(bars)
-    slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    slot = _slot("E", "volume_confirmation", role="volume_filtered_primary", lookback=24)
     original = _definition(slot, series)
 
     assert original.a_selector_grid == A_SELECTOR_GRID
@@ -642,17 +624,16 @@ def test_candidate_identity_binds_publication_segment_role_parameters_and_full_a
     assert _definition(slot, changed_series).candidate_id != original.candidate_id
     segment_series = _series(_bars([100.0] * 25, segment=8))
     assert _definition(slot, segment_series).candidate_id != original.candidate_id
-    structure_slot = _slot("B", "value_migration_acceptance", role="structure_only", lookback=24)
-    assert _definition(structure_slot, series).candidate_id != (original.candidate_id)
-    half_step = _profile_stream(series, slot, step=0.5)
-    assert _definition(slot, series, profile_stream=half_step).candidate_id != original.candidate_id
+    changed_parent = _definition(_slot("A", "donchian_breakout", lookback=72), series)
+    with pytest.raises(ValueError, match="parent Donchian lookback"):
+        _definition(slot, series, parent_a_candidate=changed_parent)
     with pytest.raises(ValueError, match="A selector grid"):
         _definition(slot, series, a_selector_grid=A_SELECTOR_GRID[:-1])
     with pytest.raises(TypeError):
         candidate_definition_for_slot(slot, series, behaviour_id="DR-INVENTED")  # type: ignore[call-arg]
 
 
-def test_all_184_adjacent_lookback_slots_have_unique_bound_candidate_identities() -> None:
+def test_available_adjacent_lookback_slots_have_unique_bound_candidate_identities() -> None:
     series_by_timeframe = {
         timeframe: _series(_bars([100.0] * 2, timeframe=timeframe)) for timeframe in ("1h", "4h")
     }
@@ -661,10 +642,15 @@ def test_all_184_adjacent_lookback_slots_have_unique_bound_candidate_identities(
     )
     identities: set[str] = set()
     roles: Counter[tuple[str, str]] = Counter()
+    unavailable_b = 0
     for slot in perturbed:
         series = series_by_timeframe[slot.timeframe]
-        profile_stream = _profile_stream(series, slot) if slot.family == "B" else None
-        definition = _definition(slot, series, profile_stream=profile_stream)
+        if slot.family == "B":
+            with pytest.raises(SourcePricePrecisionUnavailable, match="independently tracked"):
+                _definition(slot, series)
+            unavailable_b += 1
+            continue
+        definition = _definition(slot, series)
         identities.add(definition.candidate_id)
         roles[(slot.family, definition.detector_role)] += 1
         assert definition.evaluation_role == "adjacent_lookback"
@@ -672,20 +658,19 @@ def test_all_184_adjacent_lookback_slots_have_unique_bound_candidate_identities(
             detect_candidate_signals(
                 definition,
                 series,
-                profile_stream=profile_stream,
             )
             == ()
         )
 
     assert len(perturbed) == 184
-    assert len(identities) == 184
+    assert unavailable_b == 16
+    assert len(identities) == 168
     assert roles == Counter(
         {
             ("A", "moving_average_crossover"): 16,
             ("A", "donchian_breakout"): 16,
             ("A", "atr_breakout"): 8,
             ("A", "time_series_momentum"): 16,
-            ("B", "combined_primary"): 16,
             ("G", "candidate_primary"): 48,
             ("E", "volume_filtered_primary"): 32,
             ("D", "candidate_primary"): 32,
@@ -790,270 +775,105 @@ def test_warmup_gap_and_series_changes_do_not_leak_state_across_boundaries() -> 
         _series(tuple(bars))
 
 
-def test_b_uses_t_minus_2_t_minus_1_profiles_and_same_a_cutoff_and_entry() -> None:
-    closes = [100.0] * 72 + [90.0] + [110.0] * 25
-    initial_bars = _bars(closes, volumes=[1.0] * len(closes))
-    initial_series = _series(initial_bars)
-    a_slot = _slot("A", "moving_average_crossover")
-    initial_definition = _definition(a_slot, initial_series)
-    [initial_signal] = detect_candidate_signals(initial_definition, initial_series)
-    signal_index = next(
-        index
-        for index, bar in enumerate(initial_series.bars)
-        if bar.bar_close == initial_signal.information_cutoff
-    )
-    bars = list(initial_bars)
-    bars[signal_index - 25] = replace(
-        bars[signal_index - 25], low=80.0, high=100.0, volume=1_000.0, row_sha256=""
-    )
-    bars[signal_index - 1] = replace(
-        bars[signal_index - 1], low=100.0, high=120.0, volume=1_000.0, row_sha256=""
-    )
-    series = _series(tuple(bars))
-    a_definition = _definition(a_slot, series)
-    [a_signal] = detect_candidate_signals(a_definition, series)
-    b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
-    profile_stream = _profile_stream(series, b_slot)
-    b_definition = _definition(
-        b_slot,
-        series,
-        parent_a_candidate=a_definition,
-        profile_stream=profile_stream,
-    )
-    [b_signal] = detect_candidate_signals(
-        b_definition,
-        series,
-        a_opportunities=(a_signal,),
-        profile_stream=profile_stream,
-    )
-
-    assert b_signal.information_cutoff == a_signal.information_cutoff
-    assert b_signal.legal_entry == a_signal.legal_entry
-    assert b_signal.direction == a_signal.direction
-    previous_profile = next(
-        profile
-        for profile in profile_stream.profiles
-        if profile.information_cutoff == series.bars[signal_index - 2].bar_close
-    )
-    assert previous_profile.feature_start == series.bars[signal_index - 25].timestamp
-    assert b_signal.feature_start == min(a_signal.feature_start, previous_profile.feature_start)
-
-
-def test_profile_stream_is_factory_computed_from_one_exact_parent_and_bin_origin() -> None:
-    series = _series(_bars([100.0] * 25))
-    slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
-    stream = _profile_stream(series, slot)
-    shifted_origin = _profile_stream(series, slot, origin=0.5)
-
-    assert not hasattr(research_candidates, "price_precision_artifact_bytes")
-    assert len(stream.profiles) == 2
-    assert not hasattr(stream, "source_row_ids")
-    assert not hasattr(stream.profiles[0], "snapshot")
-    assert stream.source_row_count == series.manifest.source_row_count
-    assert stream.source_sha256 == series.manifest.source_sha256
-    assert stream.bin_definition_id != shifted_origin.bin_definition_id
-    profile_config = profile_config_artifact_bytes()
-    price_precision = _price_precision_bytes(series)
-    programme = _programme(series, profile_config, price_precision)
-    receipt = verify_source_price_precision(
-        series,
-        price_precision,
-        expected_artifact_sha256=programme.source_price_precision_sha256,
-    )
-    with pytest.raises(ValueError, match="frozen expectation"):
-        build_verified_profile_stream(
-            series,
-            programme,
-            window_hours=24,
-            profile_config_bytes=profile_config + b" ",
-            price_precision_bytes=price_precision,
-            price_precision_receipt=receipt,
-        )
-    with pytest.raises(ValueError, match="canonical JSON"):
-        noncanonical_config = profile_config + b"\n"
-        noncanonical_programme = _programme(series, noncanonical_config, price_precision)
-        build_verified_profile_stream(
-            series,
-            noncanonical_programme,
-            window_hours=24,
-            profile_config_bytes=noncanonical_config,
-            price_precision_bytes=price_precision,
-            price_precision_receipt=receipt,
-        )
-    alternative_precision = _price_precision_bytes(series, step=0.5, origin=0.5)
-    with pytest.raises(ValueError, match="frozen programme hash"):
-        build_verified_profile_stream(
-            series,
-            programme,
-            window_hours=24,
-            profile_config_bytes=profile_config,
-            price_precision_bytes=alternative_precision,
-            price_precision_receipt=receipt,
-        )
-    foreign_payload = json.loads(price_precision.decode("utf-8"))
-    foreign_payload["symbol"] = "ETHUSDT"
-    foreign_precision = json.dumps(foreign_payload, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
-    with pytest.raises(ValueError, match="snapshot symbol"):
-        verify_source_price_precision(
-            series,
-            foreign_precision,
-            expected_artifact_sha256=hashlib.sha256(foreign_precision).hexdigest(),
-        )
-    with pytest.raises(TypeError, match="factory"):
-        replace(stream.profiles[0], poc_index=1_000_000)
-    with pytest.raises((TypeError, ValueError), match="seal"):
-        replace(
-            stream,
-            profiles=(stream.profiles[0], shifted_origin.profiles[1]),
-            ordered_profile_ids=(
-                stream.profiles[0].profile_id,
-                shifted_origin.profiles[1].profile_id,
-            ),
-        )
-
-    parent_partition = (
-        series.parent_snapshot_directory / series.manifest.parent_partition_bindings[0][0]
-    )
-    parent_partition.write_bytes(parent_partition.read_bytes() + b"tamper")
-    with pytest.raises(ValueError, match="checksum|partition"):
-        _profile_stream(series, slot)
-
-
 @pytest.mark.parametrize(
-    ("budget_field", "stage"),
+    ("direction", "previous", "current", "prior_close", "close"),
     (
-        ("max_profile_config_bytes", "profile_config_bytes"),
-        ("max_profile_source_id_bytes", "profile_source_id_bytes"),
-        ("max_profile_serialized_bytes", "profile_serialized_bytes"),
+        (
+            1,
+            ProfileValueReferences(100, 98, 102, 100.0),
+            ProfileValueReferences(102, 100, 104, 102.0),
+            101,
+            103,
+        ),
+        (
+            -1,
+            ProfileValueReferences(102, 100, 104, 102.0),
+            ProfileValueReferences(100, 98, 102, 100.0),
+            101,
+            99,
+        ),
     ),
 )
-def test_profile_budget_preflight_rejects_before_parent_row_iteration(
-    monkeypatch: pytest.MonkeyPatch,
-    budget_field: str,
-    stage: str,
+def test_b_pure_formula_accepts_symmetric_migration_without_issuing_signals(
+    direction: int,
+    previous: ProfileValueReferences,
+    current: ProfileValueReferences,
+    prior_close: int,
+    close: int,
 ) -> None:
-    series = _series(_bars([100.0] * 25))
-    profile_config = profile_config_artifact_bytes()
-    price_precision = _price_precision_bytes(series)
-    budget = replace(ValidationWorkBudget(), **{budget_field: 1})
-    programme = _programme(series, profile_config, price_precision, budget=budget)
-    receipt = verify_source_price_precision(
-        series,
-        price_precision,
-        expected_artifact_sha256=programme.source_price_precision_sha256,
-    )
-
-    def explode(*_args: object, **_kwargs: object) -> bytes:
-        raise AssertionError("profile parent rows were read before budget preflight")
-
-    monkeypatch.setattr(research_candidates, "read_bounded_regular", explode)
-    with pytest.raises(ValidationWorkBudgetViolation, match=stage):
-        build_verified_profile_stream(
-            series,
-            programme,
-            window_hours=24,
-            profile_config_bytes=profile_config,
-            price_precision_bytes=price_precision,
-            price_precision_receipt=receipt,
-        )
-
-
-def test_profile_active_bin_budget_rejects_before_first_snapshot_copy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    series = _series(_bars([100.0] * 25))
-    profile_config = profile_config_artifact_bytes()
-    price_precision = _price_precision_bytes(series)
-    budget = replace(ValidationWorkBudget(), max_profile_active_bin_cells=0)
-    programme = _programme(series, profile_config, price_precision, budget=budget)
-    receipt = verify_source_price_precision(
-        series,
-        price_precision,
-        expected_artifact_sha256=programme.source_price_precision_sha256,
-    )
-
-    def explode_snapshot(_self: ProfileAccumulator) -> object:
-        raise AssertionError("profile map was copied after the active-bin budget was exceeded")
-
-    monkeypatch.setattr(ProfileAccumulator, "snapshot", explode_snapshot)
-    with pytest.raises(ValidationWorkBudgetViolation, match="profile_active_bin_cells"):
-        build_verified_profile_stream(
-            series,
-            programme,
-            window_hours=24,
-            profile_config_bytes=profile_config,
-            price_precision_bytes=price_precision,
-            price_precision_receipt=receipt,
-        )
-
-
-def test_profile_serialized_budget_rejects_at_first_compact_record_excess(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    series = _series(_bars([100.0] * 25))
-    profile_config = profile_config_artifact_bytes()
-    price_precision = _price_precision_bytes(series)
-    budget = replace(ValidationWorkBudget(), max_profile_serialized_bytes=2)
-    programme = _programme(series, profile_config, price_precision, budget=budget)
-    receipt = verify_source_price_precision(
-        series,
-        price_precision,
-        expected_artifact_sha256=programme.source_price_precision_sha256,
-    )
-    original_snapshot = ProfileAccumulator.snapshot
-    snapshot_calls = 0
-
-    def count_snapshot(self: ProfileAccumulator):
-        nonlocal snapshot_calls
-        snapshot_calls += 1
-        return original_snapshot(self)
-
-    monkeypatch.setattr(ProfileAccumulator, "snapshot", count_snapshot)
-    with pytest.raises(ValidationWorkBudgetViolation, match="profile_serialized_bytes"):
-        build_verified_profile_stream(
-            series,
-            programme,
-            window_hours=24,
-            profile_config_bytes=profile_config,
-            price_precision_bytes=price_precision,
-            price_precision_receipt=receipt,
-        )
-    assert snapshot_calls == 1
-
-
-@pytest.mark.parametrize("direction", ("long", "short"))
-def test_b_missing_profile_references_yield_no_event(direction: str) -> None:
-    breakout = 103.0 if direction == "long" else 97.0
-    series = _series(_bars([100.0] * 25 + [breakout], volumes=[0.0] * 26))
-    a_slot = _slot("A", "donchian_breakout", direction=direction, lookback=24)
-    a_definition = _definition(a_slot, series)
-    [opportunity] = detect_candidate_signals(a_definition, series)
-    b_slot = _slot(
-        "B",
-        "value_migration_acceptance",
-        role="combined_primary",
+    assert value_migration_acceptance(
+        previous,
+        current,
+        prior_close_bin=prior_close,
+        current_close_bin=close,
         direction=direction,
-        lookback=24,
-    )
-    profile_stream = _profile_stream(series, b_slot)
-    b_definition = _definition(
-        b_slot,
-        series,
-        parent_a_candidate=a_definition,
-        profile_stream=profile_stream,
     )
 
-    assert (
-        detect_candidate_signals(
-            b_definition,
-            series,
-            a_opportunities=(opportunity,),
-            profile_stream=profile_stream,
-        )
-        == ()
+
+def test_b_pure_formula_rejects_missing_flat_and_outside_value_references() -> None:
+    previous = ProfileValueReferences(100, 98, 102, 100.0)
+    current = ProfileValueReferences(102, 100, 104, 102.0)
+
+    assert not value_migration_acceptance(
+        ProfileValueReferences(None, None, None, None),
+        current,
+        prior_close_bin=101,
+        current_close_bin=103,
+        direction=1,
     )
+    assert not value_migration_acceptance(
+        previous,
+        ProfileValueReferences(100, 98, 102, 100.0),
+        prior_close_bin=100,
+        current_close_bin=100,
+        direction=1,
+    )
+    assert not value_migration_acceptance(
+        previous,
+        current,
+        prior_close_bin=99,
+        current_close_bin=103,
+        direction=1,
+    )
+
+
+def test_family_b_fails_closed_without_independent_snapshot_precision_authority() -> None:
+    series = _series(_bars([100.0] * 25))
+    slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    profile_config = profile_config_artifact_bytes()
+    programme = _programme(series, profile_config)
+
+    assert not hasattr(research_candidates, "price_precision_artifact_bytes")
+    with pytest.raises(SourcePricePrecisionUnavailable, match="independently tracked"):
+        read_source_price_precision_manifest(series)
+    with pytest.raises(SourcePricePrecisionUnavailable, match="independently tracked"):
+        build_verified_profile_stream(
+            series,
+            programme,
+            window_hours=24,
+            profile_config_bytes=profile_config,
+        )
+    with pytest.raises(SourcePricePrecisionUnavailable, match="independently tracked"):
+        _definition(slot, series)
+
+
+def test_new_validation_programme_cannot_self_authorize_source_precision() -> None:
+    series = _series(_bars([100.0] * 25))
+    profile_config = profile_config_artifact_bytes()
+
+    for caller_chosen_hash in ("8" * 64, "9" * 64):
+        programme = _programme(
+            series,
+            profile_config,
+            source_price_precision_sha256=caller_chosen_hash,
+        )
+        with pytest.raises(SourcePricePrecisionUnavailable, match="independently tracked"):
+            build_verified_profile_stream(
+                series,
+                programme,
+                window_hours=24,
+                profile_config_bytes=profile_config,
+            )
 
 
 def test_e_filters_a_donchian_opportunities_with_strict_prior_volume_median() -> None:
@@ -1111,22 +931,6 @@ def test_subordinate_candidates_reject_flat_or_wrong_registered_a_opportunities(
     with pytest.raises(ValueError, match="exact registered parent"):
         detect_candidate_signals(e_definition, series, a_opportunities=(atr_signal,))
 
-    b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
-    profile_stream = _profile_stream(series, b_slot)
-    b_definition = _definition(
-        b_slot,
-        series,
-        parent_a_candidate=donchian_definition,
-        profile_stream=profile_stream,
-    )
-    with pytest.raises(ValueError, match="exact registered parent"):
-        detect_candidate_signals(
-            b_definition,
-            series,
-            a_opportunities=(atr_signal,),
-            profile_stream=profile_stream,
-        )
-
 
 def test_e_definition_cannot_bypass_exact_donchian_parent_factory_gate() -> None:
     series = _series(_bars([100.0] * 26))
@@ -1172,10 +976,9 @@ def test_e_definition_cannot_bypass_exact_donchian_parent_factory_gate() -> None
         )
 
 
-def test_b_definition_cannot_bypass_exact_selector_parent_factory_gate() -> None:
+def test_b_definition_cannot_bypass_missing_precision_authority_with_any_parent() -> None:
     series = _series(_bars([100.0] * 26))
     b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
-    profile_stream = _profile_stream(series, b_slot)
     wrong_parent_slot = next(
         slot
         for slot in VALIDATION_SLOT_ROSTER
@@ -1186,29 +989,13 @@ def test_b_definition_cannot_bypass_exact_selector_parent_factory_gate() -> None
     )
     wrong_parent = _definition(wrong_parent_slot, series)
     allowed_parent = _definition(_parent_a_slot(b_slot), series)
-    issued = candidate_definition_for_slot(
-        b_slot,
-        series,
-        parent_a_candidate=allowed_parent,
-        profile_stream=profile_stream,
-    )
-
-    assert issued == candidate_definition_for_slot(
-        b_slot,
-        series,
-        parent_a_candidate=allowed_parent,
-        profile_stream=profile_stream,
-    )
-    assert issued.parent_a_candidate_id == allowed_parent.candidate_id
-    assert issued.parent_a_slot_id == allowed_parent.slot.slot_id
-
-    with pytest.raises(ValueError, match="selector-grid"):
-        candidate_definition_for_slot(
-            b_slot,
-            series,
-            parent_a_candidate=wrong_parent,
-            profile_stream=profile_stream,
-        )
+    for parent in (wrong_parent, allowed_parent):
+        with pytest.raises(SourcePricePrecisionUnavailable, match="independently tracked"):
+            candidate_definition_for_slot(
+                b_slot,
+                series,
+                parent_a_candidate=parent,
+            )
     with pytest.raises(TypeError, match="factory"):
         CandidateDefinition(
             slot=b_slot,
@@ -1217,21 +1004,22 @@ def test_b_definition_cannot_bypass_exact_selector_parent_factory_gate() -> None
             source_segment_id=series.segment_id,
             aggregate_config_version=series.manifest.config_version,
             a_selector_grid=A_SELECTOR_GRID,
-            profile_bin_step=profile_stream.bin_step,
+            profile_bin_step=1.0,
             profile_definition_id=(
                 "rolling-1m:uniform-touched-v1:value-area=0.70:"
-                f"window-hours=24:fixed-step={profile_stream.bin_step}:"
+                "window-hours=24:fixed-step=1.0:"
                 f"source-config={series.manifest.config_version}"
             ),
-            profile_stream_sha256=profile_stream.stream_sha256,
+            profile_stream_sha256="8" * 64,
             parent_a_candidate_id=wrong_parent.candidate_id,
             parent_a_slot_id=wrong_parent.slot.slot_id,
         )
-    with pytest.raises(TypeError, match="factory"):
-        replace(
-            issued,
-            parent_a_candidate_id=wrong_parent.candidate_id,
-            parent_a_slot_id=wrong_parent.slot.slot_id,
+    with pytest.raises(SourcePricePrecisionUnavailable, match="independently tracked"):
+        candidate_definition_for_slot(
+            b_slot,
+            series,
+            parent_a_candidate=wrong_parent,
+            a_selector_grid=A_SELECTOR_GRID,
         )
 
 

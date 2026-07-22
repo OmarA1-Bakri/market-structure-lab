@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import InitVar, dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from math import isfinite
 import re
@@ -179,13 +178,6 @@ class ValidationWorkBudget:
             "exposure_count": 64,
             "capacity_count": 64,
             "bootstrap_draws": 4_096,
-            "max_trials": 1_104,
-            "max_evaluations": 1_104,
-            "max_bootstrap_draws": 4_096,
-            "max_controls": 384,
-            "max_placebos": 192,
-            "max_perturbations": 184,
-            "max_profile_stream_count": 1_000_000,
         }
         for field_name, required in exact.items():
             if getattr(self, field_name) != required:
@@ -207,6 +199,43 @@ class ValidationWorkBudget:
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{field_name} must be a non-negative integer")
+        self._validate_authoritative_ceilings()
+
+    def _validate_authoritative_ceilings(self) -> None:
+        ceilings = {
+            "max_source_rows": 25_000_000,
+            "max_source_bytes": 8 * 1024 * 1024 * 1024,
+            "max_aggregate_bars": 1_000_000,
+            "max_profile_stream_count": 1_000_000,
+            "max_profile_active_bin_cells": 100_000_000,
+            "max_profile_source_id_bytes": 2_000_000_000,
+            "max_profile_config_bytes": 64 * 1024,
+            "max_profile_serialized_bytes": 256 * 1024 * 1024,
+            "max_symbols": 64,
+            "max_ranges": 256,
+            "max_candidates": 256,
+            "max_trials": 1_104,
+            "max_events": 2_000_000,
+            "max_outcomes": 2_000_000,
+            "max_path_cells": 100_000_000,
+            "max_outer_folds": 4,
+            "max_inner_folds": 3,
+            "max_evaluations": 1_104,
+            "max_bootstrap_draws": 4_096,
+            "max_bootstrap_cells": 262_144,
+            "max_bootstrap_blocks": 64,
+            "max_controls": 384,
+            "max_placebos": 192,
+            "max_perturbations": 184,
+            "max_artifacts": 20_000,
+            "max_artifact_bytes": 64 * 1024 * 1024,
+            "max_dashboard_bytes": 8 * 1024 * 1024,
+            "max_final_holdout_candidates": 64,
+            "max_final_batch_candidates": 64,
+        }
+        for field_name, ceiling in ceilings.items():
+            if getattr(self, field_name) > ceiling:
+                raise ValueError(f"{field_name} exceeds the authoritative ceiling {ceiling}")
 
     @property
     def sha256(self) -> str:
@@ -798,6 +827,7 @@ def candidate_definition_for_slot(
     """Issue one sealed definition after resolving its exact verified inputs and parent."""
 
     from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
+    from market_structure_lab.data.price_precision import read_source_price_precision_manifest
     from market_structure_lab.research.candidates import VerifiedProfileStream
 
     if not isinstance(series, VerifiedAggregateSeries):
@@ -816,6 +846,7 @@ def candidate_definition_for_slot(
     profile_bin_step = None
     profile_stream_sha256 = None
     if slot.family == "B":
+        read_source_price_precision_manifest(series)
         profile_bars = _candidate_parameter_bars(slot, "profile_hours")
         window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
         if (
@@ -908,88 +939,6 @@ def _candidate_parameter_bars(slot: ValidationSlot, name: str) -> int:
 
 
 @dataclass(frozen=True, slots=True)
-class CandidateSignal:
-    """One causal completed-bar signal with no outcome-bearing fields."""
-
-    signal_id: str = field(init=False)
-    candidate_id: str
-    family: str
-    symbol: str
-    timeframe: str
-    direction: int
-    feature_start: datetime
-    information_cutoff: datetime
-    legal_entry: datetime
-    source_publication_sha256: str
-    source_series_sha256: str
-    segment_id: int
-    candidate_slot_id: str
-    issuance_token: InitVar[object]
-
-    def __post_init__(self, issuance_token: object) -> None:
-        if not _consume_candidate_signal_issuance(issuance_token, self.to_dict()):
-            raise TypeError("CandidateSignal requires a detector-owned one-use issuance token")
-        if not self.candidate_id.startswith("HC-"):
-            raise ValueError("candidate_id must identify a human-origin candidate")
-        if self.family not in EXPECTED_FAMILIES:
-            raise ValueError("candidate signal family is unsupported")
-        if self.timeframe not in ("1h", "4h"):
-            raise ValueError("candidate signal timeframe must be 1h or 4h")
-        if self.direction not in (-1, 1):
-            raise ValueError("candidate signal direction must be -1 or +1")
-        for name in ("feature_start", "information_cutoff", "legal_entry"):
-            value = getattr(self, name)
-            offset = value.utcoffset()
-            if value.tzinfo is None or offset is None or offset.total_seconds():
-                raise ValueError(f"{name} must be UTC-aware")
-        if self.feature_start >= self.information_cutoff:
-            raise ValueError("feature_start must precede the information cutoff")
-        if self.legal_entry < self.information_cutoff:
-            raise ValueError("legal_entry cannot precede the information cutoff")
-        _require_sha256(self.source_publication_sha256, "source_publication_sha256")
-        _require_sha256(self.source_series_sha256, "source_series_sha256")
-        if isinstance(self.segment_id, bool) or self.segment_id < 0:
-            raise ValueError("segment_id must be a non-negative integer")
-        object.__setattr__(
-            self,
-            "signal_id",
-            f"CS-{hash_json('candidate-signal-v1', self.to_dict())}",
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "candidate_id": self.candidate_id,
-            "family": self.family,
-            "symbol": self.symbol,
-            "timeframe": self.timeframe,
-            "direction": self.direction,
-            "feature_start": self.feature_start,
-            "information_cutoff": self.information_cutoff,
-            "legal_entry": self.legal_entry,
-            "source_publication_sha256": self.source_publication_sha256,
-            "source_series_sha256": self.source_series_sha256,
-            "segment_id": self.segment_id,
-            "candidate_slot_id": self.candidate_slot_id,
-        }
-
-
-def _consume_candidate_signal_issuance(issuance_token: object, payload: dict[str, object]) -> bool:
-    """Accept only a one-use token created by the detector-local issuer closure."""
-
-    token_type = type(issuance_token)
-    if (
-        token_type.__module__ != "market_structure_lab.research.candidates"
-        or token_type.__qualname__
-        != ("detect_candidate_signals.<locals>.detector_signal_issuer.<locals>.IssuanceToken")
-    ):
-        return False
-    consume = getattr(issuance_token, "consume", None)
-    if not callable(consume):
-        return False
-    return consume(hash_json("candidate-signal-issuance-v1", payload)) is True
-
-
-@dataclass(frozen=True, slots=True)
 class ValidationProgrammeConfig:
     """Every immutable prerequisite and policy bound into one VP identity."""
 
@@ -1054,6 +1003,7 @@ class ValidationProgrammeConfig:
         freeze_validation_slot_roster(self.roster)
         if not isinstance(self.work_budget, ValidationWorkBudget):
             raise TypeError("validation work budget must be a ValidationWorkBudget")
+        self.work_budget._validate_authoritative_ceilings()
         object.__setattr__(self, "_programme_id", programme_id(self.to_dict()))
 
     @property
@@ -1102,7 +1052,6 @@ def evaluation_id_for_slot(
 
 __all__ = [
     "CandidateDefinition",
-    "CandidateSignal",
     "EXPECTED_FAMILIES",
     "FROZEN_A_SELECTOR_GRID",
     "VALIDATION_SLOT_ROSTER",

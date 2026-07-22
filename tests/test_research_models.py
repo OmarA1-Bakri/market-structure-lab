@@ -142,6 +142,37 @@ def test_validation_budget_freezes_profile_stream_and_serialization_limits() -> 
 
 
 @pytest.mark.parametrize(
+    "field_name",
+    tuple(field.name for field in fields(ValidationWorkBudget) if field.name.startswith("max_")),
+)
+def test_every_configurable_maximum_rejects_values_above_authoritative_ceiling(
+    field_name: str,
+) -> None:
+    with pytest.raises(ValueError, match=field_name):
+        replace(ValidationWorkBudget(), **{field_name: 10**18})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    tuple(field.name for field in fields(ValidationWorkBudget) if field.name.startswith("max_")),
+)
+def test_every_configurable_maximum_allows_a_reduction(field_name: str) -> None:
+    default = getattr(ValidationWorkBudget(), field_name)
+
+    assert getattr(replace(ValidationWorkBudget(), **{field_name: default - 1}), field_name) == (
+        default - 1
+    )
+
+
+def test_programme_config_rejects_a_mutated_budget_above_authoritative_ceiling() -> None:
+    budget = ValidationWorkBudget()
+    object.__setattr__(budget, "max_source_rows", 10**18)
+
+    with pytest.raises(ValueError, match="max_source_rows"):
+        _config(work_budget=budget)
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     (
         ("evaluation_count", 1_103),
@@ -156,7 +187,6 @@ def test_validation_budget_freezes_profile_stream_and_serialization_limits() -> 
         ("bootstrap_draws", 4_095),
         ("max_source_rows", -1),
         ("max_source_bytes", 1.5),
-        ("max_profile_stream_count", 999_999),
         ("max_profile_serialized_bytes", -1),
     ),
 )
