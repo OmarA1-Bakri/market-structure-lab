@@ -173,7 +173,13 @@ def test_verified_aggregate_series_is_read_only_from_exact_publication_bytes(
     )
     directory = published_directory(tmp_path / "aggregate")
 
-    series = read_verified_aggregate_series(directory, manifest)
+    series = read_verified_aggregate_series(
+        directory,
+        expected_publication_sha256=manifest.publication_sha256,
+        parent_snapshot_directory=parent_directory,
+        expected_parent_snapshot_sha256=source_manifest.snapshot_sha256,
+        budget=ValidationWorkBudget(),
+    )
 
     assert isinstance(series, VerifiedAggregateSeries)
     assert len(series.bars) == 2
@@ -186,7 +192,58 @@ def test_verified_aggregate_series_is_read_only_from_exact_publication_bytes(
     partition = directory / manifest.partitions[0].path
     partition.write_bytes(partition.read_bytes() + b"tamper")
     with pytest.raises(ValueError, match="checksum|bytes"):
-        read_verified_aggregate_series(directory, manifest)
+        read_verified_aggregate_series(
+            directory,
+            expected_publication_sha256=manifest.publication_sha256,
+            parent_snapshot_directory=parent_directory,
+            expected_parent_snapshot_sha256=source_manifest.snapshot_sha256,
+            budget=ValidationWorkBudget(),
+        )
+
+
+def test_verified_aggregate_reader_requires_expected_lineage_and_hard_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frame = minute_frame(120)
+    parent_directory, source_manifest = parent_snapshot(tmp_path / "source", frame)
+    manifest = publish(
+        [frame],
+        output_root=tmp_path / "aggregate",
+        parent_directory=parent_directory,
+        parent_manifest=source_manifest,
+    )
+    directory = published_directory(tmp_path / "aggregate")
+
+    with pytest.raises(ValueError, match="expected publication lineage"):
+        read_verified_aggregate_series(
+            directory,
+            expected_publication_sha256="f" * 64,
+            parent_snapshot_directory=parent_directory,
+            expected_parent_snapshot_sha256=source_manifest.snapshot_sha256,
+            budget=ValidationWorkBudget(),
+        )
+    with pytest.raises(ValueError, match="expected parent snapshot lineage"):
+        read_verified_aggregate_series(
+            directory,
+            expected_publication_sha256=manifest.publication_sha256,
+            parent_snapshot_directory=parent_directory,
+            expected_parent_snapshot_sha256="f" * 64,
+            budget=ValidationWorkBudget(),
+        )
+
+    monkeypatch.setattr(
+        aggregate_publication_module.pl,
+        "read_parquet",
+        lambda *_args, **_kwargs: pytest.fail("over-budget reader materialized Parquet"),
+    )
+    with pytest.raises(ValidationWorkBudgetViolation, match="aggregate_bars"):
+        read_verified_aggregate_series(
+            directory,
+            expected_publication_sha256=manifest.publication_sha256,
+            parent_snapshot_directory=parent_directory,
+            expected_parent_snapshot_sha256=source_manifest.snapshot_sha256,
+            budget=replace(ValidationWorkBudget(), max_aggregate_bars=1),
+        )
 
 
 def test_clean_root_publication_is_byte_identical_across_source_chunking(tmp_path: Path) -> None:

@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import fields, replace
+from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 import hashlib
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import polars as pl
 import pytest
+import market_structure_lab.research.models as research_models
 
-from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import (
     CONTINUITY_ID,
     CanonicalAggregateBar,
+    canonical_source_row_identity,
     source_rows_sha256,
 )
 from market_structure_lab.data.aggregate_publication import (
@@ -25,21 +27,16 @@ from market_structure_lab.data.aggregate_publication import (
     VerifiedAggregateSeries,
     read_verified_aggregate_series,
 )
-from market_structure_lab.data.export import PartitionRecord, SnapshotIdentity
-from market_structure_lab.profiles import (
-    Candle,
-    FixedStepBins,
-    UniformAllocation,
-    calculate_profile,
-)
+from market_structure_lab.data.export import PartitionRecord, SnapshotIdentity, SnapshotManifest
 from market_structure_lab.research.candidates import (
     A_SELECTOR_GRID,
-    FrozenProfile,
     VerifiedProfileStream,
+    build_verified_profile_stream,
     candidate_definition_for_slot,
     detect_candidate_signals,
+    price_precision_artifact_bytes,
+    profile_config_artifact_bytes,
     target_bars,
-    verify_profile_stream,
 )
 from market_structure_lab.research.models import (
     VALIDATION_SLOT_ROSTER,
@@ -47,12 +44,12 @@ from market_structure_lab.research.models import (
     CandidateSignal,
     ValidationSlot,
     ValidationSlotKind,
+    ValidationWorkBudget,
 )
 
 PARENT = "b" * 64
-PROFILE_CONFIG = "c" * 64
-BIN_METADATA = "d" * 64
 START = datetime(2025, 1, 1, tzinfo=UTC)
+_SERIES_TEMPORARIES: list[TemporaryDirectory[str]] = []
 
 
 def _slot(
@@ -103,8 +100,18 @@ def _bar(
     minutes = {"1h": 60, "4h": 240}[timeframe]
     timestamp = START + index * timedelta(minutes=minutes)
     source_ids = tuple(
-        hash_json("test-candidate-source-row", {"bar": index, "minute": minute})
-        for minute in range(minutes)
+        canonical_source_row_identity(row)
+        for row in _minute_rows(
+            timestamp=timestamp,
+            minutes=minutes,
+            symbol=symbol,
+            segment=segment,
+            open_=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+        )
     )
     return CanonicalAggregateBar(
         schema_version=1,
@@ -125,6 +132,41 @@ def _bar(
         source_sha256=source_rows_sha256(source_ids, identities=True),
         parent_snapshot_sha256=PARENT,
     )
+
+
+def _minute_rows(
+    *,
+    timestamp: datetime,
+    minutes: int,
+    symbol: str,
+    segment: int,
+    open_: float,
+    high: float,
+    low: float,
+    close: float,
+    volume: float,
+) -> list[dict[str, object]]:
+    ordinary_volume = volume / minutes
+    rows: list[dict[str, object]] = []
+    for minute in range(minutes):
+        rows.append(
+            {
+                "timestamp": timestamp + timedelta(minutes=minute),
+                "symbol": symbol,
+                "timeframe": "1m",
+                "open": open_ if minute == 0 else close,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": (
+                    volume - ordinary_volume * (minutes - 1)
+                    if minute == minutes - 1
+                    else ordinary_volume
+                ),
+                "segment_id": segment,
+            }
+        )
+    return rows
 
 
 def _bars(
@@ -156,38 +198,61 @@ def _iso(value: datetime) -> str:
 def _series(bars: tuple[CanonicalAggregateBar, ...]) -> VerifiedAggregateSeries:
     if not bars:
         raise ValueError("test publication requires bars")
-    rows = [bar.to_dict() for bar in bars]
-    frame = pl.DataFrame(rows)
-    buffer = BytesIO()
-    frame.write_parquet(buffer, compression="zstd", statistics=True)
-    partition_bytes = buffer.getvalue()
-    partition_sha = hashlib.sha256(partition_bytes).hexdigest()
-    partition = PartitionRecord(
-        path="part.parquet",
-        sha256=partition_sha,
-        row_count=len(bars),
-        min_timestamp=_iso(bars[0].timestamp),
-        max_timestamp=_iso(bars[-1].timestamp),
+    temporary = TemporaryDirectory(prefix="candidate-series-test-")
+    _SERIES_TEMPORARIES.append(temporary)
+    base = Path(temporary.name)
+    parent_root = base / "parent"
+    parent_root.mkdir()
+    minute_rows = [
+        row
+        for bar in bars
+        for row in _minute_rows(
+            timestamp=bar.timestamp,
+            minutes=bar.source_row_count,
+            symbol=bar.symbol,
+            segment=bar.segment_id,
+            open_=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+        )
+    ]
+    minute_frame = pl.DataFrame(
+        minute_rows,
+        schema={
+            "timestamp": pl.Datetime("us", "UTC"),
+            "symbol": pl.String,
+            "timeframe": pl.String,
+            "open": pl.Float64,
+            "high": pl.Float64,
+            "low": pl.Float64,
+            "close": pl.Float64,
+            "volume": pl.Float64,
+            "segment_id": pl.UInt64,
+        },
     )
-    source_sha = source_rows_sha256(
-        (source_id for bar in bars for source_id in bar.source_row_ids), identities=True
-    )
-    source_count = sum(bar.source_row_count for bar in bars)
-    source_minimum = bars[0].timestamp
-    source_maximum = bars[-1].bar_close - timedelta(minutes=1)
-    parent_bindings = (("source-partition.parquet", "e" * 64),)
-    selection = AggregateSourceSelectionReceipt(
-        parent_snapshot_sha256=PARENT,
-        symbol=bars[0].symbol,
-        source_timeframe="1m",
-        segment_id=bars[0].segment_id,
-        source_row_count=source_count,
-        source_bytes=1,
-        source_sha256=source_sha,
-        source_min_timestamp=_iso(source_minimum),
-        source_max_timestamp=_iso(source_maximum),
-        parent_partition_bindings=parent_bindings,
-    )
+    parent_artifacts: list[tuple[PartitionRecord, bytes]] = []
+    for date_value in minute_frame["timestamp"].dt.date().unique(maintain_order=True):
+        daily = minute_frame.filter(pl.col("timestamp").dt.date() == date_value)
+        parent_buffer = BytesIO()
+        daily.write_parquet(parent_buffer, compression="zstd", statistics=True)
+        parent_bytes = parent_buffer.getvalue()
+        parent_artifacts.append(
+            (
+                PartitionRecord(
+                    path=(
+                        f"symbol=BTCUSDT/timeframe=1m/date={date_value.isoformat()}/part.parquet"
+                    ),
+                    sha256=hashlib.sha256(parent_bytes).hexdigest(),
+                    row_count=daily.height,
+                    min_timestamp=_iso(daily["timestamp"][0]),
+                    max_timestamp=_iso(daily["timestamp"][-1]),
+                ),
+                parent_bytes,
+            )
+        )
+    parent_partitions = tuple(record for record, _ in parent_artifacts)
     identity = SnapshotIdentity(
         dataset_version="DS-CANDIDATE-TEST",
         dump_sha256="1" * 64,
@@ -196,17 +261,93 @@ def _series(bars: tuple[CanonicalAggregateBar, ...]) -> VerifiedAggregateSeries:
         config_version="canonical-test-v1",
         code_commit="3" * 40,
     )
+    parent_payload = {
+        "schema_version": 1,
+        "identity": identity.to_dict(),
+        "row_count": len(minute_rows),
+        "min_timestamp": parent_partitions[0].min_timestamp,
+        "max_timestamp": parent_partitions[-1].max_timestamp,
+        "partitions": [asdict(item) for item in parent_partitions],
+    }
+    parent_sha = hashlib.sha256(
+        json.dumps(parent_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    parent_manifest = SnapshotManifest(
+        schema_version=1,
+        identity=identity,
+        row_count=len(minute_rows),
+        min_timestamp=parent_partitions[0].min_timestamp,
+        max_timestamp=parent_partitions[-1].max_timestamp,
+        partitions=parent_partitions,
+        snapshot_sha256=parent_sha,
+    )
+    for parent_partition, parent_bytes in parent_artifacts:
+        parent_file = parent_root / parent_partition.path
+        parent_file.parent.mkdir(parents=True)
+        parent_file.write_bytes(parent_bytes)
+    (parent_root / "manifest.json").write_text(parent_manifest.to_json(), encoding="utf-8")
+    (parent_root / "_SUCCESS").write_text(f"{parent_sha}\n", encoding="utf-8")
+
+    normalized_bars = tuple(
+        replace(
+            bar,
+            source_row_ids=tuple(
+                canonical_source_row_identity(row)
+                for row in minute_rows[
+                    index * bar.source_row_count : (index + 1) * bar.source_row_count
+                ]
+            ),
+            source_sha256=source_rows_sha256(
+                minute_rows[index * bar.source_row_count : (index + 1) * bar.source_row_count]
+            ),
+            parent_snapshot_sha256=parent_sha,
+            row_sha256="",
+        )
+        for index, bar in enumerate(bars)
+    )
+    rows = [bar.to_dict() for bar in normalized_bars]
+    frame = pl.DataFrame(rows)
+    buffer = BytesIO()
+    frame.write_parquet(buffer, compression="zstd", statistics=True)
+    partition_bytes = buffer.getvalue()
+    partition_sha = hashlib.sha256(partition_bytes).hexdigest()
+    partition = PartitionRecord(
+        path="part.parquet",
+        sha256=partition_sha,
+        row_count=len(normalized_bars),
+        min_timestamp=_iso(normalized_bars[0].timestamp),
+        max_timestamp=_iso(normalized_bars[-1].timestamp),
+    )
+    source_sha = source_rows_sha256(
+        (source_id for bar in normalized_bars for source_id in bar.source_row_ids), identities=True
+    )
+    source_count = sum(bar.source_row_count for bar in normalized_bars)
+    source_minimum = normalized_bars[0].timestamp
+    source_maximum = normalized_bars[-1].bar_close - timedelta(minutes=1)
+    parent_bindings = tuple((item.path, item.sha256) for item in parent_partitions)
+    selection = AggregateSourceSelectionReceipt(
+        parent_snapshot_sha256=parent_sha,
+        symbol=normalized_bars[0].symbol,
+        source_timeframe="1m",
+        segment_id=normalized_bars[0].segment_id,
+        source_row_count=source_count,
+        source_bytes=1,
+        source_sha256=source_sha,
+        source_min_timestamp=_iso(source_minimum),
+        source_max_timestamp=_iso(source_maximum),
+        parent_partition_bindings=parent_bindings,
+    )
     manifest = AggregatePublicationManifest(
         schema_version=1,
         parent_snapshot_identity=identity,
-        parent_snapshot_sha256=PARENT,
-        symbol=bars[0].symbol,
+        parent_snapshot_sha256=parent_sha,
+        symbol=normalized_bars[0].symbol,
         source_timeframe="1m",
-        target_timeframe=bars[0].target_timeframe,
-        segment_id=bars[0].segment_id,
+        target_timeframe=normalized_bars[0].target_timeframe,
+        segment_id=normalized_bars[0].segment_id,
         continuity=CONTINUITY_ID,
         config_version="aggregate-config-v1",
-        work_budget_sha256="4" * 64,
+        work_budget_sha256=ValidationWorkBudget().sha256,
         work_demand_sha256="5" * 64,
         parent_source_selection_sha256=selection.sha256,
         parent_partition_bindings=parent_bindings,
@@ -215,9 +356,9 @@ def _series(bars: tuple[CanonicalAggregateBar, ...]) -> VerifiedAggregateSeries:
         source_sha256=source_sha,
         source_min_timestamp=_iso(source_minimum),
         source_max_timestamp=_iso(source_maximum),
-        aggregate_bar_count=len(bars),
-        min_timestamp=_iso(bars[0].timestamp),
-        max_timestamp=_iso(bars[-1].timestamp),
+        aggregate_bar_count=len(normalized_bars),
+        min_timestamp=_iso(normalized_bars[0].timestamp),
+        max_timestamp=_iso(normalized_bars[-1].timestamp),
         artifact_scope="aggregate-parquet-partitions-v1",
         max_rows_per_partition=256,
         artifact_count_limit=1,
@@ -228,14 +369,18 @@ def _series(bars: tuple[CanonicalAggregateBar, ...]) -> VerifiedAggregateSeries:
         actual_artifact_bytes=len(partition_bytes),
         partitions=(partition,),
     )
-    with TemporaryDirectory(prefix="candidate-series-test-") as temporary:
-        root = Path(temporary)
-        (root / partition.path).write_bytes(partition_bytes)
-        (root / AGGREGATE_MANIFEST_NAME).write_text(manifest.to_json(), encoding="utf-8")
-        (root / AGGREGATE_SUCCESS_NAME).write_text(
-            f"{manifest.publication_sha256}\n", encoding="utf-8"
-        )
-        return read_verified_aggregate_series(root, manifest)
+    root = base / "aggregate"
+    root.mkdir()
+    (root / partition.path).write_bytes(partition_bytes)
+    (root / AGGREGATE_MANIFEST_NAME).write_text(manifest.to_json(), encoding="utf-8")
+    (root / AGGREGATE_SUCCESS_NAME).write_text(f"{manifest.publication_sha256}\n", encoding="utf-8")
+    return read_verified_aggregate_series(
+        root,
+        expected_publication_sha256=manifest.publication_sha256,
+        parent_snapshot_directory=parent_root,
+        expected_parent_snapshot_sha256=parent_sha,
+        budget=ValidationWorkBudget(),
+    )
 
 
 def _effective_bars(slot: ValidationSlot, parameter: str) -> int:
@@ -267,14 +412,22 @@ def _parent_a_slot(slot: ValidationSlot) -> ValidationSlot:
     raise AssertionError("matching parent A Donchian slot not found")
 
 
-def _empty_profile_stream(series: VerifiedAggregateSeries) -> VerifiedProfileStream:
-    return verify_profile_stream(
+def _profile_stream(
+    series: VerifiedAggregateSeries,
+    slot: ValidationSlot,
+    *,
+    step: float = 1.0,
+    origin: float = 0.0,
+) -> VerifiedProfileStream:
+    window_hours = _effective_bars(slot, "profile_hours") * {"1h": 1, "4h": 4}[slot.timeframe]
+    profile_config = profile_config_artifact_bytes(window_hours)
+    price_precision = price_precision_artifact_bytes(series.symbol, step=step, origin=origin)
+    return build_verified_profile_stream(
         series,
-        (),
-        source_minute_publication_sha256=PARENT,
-        profile_config_sha256=PROFILE_CONFIG,
-        bin_metadata_sha256=BIN_METADATA,
-        bin_step=1.0,
+        profile_config_bytes=profile_config,
+        expected_profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
+        price_precision_bytes=price_precision,
+        expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
     )
 
 
@@ -286,7 +439,7 @@ def _definition(
     if slot.family in ("B", "E") and "parent_a_candidate" not in kwargs:
         kwargs["parent_a_candidate"] = _definition(_parent_a_slot(slot), series)
     if slot.family == "B" and "profile_stream" not in kwargs:
-        kwargs["profile_stream"] = _empty_profile_stream(series)
+        kwargs["profile_stream"] = _profile_stream(series, slot)
     return candidate_definition_for_slot(slot, series, **kwargs)  # type: ignore[arg-type]
 
 
@@ -325,6 +478,65 @@ def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin()
         signal.direction = -1  # type: ignore[misc]
 
 
+def test_arbitrary_time_signal_issuer_is_not_public() -> None:
+    assert "emit_candidate_signal" not in research_models.__all__
+    assert not hasattr(research_models, "emit_candidate_signal")
+
+
+@pytest.mark.parametrize(
+    ("feature_start", "cutoff_offset", "entry_offset"),
+    (
+        (datetime(1900, 1, 1, tzinfo=UTC), timedelta(0), timedelta(0)),
+        (START, timedelta(minutes=17), timedelta(minutes=17)),
+        (START, timedelta(0), timedelta(days=365)),
+    ),
+)
+def test_arbitrary_signal_clocks_cannot_bypass_detector_index_issuance(
+    feature_start: datetime,
+    cutoff_offset: timedelta,
+    entry_offset: timedelta,
+) -> None:
+    series = _series(_bars([100.0] * 25))
+    definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+    cutoff = series.bars[-1].bar_close
+
+    with pytest.raises(TypeError, match="seal"):
+        CandidateSignal(  # type: ignore[call-arg]
+            candidate_id=definition.candidate_id,
+            family=definition.family,
+            symbol=series.symbol,
+            timeframe=definition.timeframe,
+            direction=definition.direction,
+            feature_start=feature_start,
+            information_cutoff=cutoff + cutoff_offset,
+            legal_entry=cutoff + entry_offset,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            segment_id=series.segment_id,
+            candidate_slot_id=definition.slot.slot_id,
+        )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    (
+        ValidationSlotKind.BASELINE,
+        ValidationSlotKind.NEGATIVE_CONTROL,
+        ValidationSlotKind.ROBUSTNESS,
+        ValidationSlotKind.EXPOSURE,
+        ValidationSlotKind.CAPACITY,
+    ),
+)
+def test_non_detector_evaluation_slots_cannot_issue_candidate_definitions(
+    kind: ValidationSlotKind,
+) -> None:
+    series = _series(_bars([100.0] * 2))
+    slot = next(item for item in VALIDATION_SLOT_ROSTER if item.kind is kind)
+
+    with pytest.raises(ValueError, match="CORE or PERTURBATION"):
+        _definition(slot, series)
+
+
 def test_candidate_identity_binds_publication_segment_role_parameters_and_full_a_grid() -> None:
     bars = _bars([100.0] * 25)
     series = _series(bars)
@@ -338,14 +550,7 @@ def test_candidate_identity_binds_publication_segment_role_parameters_and_full_a
     assert _definition(slot, segment_series).candidate_id != original.candidate_id
     structure_slot = _slot("B", "value_migration_acceptance", role="structure_only", lookback=24)
     assert _definition(structure_slot, series).candidate_id != (original.candidate_id)
-    half_step = verify_profile_stream(
-        series,
-        (),
-        source_minute_publication_sha256=PARENT,
-        profile_config_sha256=PROFILE_CONFIG,
-        bin_metadata_sha256=BIN_METADATA,
-        bin_step=0.5,
-    )
+    half_step = _profile_stream(series, slot, step=0.5)
     assert _definition(slot, series, profile_stream=half_step).candidate_id != original.candidate_id
     with pytest.raises(ValueError, match="A selector grid"):
         _definition(slot, series, a_selector_grid=A_SELECTOR_GRID[:-1])
@@ -364,7 +569,7 @@ def test_all_184_adjacent_lookback_slots_have_unique_bound_candidate_identities(
     roles: Counter[tuple[str, str]] = Counter()
     for slot in perturbed:
         series = series_by_timeframe[slot.timeframe]
-        profile_stream = _empty_profile_stream(series) if slot.family == "B" else None
+        profile_stream = _profile_stream(series, slot) if slot.family == "B" else None
         definition = _definition(slot, series, profile_stream=profile_stream)
         identities.add(definition.candidate_id)
         roles[(slot.family, definition.detector_role)] += 1
@@ -439,6 +644,7 @@ def test_a_atr24_uses_prior_exact_true_ranges_and_is_long_short_symmetric(
 
     assert len(signals) == 1
     assert signals[0].direction == (1 if direction == "long" else -1)
+    assert signals[0].feature_start == bars[0].timestamp
     tied = replace(bars[-1], close=102.0 if direction == "long" else 98.0, row_sha256="")
     assert _detect(_slot("A", "atr_breakout", direction=direction), (*bars[:-1], tied)) == ()
 
@@ -453,6 +659,26 @@ def test_a_sma_and_tsmom_emit_only_nonzero_sign_transitions_after_warmup() -> No
     momentum = _detect(_slot("A", "time_series_momentum", lookback=24), _bars(momentum_closes))
     assert len(momentum) == 1
     assert momentum[0].direction == 1
+
+
+def test_a_transition_feature_start_includes_the_prior_state_input() -> None:
+    sma_shared = [100.0] * 48 + [110.0] * 24 + [100.0]
+    sma_without_transition = _bars([100.0, *sma_shared])
+    sma_with_transition = _bars([10_000.0, *sma_shared])
+    sma_slot = _slot("A", "moving_average_crossover")
+
+    assert _detect(sma_slot, sma_without_transition) == ()
+    [sma_signal] = _detect(sma_slot, sma_with_transition)
+    assert sma_signal.feature_start == sma_with_transition[0].timestamp
+
+    momentum_shared = [100.0] * 24 + [110.0, 100.0]
+    momentum_without_transition = _bars([90.0, *momentum_shared])
+    momentum_with_transition = _bars([110.0, *momentum_shared])
+    momentum_slot = _slot("A", "time_series_momentum", lookback=24)
+
+    assert _detect(momentum_slot, momentum_without_transition) == ()
+    [momentum_signal] = _detect(momentum_slot, momentum_with_transition)
+    assert momentum_signal.feature_start == momentum_with_transition[0].timestamp
 
 
 def test_warmup_gap_and_series_changes_do_not_leak_state_across_boundaries() -> None:
@@ -470,51 +696,30 @@ def test_warmup_gap_and_series_changes_do_not_leak_state_across_boundaries() -> 
         _series(tuple(bars))
 
 
-def _profile(cutoff: datetime, prices: list[float], *, window: int = 24) -> FrozenProfile:
-    binning = FixedStepBins(step=1.0, provenance=f"verified-price-precision:{BIN_METADATA}")
-    allocation = UniformAllocation()
-    snapshot = calculate_profile(
-        [
-            allocation.allocate(
-                Candle(open=price, high=price, low=price, close=price, volume=1.0), binning
-            )
-            for price in prices
-        ],
-        binning=binning,
-        allocation_id=allocation.model_id,
-        value_area_fraction=0.70,
-    )
-    return FrozenProfile(
-        information_cutoff=cutoff,
-        window_hours=window,
-        source_minute_publication_sha256=PARENT,
-        profile_config_sha256=PROFILE_CONFIG,
-        bin_metadata_sha256=BIN_METADATA,
-        segment_id=7,
-        policy="rolling",
-        snapshot=snapshot,
-    )
-
-
 def test_b_uses_t_minus_2_t_minus_1_profiles_and_same_a_cutoff_and_entry() -> None:
-    bars = _bars([100.0] * 24 + [102.0])
-    series = _series(bars)
-    a_slot = _slot("A", "donchian_breakout", lookback=24)
+    closes = [100.0] * 72 + [90.0] + [110.0] * 25
+    initial_bars = _bars(closes, volumes=[1.0] * len(closes))
+    initial_series = _series(initial_bars)
+    a_slot = _slot("A", "moving_average_crossover")
+    initial_definition = _definition(a_slot, initial_series)
+    [initial_signal] = detect_candidate_signals(initial_definition, initial_series)
+    signal_index = next(
+        index
+        for index, bar in enumerate(initial_series.bars)
+        if bar.bar_close == initial_signal.information_cutoff
+    )
+    bars = list(initial_bars)
+    bars[signal_index - 25] = replace(
+        bars[signal_index - 25], low=80.0, high=100.0, volume=1_000.0, row_sha256=""
+    )
+    bars[signal_index - 1] = replace(
+        bars[signal_index - 1], low=100.0, high=120.0, volume=1_000.0, row_sha256=""
+    )
+    series = _series(tuple(bars))
     a_definition = _definition(a_slot, series)
     [a_signal] = detect_candidate_signals(a_definition, series)
-    profiles = (
-        _profile(bars[-3].bar_close, [98.0, 99.0, 100.0]),
-        _profile(bars[-2].bar_close, [100.0, 101.0, 102.0]),
-    )
-    profile_stream = verify_profile_stream(
-        series,
-        profiles,
-        source_minute_publication_sha256=PARENT,
-        profile_config_sha256=PROFILE_CONFIG,
-        bin_metadata_sha256=BIN_METADATA,
-        bin_step=1.0,
-    )
     b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    profile_stream = _profile_stream(series, b_slot)
     b_definition = _definition(
         b_slot,
         series,
@@ -531,62 +736,119 @@ def test_b_uses_t_minus_2_t_minus_1_profiles_and_same_a_cutoff_and_entry() -> No
     assert b_signal.information_cutoff == a_signal.information_cutoff
     assert b_signal.legal_entry == a_signal.legal_entry
     assert b_signal.direction == a_signal.direction
-    assert b_signal.feature_start == profiles[0].feature_start
-    partial_stream = verify_profile_stream(
-        series,
-        profiles[:1],
-        source_minute_publication_sha256=PARENT,
-        profile_config_sha256=PROFILE_CONFIG,
-        bin_metadata_sha256=BIN_METADATA,
-        bin_step=1.0,
+    previous_profile = next(
+        profile
+        for profile in profile_stream.profiles
+        if profile.information_cutoff == series.bars[signal_index - 2].bar_close
     )
-    partial_definition = _definition(
+    assert previous_profile.feature_start == series.bars[signal_index - 25].timestamp
+    assert b_signal.feature_start == min(a_signal.feature_start, previous_profile.feature_start)
+
+
+def test_profile_stream_is_factory_computed_from_one_exact_parent_and_bin_origin() -> None:
+    series = _series(_bars([100.0] * 25))
+    slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    stream = _profile_stream(series, slot)
+    shifted_origin = _profile_stream(series, slot, origin=0.5)
+
+    assert len(stream.profiles) == 2
+    assert stream.source_row_ids == tuple(
+        source_id for bar in series.bars for source_id in bar.source_row_ids
+    )
+    assert stream.source_row_count == series.manifest.source_row_count
+    assert stream.source_sha256 == series.manifest.source_sha256
+    assert stream.bin_definition_id != shifted_origin.bin_definition_id
+    with pytest.raises(ValueError, match="frozen expectation"):
+        profile_config = profile_config_artifact_bytes(24)
+        price_precision = price_precision_artifact_bytes(series.symbol, step=1.0)
+        build_verified_profile_stream(
+            series,
+            profile_config_bytes=profile_config,
+            expected_profile_config_sha256="f" * 64,
+            price_precision_bytes=price_precision,
+            expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+        )
+    with pytest.raises(ValueError, match="canonical JSON"):
+        profile_config = profile_config_artifact_bytes(24) + b"\n"
+        price_precision = price_precision_artifact_bytes(series.symbol, step=1.0)
+        build_verified_profile_stream(
+            series,
+            profile_config_bytes=profile_config,
+            expected_profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
+            price_precision_bytes=price_precision,
+            expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+        )
+    with pytest.raises(ValueError, match="aggregate symbol"):
+        profile_config = profile_config_artifact_bytes(24)
+        price_precision = price_precision_artifact_bytes("ETHUSDT", step=1.0)
+        build_verified_profile_stream(
+            series,
+            profile_config_bytes=profile_config,
+            expected_profile_config_sha256=hashlib.sha256(profile_config).hexdigest(),
+            price_precision_bytes=price_precision,
+            expected_price_precision_sha256=hashlib.sha256(price_precision).hexdigest(),
+        )
+    impossible_snapshot = replace(
+        stream.profiles[0].snapshot,
+        bin_volumes={1_000_000: stream.profiles[0].snapshot.total_volume},
+        poc_index=1_000_000,
+        value_area_low_index=1_000_000,
+        value_area_high_index=1_000_000,
+        vwap=1_000_000.0,
+    )
+    with pytest.raises(TypeError, match="factory"):
+        replace(stream.profiles[0], snapshot=impossible_snapshot)
+    with pytest.raises(TypeError, match="factory"):
+        replace(stream.profiles[0], snapshot=shifted_origin.profiles[0].snapshot)
+    with pytest.raises((TypeError, ValueError), match="seal"):
+        replace(
+            stream,
+            profiles=(stream.profiles[0], shifted_origin.profiles[1]),
+            ordered_profile_ids=(
+                stream.profiles[0].profile_id,
+                shifted_origin.profiles[1].profile_id,
+            ),
+        )
+
+    parent_partition = (
+        series.parent_snapshot_directory / series.manifest.parent_partition_bindings[0][0]
+    )
+    parent_partition.write_bytes(parent_partition.read_bytes() + b"tamper")
+    with pytest.raises(ValueError, match="checksum|partition"):
+        _profile_stream(series, slot)
+
+
+@pytest.mark.parametrize("direction", ("long", "short"))
+def test_b_missing_profile_references_yield_no_event(direction: str) -> None:
+    breakout = 103.0 if direction == "long" else 97.0
+    series = _series(_bars([100.0] * 25 + [breakout], volumes=[0.0] * 26))
+    a_slot = _slot("A", "donchian_breakout", direction=direction, lookback=24)
+    a_definition = _definition(a_slot, series)
+    [opportunity] = detect_candidate_signals(a_definition, series)
+    b_slot = _slot(
+        "B",
+        "value_migration_acceptance",
+        role="combined_primary",
+        direction=direction,
+        lookback=24,
+    )
+    profile_stream = _profile_stream(series, b_slot)
+    b_definition = _definition(
         b_slot,
         series,
         parent_a_candidate=a_definition,
-        profile_stream=partial_stream,
+        profile_stream=profile_stream,
     )
+
     assert (
         detect_candidate_signals(
-            partial_definition,
+            b_definition,
             series,
-            a_opportunities=(a_signal,),
-            profile_stream=partial_stream,
+            a_opportunities=(opportunity,),
+            profile_stream=profile_stream,
         )
         == ()
     )
-
-
-def test_profile_stream_rejects_duplicate_cutoffs_arbitrary_provenance_and_tamper() -> None:
-    series = _series(_bars([100.0] * 25))
-    profile = _profile(series.bars[-2].bar_close, [100.0, 101.0, 102.0])
-    with pytest.raises(ValueError, match="unique"):
-        verify_profile_stream(
-            series,
-            (profile, profile),
-            source_minute_publication_sha256=PARENT,
-            profile_config_sha256=PROFILE_CONFIG,
-            bin_metadata_sha256=BIN_METADATA,
-            bin_step=1.0,
-        )
-    with pytest.raises(ValueError, match="precision metadata"):
-        replace(
-            profile,
-            snapshot=replace(
-                profile.snapshot,
-                binning=FixedStepBins(step=1.0, provenance="source=arbitrary"),
-            ),
-        )
-    stream = verify_profile_stream(
-        series,
-        (profile,),
-        source_minute_publication_sha256=PARENT,
-        profile_config_sha256=PROFILE_CONFIG,
-        bin_metadata_sha256=BIN_METADATA,
-        bin_step=1.0,
-    )
-    with pytest.raises((TypeError, ValueError), match="seal"):
-        replace(stream, ordered_profile_ids=("f" * 64,))
 
 
 def test_e_filters_a_donchian_opportunities_with_strict_prior_volume_median() -> None:
@@ -644,8 +906,8 @@ def test_subordinate_candidates_reject_flat_or_wrong_registered_a_opportunities(
     with pytest.raises(ValueError, match="exact registered parent"):
         detect_candidate_signals(e_definition, series, a_opportunities=(atr_signal,))
 
-    profile_stream = _empty_profile_stream(series)
     b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
+    profile_stream = _profile_stream(series, b_slot)
     b_definition = _definition(
         b_slot,
         series,
@@ -708,7 +970,7 @@ def test_e_definition_cannot_bypass_exact_donchian_parent_factory_gate() -> None
 def test_b_definition_cannot_bypass_exact_selector_parent_factory_gate() -> None:
     series = _series(_bars([100.0] * 26))
     b_slot = _slot("B", "value_migration_acceptance", role="combined_primary", lookback=24)
-    profile_stream = _empty_profile_stream(series)
+    profile_stream = _profile_stream(series, b_slot)
     wrong_parent_slot = next(
         slot
         for slot in VALIDATION_SLOT_ROSTER
@@ -781,8 +1043,13 @@ def test_g_exact_candidate_and_controls_use_same_next_bar_clock() -> None:
 
     candidate_signals = _detect(candidate, bars_tuple)
     assert len(candidate_signals) == 1
-    assert _detect(atr, bars_tuple)[0].legal_entry == candidate_signals[0].legal_entry
-    assert _detect(donchian, bars_tuple)[0].legal_entry == candidate_signals[0].legal_entry
+    atr_signal = _detect(atr, bars_tuple)[0]
+    donchian_signal = _detect(donchian, bars_tuple)[0]
+    assert candidate_signals[0].feature_start == bars[0].timestamp
+    assert atr_signal.feature_start == bars[2].timestamp
+    assert donchian_signal.feature_start == bars[3].timestamp
+    assert atr_signal.legal_entry == candidate_signals[0].legal_entry
+    assert donchian_signal.legal_entry == candidate_signals[0].legal_entry
 
 
 def test_g_controls_enumerate_every_legal_event_before_frozen_horizon_suppression() -> None:
@@ -823,6 +1090,7 @@ def test_d_requires_separate_confirmation_and_uses_t_plus_2_for_candidate_and_co
 
     assert signal.information_cutoff == bars[-1].bar_close
     assert signal.legal_entry == START + timedelta(hours=26)
+    assert signal.feature_start == bars[0].timestamp
     assert control_signal.legal_entry == signal.legal_entry
     no_confirmation = (*bars_tuple[:-1], replace(bars_tuple[-1], close=101.0, row_sha256=""))
     assert _detect(candidate, no_confirmation) == ()

@@ -437,6 +437,8 @@ class VerifiedAggregateSeries:
     ordered_row_sha256: tuple[str, ...]
     artifact_bindings: tuple[tuple[str, str], ...]
     series_sha256: str
+    parent_snapshot_directory: Path
+    parent_snapshot_manifest: SnapshotManifest
     seal: InitVar[object]
 
     def __post_init__(self, seal: object) -> None:
@@ -465,6 +467,8 @@ class VerifiedAggregateSeries:
         )
         if self.series_sha256 != expected_series:
             raise ValueError("verified aggregate series capability identity mismatch")
+        if self.parent_snapshot_manifest.snapshot_sha256 != self.manifest.parent_snapshot_sha256:
+            raise ValueError("verified aggregate parent capability differs from its manifest")
 
     @property
     def publication_sha256(self) -> str:
@@ -886,19 +890,69 @@ def verify_aggregate_publication(
 
 def read_verified_aggregate_series(
     directory: str | Path,
-    manifest: AggregatePublicationManifest | None = None,
+    *,
+    expected_publication_sha256: str,
+    parent_snapshot_directory: str | Path,
+    expected_parent_snapshot_sha256: str,
+    budget: ValidationWorkBudget,
 ) -> VerifiedAggregateSeries:
-    """Read exact rows only after authenticating manifest, marker, and partition bytes."""
+    """Read exact rows only against caller-pinned lineage and a hard programme budget."""
 
     root = Path(directory)
-    verify_aggregate_publication(root, manifest)
     active = read_aggregate_publication_manifest(root / AGGREGATE_MANIFEST_NAME)
-    if manifest is not None and active != manifest:
+    _require_sha256(expected_publication_sha256, "expected publication sha256")
+    _require_sha256(expected_parent_snapshot_sha256, "expected parent snapshot sha256")
+    if not isinstance(budget, ValidationWorkBudget):
+        raise TypeError("aggregate series reader requires a ValidationWorkBudget")
+    if active.publication_sha256 != expected_publication_sha256:
+        raise ValueError("aggregate publication differs from the expected publication lineage")
+    if active.parent_snapshot_sha256 != expected_parent_snapshot_sha256:
+        raise ValueError("aggregate publication differs from the expected parent snapshot lineage")
+    if active.aggregate_bar_count > budget.max_aggregate_bars:
+        raise ValidationWorkBudgetViolation(
+            "aggregate_bars", active.aggregate_bar_count, budget.max_aggregate_bars
+        )
+    if active.source_row_count > budget.max_source_rows:
+        raise ValidationWorkBudgetViolation(
+            "source_rows", active.source_row_count, budget.max_source_rows
+        )
+    if active.source_bytes > budget.max_source_bytes:
+        raise ValidationWorkBudgetViolation(
+            "source_bytes", active.source_bytes, budget.max_source_bytes
+        )
+    if active.actual_artifact_count > budget.max_artifacts:
+        raise ValidationWorkBudgetViolation(
+            "artifacts", active.actual_artifact_count, budget.max_artifacts
+        )
+    if active.actual_artifact_bytes > budget.max_artifact_bytes:
+        raise ValidationWorkBudgetViolation(
+            "artifact_bytes", active.actual_artifact_bytes, budget.max_artifact_bytes
+        )
+    if active.work_budget_sha256 != budget.sha256:
+        raise ValueError("aggregate publication work budget differs from the expected programme")
+
+    parent_root = Path(parent_snapshot_directory)
+    parent_manifest = read_snapshot_manifest(parent_root / "manifest.json")
+    if parent_manifest.snapshot_sha256 != expected_parent_snapshot_sha256:
+        raise ValueError("recorded parent snapshot differs from the expected parent lineage")
+    if parent_manifest.identity != active.parent_snapshot_identity:
+        raise ValueError("aggregate parent snapshot identity differs from the verified parent")
+    parent_bindings = {(item.path, item.sha256) for item in parent_manifest.partitions}
+    if any(binding not in parent_bindings for binding in active.parent_partition_bindings):
+        raise ValueError("aggregate parent partition binding is absent from the verified snapshot")
+    verify_snapshot(parent_root, parent_manifest)
+    if read_snapshot_manifest(parent_root / "manifest.json") != parent_manifest:
+        raise ValueError("parent snapshot manifest changed after verification")
+    verify_aggregate_publication(root, active)
+    if read_aggregate_publication_manifest(root / AGGREGATE_MANIFEST_NAME) != active:
         raise ValueError("aggregate publication manifest changed after verification")
     bars: list[CanonicalAggregateBar] = []
     expected_schema = _aggregate_frame_schema()
     for partition in active.partitions:
-        content = read_bounded_regular(root / partition.path, active.artifact_byte_limit)
+        content = read_bounded_regular(
+            root / partition.path,
+            min(active.artifact_byte_limit, budget.max_artifact_bytes),
+        )
         if hashlib.sha256(content).hexdigest() != partition.sha256:
             raise ValueError(
                 f"aggregate partition bytes differ after verification: {partition.path}"
@@ -955,6 +1009,8 @@ def read_verified_aggregate_series(
         ordered_row_sha256=ordered,
         artifact_bindings=bindings,
         series_sha256=series_sha256,
+        parent_snapshot_directory=parent_root,
+        parent_snapshot_manifest=parent_manifest,
         seal=_VERIFIED_AGGREGATE_SERIES_SEAL,
     )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import InitVar, dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import StrEnum
 from math import isfinite
 import re
@@ -638,6 +638,8 @@ class CandidateDefinition:
             raise TypeError("CandidateDefinition requires the canonical candidate factory token")
         if self.slot not in VALIDATION_SLOT_ROSTER:
             raise ValueError("candidate slot must belong to the frozen validation roster")
+        if self.slot.kind not in (ValidationSlotKind.CORE, ValidationSlotKind.PERTURBATION):
+            raise ValueError("candidate definitions require a CORE or PERTURBATION detector slot")
         _require_sha256(self.source_publication_sha256, "source_publication_sha256")
         _require_sha256(self.source_series_sha256, "source_series_sha256")
         if (
@@ -787,6 +789,8 @@ def candidate_definition_for_slot(
         raise TypeError("candidate definition requires a VerifiedAggregateSeries capability")
     if slot not in VALIDATION_SLOT_ROSTER:
         raise ValueError("candidate slot must belong to the frozen validation roster")
+    if slot.kind not in (ValidationSlotKind.CORE, ValidationSlotKind.PERTURBATION):
+        raise ValueError("candidate definitions require a CORE or PERTURBATION detector slot")
     selector_grid = () if slot.family == "A" else a_selector_grid
     if slot.family != "A" and selector_grid != FROZEN_A_SELECTOR_GRID:
         raise ValueError(
@@ -797,15 +801,16 @@ def candidate_definition_for_slot(
     profile_bin_step = None
     profile_stream_sha256 = None
     if slot.family == "B":
+        profile_bars = _candidate_parameter_bars(slot, "profile_hours")
+        window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
         if (
             not isinstance(profile_stream, VerifiedProfileStream)
             or profile_stream.aggregate_series_sha256 != series.series_sha256
+            or profile_stream.window_hours != window_hours
         ):
             raise ValueError("family B requires a matching verified profile stream")
         profile_bin_step = profile_stream.bin_step
         profile_stream_sha256 = profile_stream.stream_sha256
-        profile_bars = _candidate_parameter_bars(slot, "profile_hours")
-        window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
         profile_definition_id = (
             "rolling-1m:uniform-touched-v1:value-area=0.70:"
             f"window-hours={window_hours}:fixed-step={profile_bin_step}:"
@@ -953,43 +958,51 @@ class CandidateSignal:
         }
 
 
-def emit_candidate_signal(
+def candidate_signal_from_indices(
     definition: CandidateDefinition,
     series: object,
     *,
-    symbol: str,
-    feature_start: datetime,
-    information_cutoff: datetime,
-    legal_entry: datetime,
+    event_index: int,
+    feature_start_index: int,
+    cutoff_index: int,
 ) -> CandidateSignal:
-    """Issue a signal only for an exact verified series and registered candidate definition."""
+    """Issue a detector signal whose causal clock is derived only from verified row indices."""
 
     from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
 
     if not isinstance(series, VerifiedAggregateSeries):
-        raise TypeError("candidate signal emission requires a VerifiedAggregateSeries capability")
+        raise TypeError("candidate signal issuance requires a VerifiedAggregateSeries capability")
     if (
         definition.source_publication_sha256 != series.publication_sha256
         or definition.source_series_sha256 != series.series_sha256
         or definition.source_segment_id != series.segment_id
     ):
         raise ValueError("candidate definition is not registered to the verified aggregate series")
-    if symbol != series.symbol:
-        raise ValueError("candidate signal symbol differs from its verified aggregate series")
-    first_bar = series.bars[0]
-    bar_duration = first_bar.bar_close - first_bar.timestamp
-    cutoff_offset = information_cutoff - first_bar.bar_close
-    cutoff_index = cutoff_offset // bar_duration
     if (
-        cutoff_offset < timedelta(0)
-        or cutoff_offset % bar_duration != timedelta(0)
+        isinstance(feature_start_index, bool)
+        or isinstance(event_index, bool)
+        or isinstance(cutoff_index, bool)
+        or not isinstance(feature_start_index, int)
+        or not isinstance(event_index, int)
+        or not isinstance(cutoff_index, int)
+        or feature_start_index < 0
+        or event_index < 0
+        or cutoff_index < 0
+        or feature_start_index > cutoff_index
+        or event_index > cutoff_index
         or cutoff_index >= len(series.bars)
     ):
-        raise ValueError("candidate information cutoff is not a completed verified aggregate bar")
+        raise ValueError("candidate signal indices are outside the verified causal interval")
+    expected_cutoff_index = event_index + 1 if definition.family == "D" else event_index
+    if cutoff_index != expected_cutoff_index:
+        raise ValueError("candidate signal indices violate the frozen family clock")
+    feature_start = series.bars[feature_start_index].timestamp
+    information_cutoff = series.bars[cutoff_index].bar_close
+    legal_entry = information_cutoff
     return CandidateSignal(
         candidate_id=definition.candidate_id,
         family=definition.family,
-        symbol=symbol,
+        symbol=series.symbol,
         timeframe=definition.timeframe,
         direction=definition.direction,
         feature_start=feature_start,
@@ -1124,7 +1137,6 @@ __all__ = [
     "ValidationWorkBudgetViolation",
     "ValidationWorkDemand",
     "candidate_definition_for_slot",
-    "emit_candidate_signal",
     "evaluation_id_for_slot",
     "freeze_validation_slot_roster",
     "validation_roster_sha256",
