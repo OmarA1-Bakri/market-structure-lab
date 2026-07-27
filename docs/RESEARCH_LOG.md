@@ -125,3 +125,25 @@ evidence that the question, method, and conclusion can be reconstructed later.
 - Next Question: Do the frozen A/B/G/E/D completed-bar detectors emit exact causal signals and
   controls before outcomes exist?
 - Artifacts: Task 2 source/tests and immutable commit history ending at the checkpoint above.
+
+### 2026-07-23 - Freeze authenticated outcome-blind candidate detectors
+
+- Question: Can the preregistered A/B/G/E/D families emit causal candidate evidence without caller
+  control over clocks, detector authority, aggregate lineage, profile inputs, or comparator slots?
+- Hypothesis: None tested; this work freezes detector definitions before outcome attachment.
+- Method: Strict TDD followed by independent specification and code-quality review, with adversarial
+  attempts to forge candidate definitions, signal capabilities, profile evidence, source precision,
+  legal-entry clocks, perturbation roles, lineage, and work limits.
+- Dataset: Synthetic complete aggregate publications and deterministic profile fixtures only; no
+  outcome or final-holdout rows.
+- Metrics: The exact programme roster remains 1,104 slots. Fresh continuation verification passed
+  325 focused candidate, programme, aggregate, profile, and auction tests, plus Ruff and Mypy.
+- Results: A/G/E/D detectors issue identity-bound completed-bar candidates through detector-owned
+  capabilities. Family B fails closed until canonical snapshot publication binds an independently
+  checkpointed source price-precision artefact and authority checkpoint.
+- Conclusions: Work unit 3 freezes causal candidate evidence but validates no behaviour and estimates
+  no return. Nothing is supported, promoted, or an edge.
+- Next Question: Can immutable candidate signals receive exact next-bar outcomes and bounded path
+  evidence without altering detector identity or opening the final holdout?
+- Artifacts: Source checkpoint `4ce821a2742973967b7c3de55f234b970db0bf08` and
+  [`PHASE5_SOURCE_PRICE_PRECISION_GAP.md`](PHASE5_SOURCE_PRICE_PRECISION_GAP.md).

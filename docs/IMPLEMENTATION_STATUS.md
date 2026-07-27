@@ -563,3 +563,23 @@ Final focused evidence is 73 POSIX passes and 72 native-Windows passes with one 
 skip. The repository-wide Python run reached 1,453 passes and 8 skips; 13 PowerShell runner tests
 remain blocked only by the WSL host's signed-script policy. No candidate, outcome, final-holdout,
 strategy, or trading code was introduced.
+
+### Phase 5 work unit 3: outcome-blind candidate detectors
+
+Work unit 3 is complete and remotely verified at
+`4ce821a2742973967b7c3de55f234b970db0bf08`. The frozen A, B, G, E, and D candidate definitions now
+bind exact completed-bar clocks, detector-owned evidence identities, aggregate-publication lineage,
+feature intervals, comparator roles, parameter slots, and subordinate A opportunities before any
+outcome can be attached. Direct candidate construction and caller-minted signal capabilities are
+rejected.
+
+Independent specification and code-quality review findings were closed with regression-first
+repairs. Family B now fails closed because the current canonical snapshot identity does not yet bind
+an independently checkpointed source price-precision publication; it cannot accept caller-attested
+metadata or infer a tick size from validation data. Every configurable Task 3 work maximum is capped
+at its authoritative default while allowing smaller test or operational limits.
+
+Fresh continuation verification passed 325 focused candidate, programme, aggregate, profile, and
+auction tests. Ruff format/check, Mypy for the research and price-precision boundary, and
+`git diff --check` also passed. Local and remote SHAs matched exactly. No outcome, final-holdout,
+strategy, portfolio, or trading implementation was introduced.
