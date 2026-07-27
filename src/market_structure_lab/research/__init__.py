@@ -4,12 +4,15 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from market_structure_lab.research.candidates import CandidateSignal
+    from market_structure_lab.research.outcomes import AttachedOutcome, attach_outcome
 
 from market_structure_lab.research.models import (
     CandidateDefinition,
     EXPECTED_FAMILIES,
     VALIDATION_SLOT_ROSTER,
     ExecutionStatus,
+    OutcomeComponent,
+    OutcomePolicy,
     ScientificDecision,
     ValidationProgrammeConfig,
     ValidationSlot,
@@ -25,21 +28,31 @@ from market_structure_lab.research.models import (
 
 
 def __getattr__(name: str) -> object:
-    """Load the signal contract lazily without coupling data imports to detectors."""
+    """Load causal evidence contracts lazily without introducing data import cycles."""
 
     if name == "CandidateSignal":
         from market_structure_lab.research.candidates import CandidateSignal
 
         return CandidateSignal
+    if name in {"AttachedOutcome", "attach_outcome"}:
+        from market_structure_lab.research.outcomes import AttachedOutcome, attach_outcome
+
+        return {
+            "AttachedOutcome": AttachedOutcome,
+            "attach_outcome": attach_outcome,
+        }[name]
     raise AttributeError(name)
 
 
 __all__ = [
+    "AttachedOutcome",
     "CandidateDefinition",
     "CandidateSignal",
     "EXPECTED_FAMILIES",
     "VALIDATION_SLOT_ROSTER",
     "ExecutionStatus",
+    "OutcomeComponent",
+    "OutcomePolicy",
     "ScientificDecision",
     "ValidationProgrammeConfig",
     "ValidationSlot",
@@ -51,4 +64,5 @@ __all__ = [
     "evaluation_id_for_slot",
     "freeze_validation_slot_roster",
     "validation_roster_sha256",
+    "attach_outcome",
 ]

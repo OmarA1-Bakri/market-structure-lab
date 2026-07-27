@@ -49,6 +49,54 @@ class ScientificDecision(StrEnum):
     PROMOTED = "promoted"
 
 
+class OutcomeComponent(StrEnum):
+    """The preregistered data component on which an outcome would be read."""
+
+    DEVELOPMENT = "development"
+    FINAL_TEMPORAL = "final_temporal"
+    FINAL_ASSET = "final_asset"
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomePolicy:
+    """Frozen horizon and publication identities for one outcome attachment."""
+
+    horizon_hours: int
+    component: OutcomeComponent
+    aggregate_publication_sha256: str
+    minute_publication_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.horizon_hours, bool)
+            or not isinstance(self.horizon_hours, int)
+            or self.horizon_hours < 1
+        ):
+            raise ValueError("outcome horizon_hours must be a positive integer")
+        if not isinstance(self.component, OutcomeComponent):
+            raise TypeError("outcome component must be an OutcomeComponent")
+        _require_sha256(
+            self.aggregate_publication_sha256,
+            "outcome aggregate_publication_sha256",
+        )
+        _require_sha256(
+            self.minute_publication_sha256,
+            "outcome minute_publication_sha256",
+        )
+
+    @property
+    def sha256(self) -> str:
+        return hash_json("outcome-policy-v1", self.to_dict())
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "horizon_hours": self.horizon_hours,
+            "component": self.component.value,
+            "aggregate_publication_sha256": self.aggregate_publication_sha256,
+            "minute_publication_sha256": self.minute_publication_sha256,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationTerminalState:
     """Validated compatible execution and scientific terminal states."""
