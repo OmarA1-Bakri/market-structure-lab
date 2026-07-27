@@ -583,3 +583,24 @@ Fresh continuation verification passed 325 focused candidate, programme, aggrega
 auction tests. Ruff format/check, Mypy for the research and price-precision boundary, and
 `git diff --check` also passed. Local and remote SHAs matched exactly. No outcome, final-holdout,
 strategy, portfolio, or trading implementation was introduced.
+
+### Phase 5 work unit 4: legal outcome and path attachment
+
+Work unit 4 is complete and remotely verified at
+`7832ff862510633323467969264d18fe84b4a122`. Detector-issued signals can now attach only to the next
+contiguous aggregate-bar open and the complete authenticated one-minute `[entry, exit)` path. The
+entry minute is included, the exit instant is excluded, and the exit price is the open exactly the
+frozen number of aggregate bars after entry. Family D retains its separate completed confirmation
+bar before entry.
+
+Gross signed returns and long/short MFE/MAE are entry-notional normalised and exclude fees. Outcome
+receipts bind the unchanged signal and candidate identities, feature and label intervals, exact
+aggregate and parent-minute publication identities, ordered path digest, prices, horizon, segment,
+and policy. Caller-minted receipts, mutated signal clocks, wrong publications, missing entry/exit
+bars, gapped or altered minute paths, exit-minute inclusion, and over-budget paths reject.
+
+The final temporal and asset components remain fail-closed: this work unit does not implement or
+grant final-holdout access. Fresh verification passed 257 outcome, candidate, programme, aggregate,
+and publication tests. Ruff format/check, Mypy for the research package, lazy import smoke, explicit
+receipt-seal regression proof, and `git diff --check` passed. No real market outcome was read and no
+cost, fold, statistic, strategy, portfolio, or trading conclusion exists.

@@ -112,6 +112,7 @@ Mypy, React/Vite/TypeScript for the read-only dashboard.
 | Phase 5 work unit 1 — identities and bounds | Complete and remotely checkpointed | The exact roster/status/identity/work-budget boundary passed 77 focused tests and both independent reviews at `8ee49b1184d46ae508e82688a14a73aa76baabb1`; no outcome or holdout access exists. |
 | Phase 5 work unit 2 — aggregate publications | Complete and remotely checkpointed | Complete 1m -> 15m/1h/4h aggregation, parent-snapshot provenance, authenticated bounded spooling, cross-platform no-follow publication, and immutable success/failure receipts passed both independent reviews at `388abdfdd9fb09a888785a9c55cc2ebb7f642592`; no outcome or holdout access exists. |
 | Phase 5 work unit 3 — candidate detectors | Complete and remotely checkpointed | Authenticated completed-bar A/B/G/E/D definitions passed both independent reviews at `4ce821a2742973967b7c3de55f234b970db0bf08`; family B fails closed until snapshot publication binds independent source price-precision authority, and no outcome or holdout access exists. |
+| Phase 5 work unit 4 — legal outcomes | Complete and remotely checkpointed | Exact next-bar entry, complete `[entry, exit)` minute paths, signed returns, and side-aware MFE/MAE passed 257 focused tests at `7832ff862510633323467969264d18fe84b4a122`; final components remain inaccessible and no real outcome was read. |
 
 ## Skill and workflow routing
 

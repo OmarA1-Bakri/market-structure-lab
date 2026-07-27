@@ -147,3 +147,25 @@ evidence that the question, method, and conclusion can be reconstructed later.
   evidence without altering detector identity or opening the final holdout?
 - Artifacts: Source checkpoint `4ce821a2742973967b7c3de55f234b970db0bf08` and
   [`PHASE5_SOURCE_PRICE_PRECISION_GAP.md`](PHASE5_SOURCE_PRICE_PRECISION_GAP.md).
+
+### 2026-07-28 - Attach only exact legal gross outcomes
+
+- Question: Can a frozen detector signal receive complete gross outcome evidence without a same-bar
+  fill, shortened path, changed detector identity, wrong publication, or final-holdout access?
+- Hypothesis: None tested; this work implements and verifies the causal attachment boundary.
+- Method: Strict TDD over verified synthetic aggregate and parent-minute publications, followed by
+  adversarial signal mutation, publication substitution, path corruption, budget, receipt-minting,
+  import-order, and family D clock checks.
+- Dataset: Synthetic complete one-minute and one-hour publications only; no real market or final
+  outcome rows.
+- Metrics: 257 focused outcome, candidate, programme, aggregate, and publication tests passed.
+  Long/short signed return and MFE/MAE formulae were locked on unequal entry/exit prices and exact
+  1,440-minute 24-hour paths.
+- Results: Attachment requires the next contiguous bar open, the exact authenticated `[entry, exit)`
+  minute identities, the frozen slot horizon, and unchanged detector identity. Final components
+  reject before path iteration because programme-scoped final access is not yet implemented.
+- Conclusions: Gross outcome infrastructure is causal and bounded on synthetic evidence. No
+  candidate is supported, validated, promoted, or an edge.
+- Next Question: Can common-grid folds, interval purge/embargo, and programme-scoped atomic final
+  access be frozen without granting a final-row read?
+- Artifacts: Source checkpoint `7832ff862510633323467969264d18fe84b4a122`.
