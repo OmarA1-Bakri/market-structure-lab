@@ -322,15 +322,15 @@ Run outcomes plus candidates/aggregate tests, Ruff, Mypy, diff-check, then commi
 - Create: `src/market_structure_lab/research/splits.py`
 - Create: `tests/test_research_splits.py`
 
-- [ ] **Step 1: Write failing split and interval tests**
+- [x] **Step 1: Write failing split and interval tests**
 
 Test >=5 eligible symbols, >=730 common complete UTC days, source-conflict exclusion before row iteration, six equal chronological blocks, blocks 0–4 development, block 5 temporal holdout, common-grid symbol-order invariance, four expanding outer folds, four equal inner timestamp subblocks after frozen prefix remainder, and deterministic 20% asset holdout.
 
-- [ ] **Step 2: Test exact purge and embargo intersection edges**
+- [x] **Step 2: Test exact purge and embargo intersection edges**
 
 Feature or label overlap purges. Candidate-horizon `[T_end,T_end+horizon)` embargo excludes intersections from current and subsequent expanding training/calibration. Bind every excluded identity.
 
-- [ ] **Step 3: Implement metadata-only final-holdout capability**
+- [x] **Step 3: Implement metadata-only final-holdout capability**
 
 Freeze public metadata separately from an unforgeable factory-created access receipt:
 
@@ -360,7 +360,7 @@ before final-row iteration. Held-out symbols/block 5 remains unused.
 Mutate holdout schema, programme ID, timestamp bounds, candidate order, batch hash, and eligibility
 receipt bytes; every mutation rejects or changes the identity.
 
-- [ ] **Step 4: Run focused/static checks and commit**
+- [x] **Step 4: Run focused/static checks and commit**
 
 Run splits/outcomes tests, Ruff, Mypy, diff-check, then commit/push.
 

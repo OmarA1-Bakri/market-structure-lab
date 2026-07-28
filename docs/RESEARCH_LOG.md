@@ -169,3 +169,30 @@ evidence that the question, method, and conclusion can be reconstructed later.
 - Next Question: Can common-grid folds, interval purge/embargo, and programme-scoped atomic final
   access be frozen without granting a final-row read?
 - Artifacts: Source checkpoint `7832ff862510633323467969264d18fe84b4a122`.
+
+### 2026-07-28 - Freeze common-grid folds without opening final evidence
+
+- Question: Can nested chronological folds, interval purge/embargo, and a one-attempt final-access
+  boundary be frozen without reading a real final-holdout row?
+- Hypothesis: None tested; this work implements validation partition and access-control
+  infrastructure on synthetic metadata and paths.
+- Method: Strict TDD, bounded exploding-sequence preflights, implementer self-review, independent
+  specification/quantitative/test/code-quality review, and a red-then-green repair for a reproduced
+  string-component runtime bypass.
+- Dataset: Synthetic symbol coverage, event intervals, candidate eligibility, aggregate series, and
+  access roots only; no real final-holdout rows or outcomes.
+- Metrics: At least five eligible symbols, at least 730 complete UTC days, six equal blocks, four
+  expanding outer folds, three inner validation folds per outer fold, deterministic 20% asset
+  holdout, exact half-open purge/embargo, and one canonical durable synthetic access attempt.
+- Results: 70 focused and 366 adjacent tests passed. The repository passed 1,633 tests with 8
+  explicit skips when the unsigned-PowerShell runner module was excluded; the unfiltered run added
+  the 13 known WSL execution-policy failures. Ruff, Mypy, Pyright, package/Compose, and dashboard
+  evidence/lint/typecheck/build checks passed. The dashboard has no automated test command, and
+  `npm ci` reported four audit findings; this work unit changed no dashboard dependency file.
+- Conclusions: Split and synthetic access identities now fail closed before row iteration. This is
+  not real final access, candidate validation, promotion, or evidence of an edge.
+- Next Question: Can explicit costs, matched baselines/negative controls, weekly dependence-aware
+  bootstrap, multiplicity, and family decisions be frozen as small pure functions?
+- Artifacts: Source checkpoint `3c778503aaf826bdbfb1d4f5353353ef073f21f9`; Task 8 remains
+  responsible for real eligibility receipts, trusted access-root authority, concurrency/crash
+  consumption, and immutable VP/VR publications.

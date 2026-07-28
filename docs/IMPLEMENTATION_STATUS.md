@@ -604,3 +604,46 @@ grant final-holdout access. Fresh verification passed 257 outcome, candidate, pr
 and publication tests. Ruff format/check, Mypy for the research package, lazy import smoke, explicit
 receipt-seal regression proof, and `git diff --check` passed. No real market outcome was read and no
 cost, fold, statistic, strategy, portfolio, or trading conclusion exists.
+
+### Phase 5 work unit 5: common-grid folds and synthetic holdout capability
+
+Work unit 5 is complete and remotely verified at
+`3c778503aaf826bdbfb1d4f5353353ef073f21f9`. Eligible non-conflict symbols now freeze one exact
+common UTC grid of at least 730 complete days into six equal timestamp blocks. Blocks 0–4 remain
+development evidence, block 5 remains the untouched temporal holdout, four expanding outer folds
+contain three inner validation folds, and a deterministic 20% symbol partition remains the asset
+holdout. BTCUSDT, ETHUSDT, source-conflict, incompatible, incomplete, and under-covered symbols
+cannot pad the eligibility gate or move the common time boundaries.
+
+Exact half-open feature and label overlap is purged. Candidate-horizon embargo intervals remain
+excluded from the current and subsequent expanding folds, and every retained, purged, embargoed,
+and protected prior-embargo identity is bound into deterministic evidence. Work budgets reject
+oversized coverage, event, and final-batch sequences before reading them.
+
+The final batch is metadata only. It binds the exact split, timeframe, holdout bounds, development
+and asset-holdout symbols, every eligibility decision and receipt, and every-and-only eligible
+candidate in A/B/G/E/D then ID order. Synthetic access writes one canonical no-follow durable
+attempt record before any outcome path can be read. Verification rejects forged capabilities,
+changed records, wrong programmes/batches/candidates, string-coerced components, symbol/timeframe
+substitution, and temporal/asset interval crossover before row iteration.
+
+Fresh verification passed 70 focused split/outcome tests, 366 adjacent research/data tests, and
+1,633 repository tests with 8 explicit skips when the host-blocked PowerShell runner module was
+excluded. The unfiltered repository run reached the same 1,633 passes and 8 skips plus 13 known
+failures because the WSL host refuses unsigned temporary PowerShell scripts. Ruff format/check,
+Mypy across 91 source files, Pyright for the touched boundary, locked sync, package build, Compose
+configuration, dashboard evidence/lint/typecheck/build, and diff-check passed. The dashboard has no
+automated test command; `npm ci` also reported four existing audit findings (two moderate and two
+high). This Python-only work unit changed no dashboard dependency file and did not auto-remediate
+those findings.
+
+Implementer self-review, independent specification review, independent quantitative review,
+independent test review, and independent code-quality review are complete. The code-quality review
+first reproduced a `StrEnum` runtime branch bypass; a red-then-green regression now requires an
+actual `OutcomeComponent` before component dispatch.
+
+This capability remains synthetic-only. No real final-holdout row or outcome was accessed.
+Candidate-eligibility receipt authority, the trusted programme-scoped access root, process/thread
+race proof, crash-attempt consumption, and immutable VP/VR receipts remain explicit Task 8
+obligations. No cost, statistical, validation, promotion, strategy, portfolio, execution, leverage,
+paper-trading, or live-trading claim exists.
