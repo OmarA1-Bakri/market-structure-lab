@@ -7,7 +7,7 @@ from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from math import isfinite
 import re
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import CanonicalAggregateBar
@@ -28,8 +28,12 @@ from market_structure_lab.research.models import (
     ValidationWorkDemand,
 )
 
+if TYPE_CHECKING:
+    from market_structure_lab.research.splits import VerifiedFinalAccess
+
 _ATTACHED_OUTCOME_SEAL = object()
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_PROGRAMME_ID = re.compile(r"^VP-[a-f0-9]{64}$")
 
 
 class FinalHoldoutAccessRequired(PermissionError):
@@ -66,7 +70,10 @@ class AttachedOutcome:
     minute_publication_sha256: str
     segment_id: int
     outcome_policy_sha256: str
-    seal: InitVar[object]
+    programme_id: str | None = None
+    final_batch_sha256: str | None = None
+    final_access_receipt_sha256: str | None = None
+    seal: InitVar[object] = None
 
     def __post_init__(self, seal: object) -> None:
         if seal is not _ATTACHED_OUTCOME_SEAL:
@@ -141,6 +148,24 @@ class AttachedOutcome:
             "outcome_policy_sha256",
         ):
             _require_sha256(getattr(self, name), name)
+        final_values = (
+            self.programme_id,
+            self.final_batch_sha256,
+            self.final_access_receipt_sha256,
+        )
+        if any(value is not None for value in final_values):
+            if not all(value is not None for value in final_values):
+                raise ValueError("final outcome access identity is incomplete")
+            if (
+                not isinstance(self.programme_id, str)
+                or _PROGRAMME_ID.fullmatch(self.programme_id) is None
+            ):
+                raise ValueError("final outcome programme identity is invalid")
+            _require_sha256(self.final_batch_sha256, "final_batch_sha256")
+            _require_sha256(
+                self.final_access_receipt_sha256,
+                "final_access_receipt_sha256",
+            )
         if (
             isinstance(self.segment_id, bool)
             or not isinstance(self.segment_id, int)
@@ -154,7 +179,7 @@ class AttachedOutcome:
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "signal_id": self.signal_id,
             "candidate_id": self.candidate_id,
             "family": self.family,
@@ -181,6 +206,11 @@ class AttachedOutcome:
             "segment_id": self.segment_id,
             "outcome_policy_sha256": self.outcome_policy_sha256,
         }
+        if self.programme_id is not None:
+            payload["programme_id"] = self.programme_id
+            payload["final_batch_sha256"] = self.final_batch_sha256
+            payload["final_access_receipt_sha256"] = self.final_access_receipt_sha256
+        return payload
 
 
 def attach_outcome(
@@ -189,6 +219,8 @@ def attach_outcome(
     minute_path: Iterable[Mapping[str, object]],
     policy: OutcomePolicy,
     budget: ValidationWorkBudget,
+    *,
+    final_access: VerifiedFinalAccess | None = None,
 ) -> AttachedOutcome:
     """Attach one exact `[entry, exit)` outcome without changing detector identity."""
 
@@ -202,14 +234,34 @@ def attach_outcome(
         raise TypeError("outcome attachment requires an OutcomePolicy")
     if not isinstance(budget, ValidationWorkBudget):
         raise TypeError("outcome attachment requires a ValidationWorkBudget")
-    if policy.component is not OutcomeComponent.DEVELOPMENT:
-        raise FinalHoldoutAccessRequired(
-            "final-holdout outcome attachment requires programme-scoped verified access"
-        )
+    _verify_outcome_policy(policy)
     _validate_publication_binding(signal, aggregate_bars, policy)
     slot = _signal_slot(signal)
     if policy.horizon_hours != slot.horizon_hours:
         raise ValueError("outcome horizon differs from the frozen candidate slot")
+    if policy.component is OutcomeComponent.DEVELOPMENT:
+        if final_access is not None:
+            raise ValueError("development outcome cannot consume final access")
+    else:
+        if final_access is None:
+            raise FinalHoldoutAccessRequired(
+                "final-holdout outcome attachment requires programme-scoped verified access"
+            )
+        if policy.programme_id is None or policy.final_batch_sha256 is None:
+            raise ValueError("final outcome policy must bind its programme and final batch")
+        from market_structure_lab.research.splits import verify_final_access
+
+        verify_final_access(
+            final_access,
+            programme_id=policy.programme_id,
+            batch_sha256=policy.final_batch_sha256,
+            candidate_id=signal.candidate_id,
+            component=policy.component,
+            symbol=signal.symbol,
+            timeframe=signal.timeframe,
+            label_start=signal.legal_entry,
+            label_end=signal.legal_entry + timedelta(hours=policy.horizon_hours),
+        )
 
     target_minutes = target_timeframe_minutes(signal.timeframe)
     horizon_minutes = policy.horizon_hours * 60
@@ -291,8 +343,26 @@ def attach_outcome(
         minute_publication_sha256=aggregate_bars.parent_snapshot_manifest.snapshot_sha256,
         segment_id=signal.segment_id,
         outcome_policy_sha256=policy.sha256,
+        programme_id=policy.programme_id,
+        final_batch_sha256=policy.final_batch_sha256,
+        final_access_receipt_sha256=(
+            final_access.access_receipt_sha256 if final_access is not None else None
+        ),
         seal=_ATTACHED_OUTCOME_SEAL,
     )
+
+
+def _verify_outcome_policy(policy: OutcomePolicy) -> None:
+    canonical = OutcomePolicy(
+        horizon_hours=policy.horizon_hours,
+        component=policy.component,
+        aggregate_publication_sha256=policy.aggregate_publication_sha256,
+        minute_publication_sha256=policy.minute_publication_sha256,
+        programme_id=policy.programme_id,
+        final_batch_sha256=policy.final_batch_sha256,
+    )
+    if policy != canonical:
+        raise ValueError("outcome policy differs from its canonical fields")
 
 
 def _validate_publication_binding(

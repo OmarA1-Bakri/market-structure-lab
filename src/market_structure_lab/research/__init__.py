@@ -5,6 +5,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from market_structure_lab.research.candidates import CandidateSignal
     from market_structure_lab.research.outcomes import AttachedOutcome, attach_outcome
+    from market_structure_lab.research.splits import (
+        CommonGridSplit,
+        FinalHoldoutBatch,
+        VerifiedFinalAccess,
+        freeze_common_grid_split,
+        freeze_final_batch,
+    )
 
 from market_structure_lab.research.models import (
     CandidateDefinition,
@@ -41,6 +48,28 @@ def __getattr__(name: str) -> object:
             "AttachedOutcome": AttachedOutcome,
             "attach_outcome": attach_outcome,
         }[name]
+    if name in {
+        "CommonGridSplit",
+        "FinalHoldoutBatch",
+        "VerifiedFinalAccess",
+        "freeze_common_grid_split",
+        "freeze_final_batch",
+    }:
+        from market_structure_lab.research.splits import (
+            CommonGridSplit,
+            FinalHoldoutBatch,
+            VerifiedFinalAccess,
+            freeze_common_grid_split,
+            freeze_final_batch,
+        )
+
+        return {
+            "CommonGridSplit": CommonGridSplit,
+            "FinalHoldoutBatch": FinalHoldoutBatch,
+            "VerifiedFinalAccess": VerifiedFinalAccess,
+            "freeze_common_grid_split": freeze_common_grid_split,
+            "freeze_final_batch": freeze_final_batch,
+        }[name]
     raise AttributeError(name)
 
 
@@ -48,9 +77,11 @@ __all__ = [
     "AttachedOutcome",
     "CandidateDefinition",
     "CandidateSignal",
+    "CommonGridSplit",
     "EXPECTED_FAMILIES",
     "VALIDATION_SLOT_ROSTER",
     "ExecutionStatus",
+    "FinalHoldoutBatch",
     "OutcomeComponent",
     "OutcomePolicy",
     "ScientificDecision",
@@ -61,8 +92,11 @@ __all__ = [
     "ValidationWorkBudget",
     "ValidationWorkBudgetViolation",
     "ValidationWorkDemand",
+    "VerifiedFinalAccess",
     "evaluation_id_for_slot",
     "freeze_validation_slot_roster",
+    "freeze_common_grid_split",
+    "freeze_final_batch",
     "validation_roster_sha256",
     "attach_outcome",
 ]

@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
 
-from market_structure_lab.core.identity import canonical_json
+from market_structure_lab.core.identity import canonical_json, hash_json
 from market_structure_lab.data.aggregate_bars import (
     canonical_source_row_identity,
     source_rows_sha256,
@@ -41,13 +42,43 @@ from market_structure_lab.research.outcomes import (
     FinalHoldoutAccessRequired,
     attach_outcome,
 )
+from market_structure_lab.research.splits import (
+    CandidateEligibility,
+    CommonGridSplit,
+    SymbolCoverage,
+    attempt_final_access,
+    freeze_common_grid_split,
+    freeze_final_batch,
+)
 
 START = datetime(2025, 1, 1, tzinfo=UTC)
+PROGRAMME_ID = f"VP-{'1' * 64}"
 
 
 class ExplodingIterable:
     def __iter__(self):
         raise AssertionError("minute path was iterated before admission")
+
+
+def _holdout_split() -> CommonGridSplit:
+    common_start = START - timedelta(days=615)
+    coverages = tuple(
+        SymbolCoverage(
+            symbol=symbol,
+            complete_start=common_start,
+            complete_end=common_start + timedelta(days=738),
+            source_conflict=False,
+            mapping_compatible=True,
+            coverage_sha256=hash_json("test-outcome-coverage", symbol),
+        )
+        for symbol in ("ADAUSDT", "APTUSDT", "DOGEUSDT", "SOLUSDT", "XRPUSDT")
+    )
+    return freeze_common_grid_split(
+        programme_id=PROGRAMME_ID,
+        coverages=coverages,
+        timeframe="1h",
+        budget=ValidationWorkBudget(),
+    )
 
 
 def _slot(direction: str) -> ValidationSlot:
@@ -151,9 +182,11 @@ def _series(
     rows = _minute_rows(
         hourly if hourly is not None else _hourly(direction, include_exit=include_exit)
     )
+    schema = pl.Schema(CANONICAL_SCHEMA)
+    schema["segment_id"] = pl.UInt64
     frame = pl.DataFrame(
         rows,
-        schema=pl.Schema({**dict(CANONICAL_SCHEMA), "segment_id": pl.UInt64}),
+        schema=schema,
     )
     source = frame.drop("segment_id")
     snapshot_root = tmp_path / "snapshot"
@@ -225,7 +258,7 @@ def _policy(series: VerifiedAggregateSeries) -> OutcomePolicy:
 def _path(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     entry = START + timedelta(hours=25)
     exit_ = entry + timedelta(hours=24)
-    return [row for row in rows if entry <= row["timestamp"] < exit_]
+    return [row for row in rows if entry <= cast(datetime, row["timestamp"]) < exit_]
 
 
 def _path_for(
@@ -235,7 +268,7 @@ def _path_for(
     horizon_hours: int,
 ) -> list[dict[str, object]]:
     exit_ = entry + timedelta(hours=horizon_hours)
-    return [row for row in rows if entry <= row["timestamp"] < exit_]
+    return [row for row in rows if entry <= cast(datetime, row["timestamp"]) < exit_]
 
 
 @pytest.mark.parametrize(
@@ -397,9 +430,110 @@ def test_path_budget_and_final_holdout_guard_reject_before_iteration(tmp_path: P
             signal,
             series,
             ExplodingIterable(),
-            replace(policy, component=OutcomeComponent.FINAL_TEMPORAL),
+            replace(
+                policy,
+                component=OutcomeComponent.FINAL_TEMPORAL,
+                programme_id=PROGRAMME_ID,
+                final_batch_sha256="8" * 64,
+            ),
             ValidationWorkBudget(),
         )
+
+
+def test_final_outcome_policy_requires_complete_programme_batch_identity(tmp_path: Path) -> None:
+    series, _ = _series(tmp_path)
+    policy = _policy(series)
+
+    with pytest.raises(ValueError, match="programme.*batch|batch.*programme"):
+        replace(policy, component=OutcomeComponent.FINAL_TEMPORAL)
+    with pytest.raises(ValueError, match="programme.*batch|batch.*programme"):
+        replace(
+            policy,
+            component=OutcomeComponent.FINAL_TEMPORAL,
+            programme_id=PROGRAMME_ID,
+        )
+    with pytest.raises(ValueError, match="programme.*batch|batch.*programme"):
+        replace(
+            policy,
+            component=OutcomeComponent.FINAL_TEMPORAL,
+            final_batch_sha256="8" * 64,
+        )
+
+
+def test_final_outcome_requires_exact_atomic_programme_batch_before_path_iteration(
+    tmp_path: Path,
+) -> None:
+    series, rows = _series(tmp_path)
+    signal = _signal(series, 1)
+    batch = freeze_final_batch(
+        programme_id=PROGRAMME_ID,
+        split=_holdout_split(),
+        eligibilities=(
+            CandidateEligibility(
+                programme_id=PROGRAMME_ID,
+                candidate_id=signal.candidate_id,
+                family=signal.family,
+                eligible=True,
+                eligibility_receipt_sha256="9" * 64,
+            ),
+        ),
+        budget=ValidationWorkBudget(),
+    )
+    access = attempt_final_access(batch, access_root=tmp_path)
+    policy = replace(
+        _policy(series),
+        component=OutcomeComponent.FINAL_TEMPORAL,
+        programme_id=PROGRAMME_ID,
+        final_batch_sha256=batch.batch_sha256,
+    )
+
+    with pytest.raises(FinalHoldoutAccessRequired):
+        attach_outcome(
+            signal,
+            series,
+            ExplodingIterable(),
+            policy,
+            ValidationWorkBudget(),
+        )
+    with pytest.raises(ValueError, match="development.*final access"):
+        attach_outcome(
+            signal,
+            series,
+            ExplodingIterable(),
+            _policy(series),
+            ValidationWorkBudget(),
+            final_access=access,
+        )
+    with pytest.raises(ValueError, match="batch"):
+        attach_outcome(
+            signal,
+            series,
+            ExplodingIterable(),
+            replace(policy, final_batch_sha256="8" * 64),
+            ValidationWorkBudget(),
+            final_access=access,
+        )
+    with pytest.raises(ValueError, match="asset-holdout symbol"):
+        attach_outcome(
+            signal,
+            series,
+            ExplodingIterable(),
+            replace(policy, component=OutcomeComponent.FINAL_ASSET),
+            ValidationWorkBudget(),
+            final_access=access,
+        )
+
+    outcome = attach_outcome(
+        signal,
+        series,
+        _path(rows),
+        policy,
+        ValidationWorkBudget(),
+        final_access=access,
+    )
+
+    assert outcome.signal_id == signal.signal_id
+    assert outcome.candidate_id == signal.candidate_id
 
 
 def test_outcome_attachment_cannot_change_detector_identity(tmp_path: Path) -> None:
@@ -448,14 +582,19 @@ def test_outcome_policy_and_receipt_are_identity_bound_and_not_caller_mintable(
             {
                 policy.sha256,
                 replace(policy, horizon_hours=8).sha256,
-                replace(policy, component=OutcomeComponent.FINAL_ASSET).sha256,
+                replace(
+                    policy,
+                    component=OutcomeComponent.FINAL_ASSET,
+                    programme_id=PROGRAMME_ID,
+                    final_batch_sha256="8" * 64,
+                ).sha256,
                 replace(policy, minute_publication_sha256="f" * 64).sha256,
             }
         )
         == 4
     )
     with pytest.raises(TypeError, match="seal"):
-        AttachedOutcome(**outcome.to_dict(), seal=object())
+        replace(outcome, seal=object())
 
 
 def test_outcome_api_is_available_from_the_narrow_research_boundary() -> None:

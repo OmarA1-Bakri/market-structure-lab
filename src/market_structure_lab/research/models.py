@@ -22,6 +22,7 @@ _IMPLEMENTATION_PLAN_EVIDENCE = "6da307a0d4756c61ddcabdf01f00d828afb55d7e"
 _IMPLEMENTATION_PLAN_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111"
 _GIT_SHA = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_PROGRAMME_ID = re.compile(r"^VP-[a-f0-9]{64}$")
 _CANDIDATE_DEFINITION_FACTORY_TOKEN = object()
 
 
@@ -65,6 +66,8 @@ class OutcomePolicy:
     component: OutcomeComponent
     aggregate_publication_sha256: str
     minute_publication_sha256: str
+    programme_id: str | None = None
+    final_batch_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -83,18 +86,32 @@ class OutcomePolicy:
             self.minute_publication_sha256,
             "outcome minute_publication_sha256",
         )
+        if self.component is OutcomeComponent.DEVELOPMENT:
+            if self.programme_id is not None or self.final_batch_sha256 is not None:
+                raise ValueError("development outcome policy cannot bind final access")
+        else:
+            if self.programme_id is None or self.final_batch_sha256 is None:
+                raise ValueError("final outcome policy must bind programme and batch identities")
+            if _PROGRAMME_ID.fullmatch(self.programme_id) is None:
+                raise ValueError("final outcome programme_id must be a VP identity")
+            _require_sha256(self.final_batch_sha256, "final_batch_sha256")
 
     @property
     def sha256(self) -> str:
         return hash_json("outcome-policy-v1", self.to_dict())
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "horizon_hours": self.horizon_hours,
             "component": self.component.value,
             "aggregate_publication_sha256": self.aggregate_publication_sha256,
             "minute_publication_sha256": self.minute_publication_sha256,
         }
+        if self.programme_id is not None:
+            payload["programme_id"] = self.programme_id
+        if self.final_batch_sha256 is not None:
+            payload["final_batch_sha256"] = self.final_batch_sha256
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
