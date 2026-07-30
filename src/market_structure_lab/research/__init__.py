@@ -13,6 +13,18 @@ if TYPE_CHECKING:
         freeze_final_batch,
     )
 
+    from market_structure_lab.research.validation import (
+        CandidatePrimitiveCase,
+        CostApplicationCase,
+        DevelopmentOutcomeCase,
+        ProgrammePreflightMetadata,
+        SlotLifecycleEvidence,
+        ValidationProgrammeResult,
+        ValidationProgrammeSources,
+        VerifiedDevelopmentEvidence,
+        freeze_development_evidence,
+        run_validation_programme,
+    )
 from market_structure_lab.research.models import (
     CandidateDefinition,
     EXPECTED_FAMILIES,
@@ -70,6 +82,44 @@ def __getattr__(name: str) -> object:
             "freeze_common_grid_split": freeze_common_grid_split,
             "freeze_final_batch": freeze_final_batch,
         }[name]
+
+    if name in {
+        "CostApplicationCase",
+        "CandidatePrimitiveCase",
+        "DevelopmentOutcomeCase",
+        "ProgrammePreflightMetadata",
+        "SlotLifecycleEvidence",
+        "ValidationProgrammeResult",
+        "ValidationProgrammeSources",
+        "VerifiedDevelopmentEvidence",
+        "freeze_development_evidence",
+        "run_validation_programme",
+    }:
+        from market_structure_lab.research.validation import (
+            CandidatePrimitiveCase,
+            ProgrammePreflightMetadata,
+            CostApplicationCase,
+            DevelopmentOutcomeCase,
+            SlotLifecycleEvidence,
+            ValidationProgrammeResult,
+            ValidationProgrammeSources,
+            VerifiedDevelopmentEvidence,
+            freeze_development_evidence,
+            run_validation_programme,
+        )
+
+        return {
+            "CandidatePrimitiveCase": CandidatePrimitiveCase,
+            "CostApplicationCase": CostApplicationCase,
+            "DevelopmentOutcomeCase": DevelopmentOutcomeCase,
+            "ProgrammePreflightMetadata": ProgrammePreflightMetadata,
+            "SlotLifecycleEvidence": SlotLifecycleEvidence,
+            "ValidationProgrammeResult": ValidationProgrammeResult,
+            "ValidationProgrammeSources": ValidationProgrammeSources,
+            "VerifiedDevelopmentEvidence": VerifiedDevelopmentEvidence,
+            "freeze_development_evidence": freeze_development_evidence,
+            "run_validation_programme": run_validation_programme,
+        }[name]
     raise AttributeError(name)
 
 
@@ -99,4 +149,14 @@ __all__ = [
     "freeze_final_batch",
     "validation_roster_sha256",
     "attach_outcome",
+    "CostApplicationCase",
+    "CandidatePrimitiveCase",
+    "DevelopmentOutcomeCase",
+    "ProgrammePreflightMetadata",
+    "SlotLifecycleEvidence",
+    "ValidationProgrammeResult",
+    "ValidationProgrammeSources",
+    "VerifiedDevelopmentEvidence",
+    "freeze_development_evidence",
+    "run_validation_programme",
 ]

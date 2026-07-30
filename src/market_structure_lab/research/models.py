@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from enum import StrEnum
 from math import isfinite
 import re
+from types import MappingProxyType
 from typing import cast
 
 from market_structure_lab.core.identity import evaluation_id, hash_json, programme_id
@@ -29,6 +30,24 @@ _CANDIDATE_DEFINITION_FACTORY_TOKEN = object()
 def _require_sha256(value: object, label: str) -> None:
     if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
         raise ValueError(f"{label} must be a lower-case SHA-256")
+
+
+def _freeze_config_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_config_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_config_value(item) for item in value)
+    return value
+
+
+def _copy_config_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _copy_config_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_copy_config_value(item) for item in value]
+    return value
 
 
 class ExecutionStatus(StrEnum):
@@ -1025,6 +1044,9 @@ class ValidationProgrammeConfig:
     families: tuple[str, ...]
     roster: tuple[ValidationSlot, ...]
     work_budget: ValidationWorkBudget
+    _roster_sha256: str = field(init=False, repr=False, compare=False)
+    _config_dict: Mapping[str, object] = field(init=False, repr=False, compare=False)
+    _config_sha256: str = field(init=False, repr=False, compare=False)
     _programme_id: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1069,17 +1091,54 @@ class ValidationProgrammeConfig:
         if not isinstance(self.work_budget, ValidationWorkBudget):
             raise TypeError("validation work budget must be a ValidationWorkBudget")
         self.work_budget._validate_authoritative_ceilings()
+        roster_sha256 = validation_roster_sha256(self.roster)
+        object.__setattr__(self, "_roster_sha256", roster_sha256)
+        object.__setattr__(
+            self,
+            "_config_dict",
+            {
+                "task14_closeout_commit": self.task14_closeout_commit,
+                "task14_evidence_commit": self.task14_evidence_commit,
+                "task15_plan_commit": self.task15_plan_commit,
+                "task15_evidence_commit": self.task15_evidence_commit,
+                "implementation_plan_checkpoint": self.implementation_plan_checkpoint,
+                "implementation_plan_evidence_commit": self.implementation_plan_evidence_commit,
+                "implementation_plan_document_sha256": self.implementation_plan_document_sha256,
+                "code_commit": self.code_commit,
+                "lockfile_sha256": self.lockfile_sha256,
+                "dataset_sha256": self.dataset_sha256,
+                "cost_policy_sha256": self.cost_policy_sha256,
+                "control_policy_sha256": self.control_policy_sha256,
+                "split_sha256": self.split_sha256,
+                "profile_config_sha256": self.profile_config_sha256,
+                "source_price_precision_sha256": self.source_price_precision_sha256,
+                "families": self.families,
+                "roster": tuple(_freeze_config_value(slot.to_dict()) for slot in self.roster),
+                "roster_sha256": roster_sha256,
+                "work_budget": _freeze_config_value(self.work_budget.to_dict()),
+                "work_budget_sha256": self.work_budget.sha256,
+            },
+        )
+        object.__setattr__(
+            self, "_config_sha256", hash_json("validation-programme-config", self.to_dict())
+        )
         object.__setattr__(self, "_programme_id", programme_id(self.to_dict()))
 
     @property
     def sha256(self) -> str:
-        return hash_json("validation-programme-config", self.to_dict())
+        return self._config_sha256
+
+    @property
+    def roster_sha256(self) -> str:
+        return self._roster_sha256
 
     @property
     def programme_id(self) -> str:
         return self._programme_id
 
     def to_dict(self) -> dict[str, object]:
+        raw_roster = cast(tuple[Mapping[str, object], ...], self._config_dict["roster"])
+        raw_work_budget = cast(Mapping[str, int], self._config_dict["work_budget"])
         return {
             "task14_closeout_commit": self.task14_closeout_commit,
             "task14_evidence_commit": self.task14_evidence_commit,
@@ -1097,10 +1156,10 @@ class ValidationProgrammeConfig:
             "profile_config_sha256": self.profile_config_sha256,
             "source_price_precision_sha256": self.source_price_precision_sha256,
             "families": list(self.families),
-            "roster": [slot.to_dict() for slot in self.roster],
-            "roster_sha256": validation_roster_sha256(self.roster),
-            "work_budget": self.work_budget.to_dict(),
-            "work_budget_sha256": self.work_budget.sha256,
+            "roster": [cast(dict[str, object], _copy_config_value(item)) for item in raw_roster],
+            "roster_sha256": self._roster_sha256,
+            "work_budget": dict(raw_work_budget),
+            "work_budget_sha256": self._config_dict["work_budget_sha256"],
         }
 
 

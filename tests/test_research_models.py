@@ -288,6 +288,25 @@ def test_programme_config_binds_lineage_code_data_policies_roster_and_budget() -
     assert reduced.to_dict()["work_budget_sha256"] == reduced_profile_budget.sha256
 
 
+def test_programme_config_cached_dict_is_deep_independent_from_to_dict_mutation() -> None:
+    config = _config()
+    before = config.to_dict()
+    mutated = config.to_dict()
+    roster = mutated["roster"]
+    assert isinstance(roster, list)
+    first_slot = roster[0]
+    assert isinstance(first_slot, dict)
+    parameters = first_slot["parameters"]
+    assert isinstance(parameters, list)
+    first_parameter = parameters[0]
+    assert isinstance(first_parameter, list)
+    first_parameter[1] = "mutated"
+
+    assert config.to_dict() == before
+    assert config.sha256 == research_models.hash_json("validation-programme-config", before)
+    assert config.programme_id == research_models.programme_id(before)
+
+
 def test_programme_identity_is_frozen_once_for_repeated_evaluation_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

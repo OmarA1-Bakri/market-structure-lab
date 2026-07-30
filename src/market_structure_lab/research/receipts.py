@@ -12,6 +12,7 @@ import stat
 from types import MappingProxyType
 import uuid
 import weakref
+from typing import cast
 
 from market_structure_lab.core.identity import hash_json as canonical_hash_json
 from market_structure_lab.core.artifact_io import (
@@ -59,6 +60,10 @@ _VERIFIED_PROGRAMME_RECEIPT_OBJECTS: dict[
 _ISSUED_FINAL_ELIGIBILITY_OBJECTS: dict[
     int, tuple[weakref.ReferenceType[FinalCandidateEligibilityReceipt], str, bytes]
 ] = {}
+_VALIDATION_SLOT_BY_ID: dict[str, ValidationSlot] = {
+    slot.slot_id: slot for slot in VALIDATION_SLOT_ROSTER
+}
+_VALIDATION_ROSTER_SHA256 = validation_roster_sha256(VALIDATION_SLOT_ROSTER)
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -167,6 +172,16 @@ class ReceiptPublication:
 
     path: Path
     receipt: ProgrammeReceipt | EvaluationReceipt
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationReceiptRequest:
+    """Bounded request to publish one immutable VR attempt in a batch."""
+
+    slot: ValidationSlot
+    terminal_state: ValidationTerminalState
+    attempt: int
+    artifacts: Mapping[str, bytes | str] | None = None
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -407,7 +422,159 @@ def publish_evaluation_receipt(
 ) -> ReceiptPublication:
     """Atomically publish one immutable VR attempt receipt."""
 
-    payloads = _artifact_payloads(artifacts or {})
+    directory_name, payloads, receipt = _evaluation_publication_payloads(
+        config,
+        slot=slot,
+        terminal_state=terminal_state,
+        attempt=attempt,
+        artifacts=artifacts or {},
+    )
+    path = _publish_payloads(
+        output_root,
+        directory_name,
+        payloads,
+        expected_receipt=receipt,
+        config=config,
+        maximum_total_bytes=maximum_total_bytes,
+        maximum_entries=maximum_entries,
+    )
+    verified = verify_evaluation_receipt(path, config=config)
+    return ReceiptPublication(path=path, receipt=verified)
+
+
+def publish_evaluation_receipt_batch(
+    config: ValidationProgrammeConfig,
+    *,
+    requests: Sequence[EvaluationReceiptRequest],
+    output_root: Path,
+    maximum_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES,
+    maximum_entries: int = _MAX_FILES,
+) -> tuple[ReceiptPublication, ...]:
+    """Publish VR attempt receipts as one bounded staging batch."""
+
+    _require_config(config)
+    if isinstance(maximum_total_bytes, bool) or maximum_total_bytes < 1:
+        raise ValueError("maximum_total_bytes must be positive")
+    if isinstance(maximum_entries, bool) or maximum_entries < 1:
+        raise ValueError("maximum_entries must be positive")
+    if not isinstance(requests, Sequence):
+        raise TypeError("evaluation receipt batch requests must be a Sequence")
+    request_count = len(requests)
+    if request_count > config.work_budget.max_evaluations:
+        raise ValueError("evaluation receipt batch exceeds the config evaluation budget")
+    if request_count == 0:
+        return ()
+    request_tuple = tuple(requests)
+
+    prepared: list[tuple[str, dict[str, bytes], EvaluationReceipt]] = []
+    seen_directories: set[str] = set()
+    for request in request_tuple:
+        if not isinstance(request, EvaluationReceiptRequest):
+            raise TypeError("evaluation receipt batch requires EvaluationReceiptRequest items")
+        directory_name, payloads, receipt = _evaluation_publication_payloads(
+            config,
+            slot=request.slot,
+            terminal_state=request.terminal_state,
+            attempt=request.attempt,
+            artifacts=request.artifacts or {},
+        )
+        if directory_name in seen_directories:
+            raise ValueError("duplicate evaluation receipt path in batch")
+        seen_directories.add(directory_name)
+        prepared.append((directory_name, payloads, receipt))
+
+    _validate_batch_payload_budget(
+        config,
+        tuple(payloads for _directory_name, payloads, _receipt in prepared),
+        maximum_total_bytes=maximum_total_bytes,
+        maximum_entries=maximum_entries,
+    )
+
+    root = Path(output_root)
+    if not path_exists_no_follow(root):
+        try:
+            root.mkdir(parents=True)
+        except FileExistsError:
+            pass
+    require_regular_directory(root)
+
+    results: list[ReceiptPublication | None] = [None] * len(prepared)
+    pending: list[tuple[int, str, dict[str, bytes], EvaluationReceipt]] = []
+    for index, (directory_name, payloads, receipt) in enumerate(prepared):
+        final = root / directory_name
+        if path_exists_no_follow(final):
+            existing = verify_evaluation_receipt(final, config=config)
+            if existing.receipt_sha256 != receipt.receipt_sha256:
+                raise RuntimeError("receipt identity conflict")
+            _require_identical_payloads(final, payloads)
+            results[index] = ReceiptPublication(path=final, receipt=existing)
+        else:
+            pending.append((index, directory_name, payloads, receipt))
+
+    if not pending:
+        return tuple(cast(ReceiptPublication, item) for item in results)
+
+    staging = root / f".evaluation-batch.staging.{os.getpid()}.{uuid.uuid4().hex}"
+    committed: list[Path] = []
+    try:
+        staging.mkdir()
+        verified_pending: dict[int, EvaluationReceipt] = {}
+        for index, directory_name, payloads, receipt in pending:
+            staged_directory = staging / directory_name
+            staged_directory.mkdir()
+            for name, content in payloads.items():
+                _secure_write_payload(staged_directory, name, content, sync=False)
+            _require_identical_payloads(staged_directory, payloads)
+            verified_pending[index] = receipt
+
+        for index, directory_name, payloads, receipt in pending:
+            final = root / directory_name
+            staged_directory = staging / directory_name
+            try:
+                staged_directory.rename(final)
+                committed.append(final)
+            except OSError:
+                if path_exists_no_follow(final):
+                    existing = verify_evaluation_receipt(final, config=config)
+                    if existing.receipt_sha256 == receipt.receipt_sha256:
+                        _require_identical_payloads(final, payloads)
+                        shutil.rmtree(staged_directory)
+                        results[index] = ReceiptPublication(path=final, receipt=existing)
+                        continue
+                raise
+            results[index] = ReceiptPublication(path=final, receipt=verified_pending[index])
+        _fsync_parent_directory(root)
+    except Exception:
+        for final in reversed(committed):
+            if path_exists_no_follow(final):
+                try:
+                    require_regular_directory(final)
+                except RuntimeError:
+                    pass
+                else:
+                    shutil.rmtree(final)
+        raise
+    finally:
+        if path_exists_no_follow(staging):
+            try:
+                require_regular_directory(staging)
+            except RuntimeError:
+                pass
+            else:
+                shutil.rmtree(staging)
+
+    return tuple(cast(ReceiptPublication, item) for item in results)
+
+
+def _evaluation_publication_payloads(
+    config: ValidationProgrammeConfig,
+    *,
+    slot: ValidationSlot,
+    terminal_state: ValidationTerminalState,
+    attempt: int,
+    artifacts: Mapping[str, bytes | str],
+) -> tuple[str, dict[str, bytes], EvaluationReceipt]:
+    payloads = _artifact_payloads(artifacts)
     evaluation = evaluation_id_for_slot(config, slot)
     directory_name = f"{evaluation}-attempt-{attempt:03d}"
     receipt = build_evaluation_receipt(
@@ -425,21 +592,36 @@ def publish_evaluation_receipt(
         terminal_state=terminal_state,
         attempt=attempt,
         artifact_sha256=_payload_hashes(
-            {k: v for k, v in payloads.items() if k != _MACHINE_RECEIPT}
+            {name: content for name, content in payloads.items() if name != _MACHINE_RECEIPT}
         ),
     )
     payloads[_MACHINE_RECEIPT] = receipt.canonical_bytes
-    path = _publish_payloads(
-        output_root,
-        directory_name,
-        payloads,
-        expected_receipt=receipt,
-        config=config,
-        maximum_total_bytes=maximum_total_bytes,
-        maximum_entries=maximum_entries,
-    )
-    verified = verify_evaluation_receipt(path, config=config)
-    return ReceiptPublication(path=path, receipt=verified)
+    return directory_name, payloads, receipt
+
+
+def _validate_batch_payload_budget(
+    config: ValidationProgrammeConfig,
+    all_payloads: Sequence[Mapping[str, bytes]],
+    *,
+    maximum_total_bytes: int,
+    maximum_entries: int,
+) -> None:
+    effective_entries = min(maximum_entries, config.work_budget.max_artifacts)
+    effective_bytes = min(maximum_total_bytes, config.work_budget.max_artifact_bytes)
+    total_entries = 0
+    total_bytes = 0
+    for payloads in all_payloads:
+        if len(payloads) > effective_entries:
+            raise ValueError("receipt artifact entries exceed the config work-budget limit")
+        receipt_bytes = sum(len(value) for value in payloads.values())
+        if receipt_bytes > effective_bytes:
+            raise ValueError("receipt artifact bytes exceed the config work-budget limit")
+        total_entries += len(payloads)
+        total_bytes += receipt_bytes
+    if total_entries > effective_entries:
+        raise ValueError("receipt batch artifact entries exceed the config work-budget limit")
+    if total_bytes > effective_bytes:
+        raise ValueError("receipt batch artifact bytes exceed the config work-budget limit")
 
 
 def verify_programme_receipt(directory: Path) -> ProgrammeReceipt:
@@ -733,10 +915,14 @@ def _validate_evaluation_against_config(
         raise ValueError("evaluation receipt programme differs from validation config")
     if dict(receipt.hashes) != _hashes(config):
         raise ValueError("evaluation receipt hashes differ from validation config")
-    matching = tuple(slot for slot in config.roster if slot.to_dict() == _to_plain(receipt.slot))
-    if len(matching) != 1:
+    slot_payload = cast(dict[str, object], _to_plain(receipt.slot))
+    raw_slot_id = slot_payload.get("slot_id")
+    if not isinstance(raw_slot_id, str):
+        raise ValueError("evaluation receipt slot payload missing a valid slot_id")
+    slot = _VALIDATION_SLOT_BY_ID.get(raw_slot_id)
+    if slot is None or slot.to_dict() != slot_payload:
         raise ValueError("evaluation receipt slot is not owned by the frozen programme")
-    expected = evaluation_id_for_slot(config, matching[0])
+    expected = evaluation_id_for_slot(config, slot)
     if receipt.evaluation_id != expected:
         raise ValueError("evaluation receipt VR identity differs from programme and slot")
 
@@ -1014,7 +1200,9 @@ def _to_plain(value: object) -> object:
     return value
 
 
-def _secure_write_payload(root: Path, relative_name: str, content: bytes) -> None:
+def _secure_write_payload(
+    root: Path, relative_name: str, content: bytes, *, sync: bool = True
+) -> None:
     parts = PurePosixPath(relative_name).parts
     if not parts:
         raise ValueError("receipt artifact path must be non-empty")
@@ -1046,10 +1234,12 @@ def _secure_write_payload(root: Path, relative_name: str, content: bytes) -> Non
             if not stat.S_ISREG(metadata.st_mode):
                 raise RuntimeError("receipt artifact file must be regular")
             _write_all(fd, content)
-            os.fsync(fd)
+            if sync:
+                os.fsync(fd)
         finally:
             os.close(fd)
-        os.fsync(current_fd)
+        if sync:
+            os.fsync(current_fd)
     finally:
         for descriptor in reversed(opened_fds):
             os.close(descriptor)
@@ -1166,7 +1356,7 @@ def _require_config(config: ValidationProgrammeConfig) -> None:
         raise TypeError("receipt requires a ValidationProgrammeConfig")
     if config.roster != VALIDATION_SLOT_ROSTER:
         raise ValueError("receipt requires the exact frozen validation roster")
-    if config.to_dict()["roster_sha256"] != validation_roster_sha256(VALIDATION_SLOT_ROSTER):
+    if config.roster_sha256 != _VALIDATION_ROSTER_SHA256:
         raise ValueError("receipt roster SHA differs from frozen roster")
 
 
@@ -1197,6 +1387,7 @@ def _mapping_tuple(raw: object) -> tuple[Mapping[str, object], ...]:
 __all__ = [
     "AccessState",
     "EvaluationReceipt",
+    "EvaluationReceiptRequest",
     "FinalAccessAuthority",
     "FinalCandidateEligibilityReceipt",
     "OpenedFinalRows",
@@ -1207,6 +1398,7 @@ __all__ = [
     "build_programme_receipt",
     "issue_final_candidate_eligibility",
     "open_final_holdout_rows",
+    "publish_evaluation_receipt_batch",
     "publish_evaluation_receipt",
     "publish_programme_receipt",
     "verify_evaluation_receipt",

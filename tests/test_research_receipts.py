@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import fields, replace
 from pathlib import Path
 from typing import cast
@@ -28,6 +28,7 @@ from market_structure_lab.research.splits import (
 )
 from market_structure_lab.research.receipts import (
     AccessState,
+    EvaluationReceiptRequest,
     EvaluationReceipt,
     ProgrammeReceipt,
     build_evaluation_receipt,
@@ -35,6 +36,7 @@ from market_structure_lab.research.receipts import (
     build_programme_receipt,
     issue_final_candidate_eligibility,
     open_final_holdout_rows,
+    publish_evaluation_receipt_batch,
     publish_evaluation_receipt,
     publish_programme_receipt,
     verify_evaluation_receipt,
@@ -164,6 +166,33 @@ def _receipt_tree(root: Path) -> dict[str, bytes]:
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
+
+
+def _evaluation_request(
+    index: int,
+    *,
+    attempt: int = 1,
+    terminal_state: ValidationTerminalState | None = None,
+    artifacts: dict[str, bytes | str] | None = None,
+) -> EvaluationReceiptRequest:
+    terminal = terminal_state or ValidationTerminalState(
+        ExecutionStatus.COMPLETED,
+        ScientificDecision.REJECTED,
+    )
+    return EvaluationReceiptRequest(
+        slot=VALIDATION_SLOT_ROSTER[index],
+        terminal_state=terminal,
+        attempt=attempt,
+        artifacts=artifacts,
+    )
+
+
+class OversizedEvaluationRequests(Sequence[EvaluationReceiptRequest]):
+    def __len__(self) -> int:
+        return 1_105
+
+    def __getitem__(self, index: int) -> EvaluationReceiptRequest:
+        raise AssertionError("oversized receipt requests were read before the count gate")
 
 
 def test_programme_receipt_has_stable_canonical_identity_and_exact_ledger() -> None:
@@ -349,6 +378,186 @@ def test_receipt_publication_is_immutable_no_follow_bounded_and_byte_replayable(
             output_root=tmp_path / "small-budget",
             artifacts={"too-big.txt": b"x" * 128},
             maximum_total_bytes=32,
+        )
+
+
+def test_evaluation_batch_publication_matches_single_receipt_bytes_and_returned_verification(
+    tmp_path: Path,
+) -> None:
+    config = _config()
+    requests = (
+        _evaluation_request(
+            0,
+            artifacts={"metric.json": canonical_json("receipt-test-metric", {"value": 1})},
+        ),
+        _evaluation_request(1, attempt=2, artifacts={"notes.txt": "bounded\n"}),
+        _evaluation_request(2),
+    )
+    batch_root = tmp_path / "batch"
+    single_root = tmp_path / "single"
+
+    batch = publish_evaluation_receipt_batch(
+        config,
+        requests=requests,
+        output_root=batch_root,
+    )
+    singles = tuple(
+        publish_evaluation_receipt(
+            config,
+            slot=request.slot,
+            terminal_state=request.terminal_state,
+            attempt=request.attempt,
+            output_root=single_root,
+            artifacts=request.artifacts,
+        )
+        for request in requests
+    )
+
+    assert len(batch) == len(requests)
+    assert [item.path.name for item in batch] == [item.path.name for item in singles]
+    assert [item.receipt.receipt_sha256 for item in batch] == [
+        item.receipt.receipt_sha256 for item in singles
+    ]
+    assert _receipt_tree(batch_root) == _receipt_tree(single_root)
+    for publication in batch:
+        assert verify_evaluation_receipt(publication.path, config=config) == publication.receipt
+
+
+def test_evaluation_batch_publication_covers_exact_frozen_roster_with_bounded_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import market_structure_lab.research.receipts as receipt_module
+
+    config = _config()
+    fsync_calls = 0
+
+    def counted_fsync(descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        assert descriptor >= 0
+
+    monkeypatch.setattr(receipt_module.os, "fsync", counted_fsync)
+
+    publications = publish_evaluation_receipt_batch(
+        config,
+        requests=tuple(_evaluation_request(index) for index in range(len(VALIDATION_SLOT_ROSTER))),
+        output_root=tmp_path / "full-roster",
+    )
+
+    assert len(publications) == len(VALIDATION_SLOT_ROSTER) == 1_104
+    assert len({item.path.name for item in publications}) == 1_104
+    assert [item.receipt.slot["slot_id"] for item in publications] == [
+        slot.slot_id for slot in VALIDATION_SLOT_ROSTER
+    ]
+    assert fsync_calls <= 2
+
+
+def test_evaluation_batch_reuses_identical_existing_output_and_rejects_conflicts(
+    tmp_path: Path,
+) -> None:
+    config = _config()
+    root = tmp_path / "existing"
+    request = _evaluation_request(0, artifacts={"metric.json": b"original\n"})
+    first = publish_evaluation_receipt(
+        config,
+        slot=request.slot,
+        terminal_state=request.terminal_state,
+        attempt=request.attempt,
+        output_root=root,
+        artifacts=request.artifacts,
+    )
+
+    same = publish_evaluation_receipt_batch(config, requests=(request,), output_root=root)
+
+    assert same == (first,)
+    with pytest.raises(RuntimeError, match="identity conflict"):
+        publish_evaluation_receipt_batch(
+            config,
+            requests=(_evaluation_request(0, artifacts={"metric.json": b"different\n"}),),
+            output_root=root,
+        )
+
+
+def test_evaluation_batch_rejects_symlink_roots_budgets_empty_and_cleans_partial_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import market_structure_lab.research.receipts as receipt_module
+
+    config = _config()
+
+    empty_root = tmp_path / "empty"
+    assert publish_evaluation_receipt_batch(config, requests=(), output_root=empty_root) == ()
+    assert not empty_root.exists()
+
+    budget_root = tmp_path / "budget"
+    with pytest.raises(ValueError, match="artifact.*bytes|budget"):
+        publish_evaluation_receipt_batch(
+            config,
+            requests=(_evaluation_request(0, artifacts={"too-big.txt": b"x" * 128}),),
+            output_root=budget_root,
+            maximum_total_bytes=32,
+        )
+    assert not budget_root.exists()
+
+    target = tmp_path / "target"
+    target.mkdir()
+    symlink_root = tmp_path / "symlink-root"
+    symlink_root.symlink_to(target, target_is_directory=True)
+    with pytest.raises(RuntimeError, match="symlink|reparse"):
+        publish_evaluation_receipt_batch(
+            config,
+            requests=(_evaluation_request(0),),
+            output_root=symlink_root,
+        )
+
+    final_name = publish_evaluation_receipt(
+        config,
+        slot=VALIDATION_SLOT_ROSTER[1],
+        terminal_state=ValidationTerminalState(
+            ExecutionStatus.COMPLETED,
+            ScientificDecision.REJECTED,
+        ),
+        attempt=1,
+        output_root=tmp_path / "name-source",
+    ).path.name
+    symlink_final_root = tmp_path / "symlink-final"
+    symlink_final_root.mkdir()
+    (symlink_final_root / final_name).symlink_to(target, target_is_directory=True)
+    with pytest.raises(RuntimeError, match="symlink|reparse"):
+        publish_evaluation_receipt_batch(
+            config,
+            requests=(_evaluation_request(1),),
+            output_root=symlink_final_root,
+        )
+
+    real_writer = receipt_module._secure_write_payload
+    writes = 0
+
+    def crashing_writer(*args: object, **kwargs: object) -> None:
+        nonlocal writes
+        writes += 1
+        if writes > 1:
+            raise OSError("synthetic batch crash")
+        real_writer(*args, **kwargs)
+
+    partial_root = tmp_path / "partial"
+    monkeypatch.setattr(receipt_module, "_secure_write_payload", crashing_writer)
+    with pytest.raises(OSError, match="synthetic batch crash"):
+        publish_evaluation_receipt_batch(
+            config,
+            requests=(_evaluation_request(0), _evaluation_request(1)),
+            output_root=partial_root,
+        )
+    assert not any(path.name.startswith("VR-") for path in partial_root.rglob("*"))
+    assert not any("staging" in path.name for path in partial_root.rglob("*"))
+
+
+def test_evaluation_batch_rejects_oversized_sequence_before_materialising() -> None:
+    with pytest.raises(ValueError, match="evaluation budget"):
+        publish_evaluation_receipt_batch(
+            _config(),
+            requests=OversizedEvaluationRequests(),
+            output_root=Path("must-not-exist"),
         )
 
 
