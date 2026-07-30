@@ -196,3 +196,37 @@ evidence that the question, method, and conclusion can be reconstructed later.
 - Artifacts: Source checkpoint `3c778503aaf826bdbfb1d4f5353353ef073f21f9`; Task 8 remains
   responsible for real eligibility receipts, trusted access-root authority, concurrency/crash
   consumption, and immutable VP/VR publications.
+
+### 2026-07-30 - Terminate the hardened first real Phase 5 programme at preflight
+
+- Question: Can the frozen Phase 5 development programme lawfully enter outcome evaluation using
+  the real promoted source metadata and already published evidence?
+- Hypothesis: None evaluated. This was an admissibility preflight under the preregistered A/B/G/E/D
+  validation contract.
+- Method: Freeze the exact implementation source and 1,104-slot programme, push and live-verify the
+  source checkpoint, separately push and live-verify the preregistration, verify RR-000008 metadata,
+  and publish a complete immutable terminal ledger without constructing fake primitive sources.
+- Dataset: Verified RR-000008 metadata plus the validated compatibility manifest. Thirteen
+  compatible non-conflict symbols share a verified-minute interval containing an available
+  inward-rounded 825-day calendar window. No split/fold was frozen, and no aggregate or outcome
+  row, database table, dump content, or final-holdout row was opened.
+- Metrics: One VP receipt; 1,104 VR receipts; 1,104 ledger entries; 3,315 files; 2,708,226 bytes;
+  final-holdout access count zero. The complete receipt-tree SHA-256 is
+  `5707cfd5aa1dba2e7900d45e3f2723c6edf10e94cbd9423868c0fcfc0293ded8`.
+- Results: `failed/not_evaluated`. Missing prerequisites are verified real 1h/4h aggregate
+  publications, event-level cost evidence, and independently bound profile/source-price-precision
+  evidence. Those exact blockers are sealed in the immutable programme evidence. A second clean
+  publication was byte-identical. Final verification reached 1,748 passing tests and 8 skips; the
+  only 13 failures were the documented WSL unsigned-temporary-PowerShell policy failures. Ruff,
+  Mypy, locked sync, package/Compose checks, dashboard evidence/lint/typecheck/build, and two
+  independent hardened-boundary reviews passed.
+- Conclusions: No A/B/G/E/D family was evaluated, supported, rejected, validated, or promoted. The
+  correct result is a terminal preflight refusal, not a backtest conclusion or edge. The earlier
+  `VP-1adc...` receipt tree is preserved but superseded after independent review; only the hardened
+  `VP-0d65...` tree is authoritative.
+- Next Question: Can the missing aggregate, cost, and source-price-precision publications be
+  produced in a separately approved phase without weakening source or holdout gates?
+- Artifacts:
+  [`PHASE5_VALIDATION_EVIDENCE.md`](PHASE5_VALIDATION_EVIDENCE.md), source checkpoint
+  `8b0cfc7e68ac3e7f14be0ca61122f23ec4a211f4`, and preregistration checkpoint
+  `a21952b61b94e8a6823273a114b83f87f1dd54d5`.

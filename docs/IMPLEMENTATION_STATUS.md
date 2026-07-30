@@ -647,3 +647,70 @@ Candidate-eligibility receipt authority, the trusted programme-scoped access roo
 race proof, crash-attempt consumption, and immutable VP/VR receipts remain explicit Task 8
 obligations. No cost, statistical, validation, promotion, strategy, portfolio, execution, leverage,
 paper-trading, or live-trading claim exists.
+
+### Phase 5 work units 6-7: costs, controls, statistics, robustness, and exposures
+
+Work unit 6 is complete at `3c876941` and work unit 7 at `b80f3c4`. Frozen pure-function boundaries
+now require explicit cost evidence, matched baseline and negative-control roles, event/weekly
+dependence-aware statistics, multiplicity correction, MDE/support evidence, robustness lower
+bounds, and out-of-sample exposure diagnostics. Missing or insufficient evidence fails closed;
+zero-cost defaults and pooled-minute independence are not admissible.
+
+These work units used synthetic inputs only. They implement rejection machinery, not evidence that
+any A/B/G/E/D candidate is profitable, robust, or an edge.
+
+### Phase 5 work unit 8: immutable receipts and final-access authority
+
+Work unit 8 is complete at `45df56cb27bb844e257ef82c8c8012997c0f27e9`. Exact VP/VR receipts,
+complete 1,104-slot ledgers, durable no-follow publication, factory-issued candidate eligibility,
+programme-scoped final authority, and process/thread/crash-safe one-attempt consumption are
+implemented and verified. Receipt identities bind the full configuration and artifact hashes.
+
+Synthetic tests prove the final-access state machine. No real final-holdout row was accessed.
+
+### Phase 5 work unit 9: thin primitive validation lifecycle
+
+Work unit 9 is complete and remotely verified at
+`255aa04ef11e6bcc25028e3c7178f065712c1ba5`. The lifecycle accepts only typed primitive capabilities,
+checks aggregate/candidate/outcome/split/control/cost/statistical/robustness stages in a fixed
+development-only order, derives family decisions internally, and atomically publishes one VP plus
+the complete 1,104-VR ledger. Callers cannot supply terminal decisions, p-values, selection
+booleans, or final rows.
+
+Fresh focused verification passed 426 tests. The repository-wide run reached 1,731 passes and 8
+skips; its only 13 failures were the already documented WSL unsigned-PowerShell temporary-script
+policy. Ruff, Mypy, build, and Compose checks passed. No real validation programme or final access
+occurred in work unit 9.
+
+### Phase 5 work unit 10: real development preflight
+
+The hardened Task 10 CLI source is remotely checkpointed at
+`8b0cfc7e68ac3e7f14be0ca61122f23ec4a211f4`. The superseding exact preregistration is separately
+committed and remotely verified at `a21952b61b94e8a6823273a114b83f87f1dd54d5`, so it binds an
+already existing source checkpoint rather than attempting a self-referential commit identity.
+The earlier `edc99d5` / `7286651` publication remains preserved as an audit trail but is
+superseded because independent review identified incomplete remote-byte, reconciliation,
+compatibility, and binding-bundle enforcement.
+
+Verified RR-000008 metadata and the validated compatibility manifest derive 13 compatible
+non-conflict symbols and the latest shared verified-minute interval containing an available
+inward-rounded 825-day calendar window. No split or fold was frozen. No verified real 1h/4h
+aggregate bundle, event-level cost publication, or independently bound profile/source-price-
+precision publication exists. The hardened CLI therefore sealed those exact blockers and
+published one immutable programme receipt plus exactly 1,104 `failed/not_evaluated` evaluation
+receipts. Final-holdout access remained exactly zero. A second clean run was byte-identical.
+
+The CLI currently implements the verified terminal-preflight route. The public
+`run_validation_programme` API remains the typed ready-path boundary, but there is no canonical
+real typed-source-bundle loader yet; Task 10 did not fabricate one or claim executable readiness.
+
+Exact identities, exclusions, missing prerequisites, receipt hashes, replay evidence, and
+verification are recorded in
+[`PHASE5_VALIDATION_EVIDENCE.md`](PHASE5_VALIDATION_EVIDENCE.md). This is not validation failure
+after an evaluated backtest; it is a truthful preflight refusal to evaluate. Phase 6 remains closed.
+
+Task 11 close-out verification reached 1,748 passing tests and 8 skips. The only 13 failures were
+the already documented WSL refusal to execute unsigned temporary PowerShell scripts. Ruff
+format/lint, Mypy, locked sync, package build from an exact tracked Linux-filesystem mirror,
+Compose configuration, dashboard evidence/lint/typecheck/build, and diff-check passed. Independent
+code-quality and quantitative/provenance reviewers approved the hardened Task 10 boundary.
