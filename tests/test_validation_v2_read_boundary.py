@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 
@@ -106,6 +107,70 @@ def test_boundary_is_factory_issued_immutable_and_verifiable() -> None:
         DevelopmentReadBoundaryV2(**boundary.constructor_fields())  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("copier", (copy.copy, copy.deepcopy))
+def test_copied_boundary_loses_original_publication_authority(copier) -> None:
+    _, _, boundary = _issued()
+    copied = copier(boundary)
+
+    with pytest.raises(ValueError, match="original publication"):
+        open_development_consumer_v2(copied, _allowed_request(copied), object)
+
+
+def test_object_new_or_private_token_cannot_forge_boundary_authority() -> None:
+    from market_structure_lab.research import validation_v2_splits as module
+
+    coverage, split, boundary = _issued()
+    forged = object.__new__(DevelopmentReadBoundaryV2)
+    for name, value in boundary.constructor_fields().items():
+        object.__setattr__(forged, name, value)
+    with pytest.raises(ValueError, match="original publication"):
+        verify_development_read_boundary_v2(forged, coverage, split)
+
+    reconstructed = DevelopmentReadBoundaryV2(
+        **boundary.constructor_fields(),  # type: ignore[arg-type]
+        _factory_token=module._BOUNDARY_FACTORY,  # noqa: SLF001
+    )
+    with pytest.raises(ValueError, match="original publication"):
+        verify_development_read_boundary_v2(reconstructed, coverage, split)
+
+
+def test_coherent_private_token_holdout_widening_cannot_authorize() -> None:
+    from market_structure_lab.core.identity import hash_json
+    from market_structure_lab.research import validation_v2_splits as module
+    from market_structure_lab.research.validation_v2_models import publication_json_bytes
+
+    _, _, boundary = _issued()
+    widened_symbols = tuple(sorted((*boundary.allowed_symbols, *boundary.forbidden_asset_symbols)))
+    payload = boundary._identity_payload()  # noqa: SLF001
+    payload["allowed_symbols"] = list(widened_symbols)
+    payload["forbidden_asset_symbols"] = []
+    digest = hash_json(
+        "phase5-validation-development-read-boundary-v2",
+        payload,
+    )
+    public = {
+        "schema_version": "phase5-validation-development-read-boundary-v2",
+        **payload,
+        "boundary_sha256": digest,
+    }
+    forged = DevelopmentReadBoundaryV2(
+        coverage_identity=boundary.coverage_identity,
+        split_identity=boundary.split_identity,
+        allowed_symbols=widened_symbols,
+        allowed_timeframes=boundary.allowed_timeframes,
+        allowed_intervals=boundary.allowed_intervals,
+        forbidden_asset_symbols=(),
+        forbidden_temporal_intervals=boundary.forbidden_temporal_intervals,
+        boundary_sha256=digest,
+        canonical_bytes=publication_json_bytes(public),
+        _factory_token=module._BOUNDARY_FACTORY,  # noqa: SLF001
+    )
+    request = replace(_allowed_request(boundary), symbol=boundary.forbidden_asset_symbols[0])
+
+    with pytest.raises(ValueError, match="original publication"):
+        open_development_consumer_v2(forged, request, object)
+
+
 @pytest.mark.parametrize("operation_kind", tuple(AccessOperationKindV2))
 def test_each_consumer_kind_is_denied_before_construction(
     operation_kind: AccessOperationKindV2,
@@ -178,6 +243,14 @@ def test_stale_wrong_coverage_or_split_invalidates_boundary() -> None:
         verify_development_read_boundary_v2(boundary, coverage, changed_split)
 
 
+def test_stale_original_publication_bytes_invalidate_issue() -> None:
+    coverage, split, _boundary = _issued()
+    object.__setattr__(coverage, "canonical_bytes", b"{}\n")
+
+    with pytest.raises(ValueError, match="original publication bytes"):
+        issue_development_read_boundary_v2(coverage, split)
+
+
 @pytest.mark.parametrize("mutation", ("missing", "extra"))
 def test_missing_or_extra_interval_invalidates_reconstructed_publication(
     mutation: str,
@@ -198,14 +271,72 @@ def test_missing_or_extra_interval_invalidates_reconstructed_publication(
 def test_audit_ledger_is_separate_and_does_not_mutate_boundary() -> None:
     _, _, boundary = _issued()
     before = boundary.boundary_sha256
-    ledger = DevelopmentAccessAttemptLedgerV2()
+    ledger = DevelopmentAccessAttemptLedgerV2(
+        programme_id="VPV2-" + "1" * 64,
+        attempt_id="VA-" + "2" * 64,
+        boundary=boundary,
+    )
     request = _allowed_request(boundary)
 
-    ledger.record_adjudication(boundary, request, allowed=True)
-    ledger.record_completion(boundary, request, row_count=2, byte_count=100)
+    ledger.start(request)
+    ledger.adjudicate(request)
+    ledger.complete(request, row_count=2, byte_count=100)
 
     assert boundary.boundary_sha256 == before
     assert ledger.counters.source_file_attempts == 1
     assert ledger.counters.rows_admitted == 2
     assert ledger.counters.bytes_admitted == 100
     assert ledger.counters.final_scope_attempts == 0
+
+
+def test_ledger_internally_denies_and_counts_final_scope() -> None:
+    _, _, boundary = _issued()
+    ledger = DevelopmentAccessAttemptLedgerV2(
+        programme_id="VPV2-" + "1" * 64,
+        attempt_id="VA-" + "2" * 64,
+        boundary=boundary,
+    )
+    request = replace(_allowed_request(boundary), symbol=boundary.forbidden_asset_symbols[0])
+
+    ledger.start(request)
+    with pytest.raises(PermissionError):
+        ledger.adjudicate(request)
+
+    assert ledger.counters.denied_boundary_attempts == 1
+    assert ledger.counters.final_scope_attempts == 1
+    with pytest.raises(ValueError, match="ordering"):
+        ledger.complete(request, row_count=0, byte_count=0)
+
+
+def test_ledger_enforces_start_adjudication_completion_order() -> None:
+    _, _, boundary = _issued()
+    ledger = DevelopmentAccessAttemptLedgerV2(
+        programme_id="VPV2-" + "1" * 64,
+        attempt_id="VA-" + "2" * 64,
+        boundary=boundary,
+    )
+    request = _allowed_request(boundary)
+
+    with pytest.raises(ValueError, match="ordering"):
+        ledger.adjudicate(request)
+    ledger.start(request)
+    with pytest.raises(ValueError, match="ordering"):
+        ledger.start(request)
+    ledger.adjudicate(request)
+    with pytest.raises(ValueError, match="ordering"):
+        ledger.adjudicate(request)
+
+
+def test_ledger_counters_recompute_and_reject_chain_tampering() -> None:
+    _, _, boundary = _issued()
+    ledger = DevelopmentAccessAttemptLedgerV2(
+        programme_id="VPV2-" + "1" * 64,
+        attempt_id="VA-" + "2" * 64,
+        boundary=boundary,
+    )
+    request = _allowed_request(boundary)
+    ledger.start(request)
+    object.__setattr__(ledger._records[0], "byte_count", 99)  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="chain verification"):
+        _ = ledger.counters

@@ -1,17 +1,32 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import hashlib
-import json
+import os
 from pathlib import Path
 
 import pytest
 
-from market_structure_lab.cli.freeze_validation_boundary_v2 import (
-    BoundaryFreezeAdaptersV2,
-    freeze_boundary_publications_v2,
-    main,
+from market_structure_lab.cli import freeze_validation_boundary_v2 as cli
+from market_structure_lab.data.gaps import (
+    ObservedEnvelope,
+    ProvenanceState,
+    RecoveryManifest,
+    SourceIdentity,
 )
-from market_structure_lab.core.identity import hash_json
+from market_structure_lab.data.reconciliation.manifests import (
+    TradingEnvelope,
+    WorkUnitManifest,
+    freeze_reconciliation_run,
+)
+from market_structure_lab.data.reconciliation.models import ReconciliationWorkUnit
+from market_structure_lab.data.reconciliation.receipts import (
+    write_reconciliation_promotion_receipt,
+)
+from market_structure_lab.data.reconciliation.repository import (
+    ReconciliationPromotion,
+    VerifiedCoverageInterval,
+)
 from market_structure_lab.research.validation_v2_models import (
     SourceCoveragePublicationV2,
 )
@@ -21,178 +36,295 @@ from market_structure_lab.research.validation_v2_splits import (
 )
 
 
-class ExplodingAdapter:
-    def __call__(self, *_args: object, **_kwargs: object):
-        raise AssertionError("row/process/network adapter was called")
-
-
-def _metadata() -> dict[str, object]:
-    payload: dict[str, object] = {
-        "schema_version": "phase5-validation-boundary-freeze-input-v2",
-        "scope": "development_metadata_only",
-        "component": "development",
-        "final_holdout_access_count": 0,
-        "raw_dump": {
-            "dump_sha256": "a" * 64,
-            "byte_count": 123,
-            "pg_restore_list_sha256": "b" * 64,
-            "candle_table_toc_identity": "public.candles:table-data:42",
-            "source_mapping_version": "callscore-candles-v1",
-        },
-        "reconciliation": {
-            "promotion_receipt_sha256": "c" * 64,
-            "work_unit_manifest_sha256": ["d" * 64],
-            "comparison_part_sha256": ["e" * 64],
-            "replacement_source_policy": "rr-000008-promoted-only",
-        },
-        "compatibility": {
-            "metadata_sha256": "f" * 64,
-            "entries": [
-                {
-                    "symbol": symbol,
-                    "complete_start": "2024-01-01T00:00:00Z",
-                    "complete_end": "2025-01-01T00:00:00Z",
-                    "timeframes": ["1m", "1h", "4h"],
-                    "source_conflict": False,
-                    "mapping_compatible": True,
-                    "metadata_sha256": str(index) * 64,
-                }
-                for index, symbol in enumerate(
-                    ("ADAUSDT", "BNBUSDT", "DOGEUSDT", "SOLUSDT", "XRPUSDT"),
-                    start=1,
-                )
-            ],
-        },
-        "split_policy": {
-            "block_count": 6,
-            "minimum_complete_days": 180,
-            "asset_holdout_fraction_numerator": 1,
-            "asset_holdout_fraction_denominator": 5,
-            "asset_holdout_salt": "market-structure-lab-phase5-v2-public-salt",
-            "purge_hours": 24,
-            "embargo_hours": 24,
-            "timeframes": ["1m", "1h", "4h"],
-        },
+def _work_manifest(run_id: str, unit: ReconciliationWorkUnit) -> WorkUnitManifest:
+    values = {
+        "run_id": run_id,
+        "work_unit_id": unit.work_unit_id,
+        "publication_path": f"work-units/{unit.work_unit_id}",
+        "row_count": 0,
+        "classification_counts": (),
+        "differing_field_counts": (),
+        "source_artifacts": (),
+        "replacement_row_count": 0,
+        "replacement_logical_sha256": hashlib.sha256(b"").hexdigest(),
+        "max_rows_per_part": 1,
+        "max_buffered_rows": 0,
+        "status": "completed",
+        "parts": (),
     }
-    payload["metadata_sha256"] = hash_json(
-        "phase5-validation-boundary-freeze-input-v2",
-        payload,
+    provisional = WorkUnitManifest.__new__(WorkUnitManifest)
+    for name, value in values.items():
+        object.__setattr__(provisional, name, value)
+    object.__setattr__(provisional, "manifest_sha256", "0" * 64)
+    return WorkUnitManifest(**values, manifest_sha256=provisional.sha256())  # type: ignore[arg-type]
+
+
+def _fixture(tmp_path: Path) -> dict[str, object]:
+    dump = tmp_path / "callscore.dump"
+    dump.write_bytes(b"fixture-postgresql-custom-dump")
+    dump_sha = hashlib.sha256(dump.read_bytes()).hexdigest()
+    start = int(datetime(2023, 1, 1, tzinfo=UTC).timestamp() * 1000)
+    end = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000)
+    symbols = ("ADAUSDT", "BNBUSDT", "DOGEUSDT", "SOLUSDT", "XRPUSDT")
+    units = tuple(ReconciliationWorkUnit.create(symbol, "1m", start, end) for symbol in symbols)
+    run = freeze_reconciliation_run(
+        run_id="RR-000008",
+        cutoff=datetime(2026, 1, 1, tzinfo=UTC),
+        dump_sha256=dump_sha,
+        source_row_count=0,
+        mapping_version="callscore-candles-v1",
+        candidate_venue="binance",
+        market_type="spot",
+        source_revision="fixture",
+        algorithm_version="v1",
+        code_commit="1" * 40,
+        uv_lock_sha256="2" * 64,
+        envelopes=tuple(TradingEnvelope(symbol, "1m", start, end) for symbol in symbols),
+        work_units=units,
     )
-    return payload
-
-
-def _write_metadata(path: Path, payload: dict[str, object] | None = None) -> None:
-    path.write_text(
-        json.dumps(payload or _metadata(), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    rr_root = tmp_path / "rr"
+    rr_root.mkdir()
+    (rr_root / "run.json").write_text(run.to_json(), encoding="utf-8")
+    for unit in units:
+        directory = rr_root / "work-units" / unit.work_unit_id
+        directory.mkdir(parents=True)
+        (directory / "manifest.json").write_text(
+            _work_manifest(run.run_id, unit).to_json(), encoding="utf-8"
+        )
+    coverage = tuple(VerifiedCoverageInterval(symbol, "1m", start, end) for symbol in symbols)
+    promotion = ReconciliationPromotion(
+        run_id=run.run_id,
+        manifest_sha256=run.manifest_sha256,
+        replacement_logical_sha256="3" * 64,
+        canonical_logical_sha256="4" * 64,
+        promoted_at="2026-01-02T00:00:00Z",
     )
-
-
-def _tree_bytes(root: Path) -> dict[str, bytes]:
-    return {path.name: path.read_bytes() for path in sorted(root.iterdir())}
-
-
-def test_freezer_uses_metadata_only_and_emits_verified_publications(tmp_path: Path) -> None:
-    metadata = tmp_path / "metadata.json"
-    output = tmp_path / "published"
-    _write_metadata(metadata)
-    exploding = ExplodingAdapter()
-
-    result = freeze_boundary_publications_v2(
-        metadata_path=metadata,
-        output_dir=output,
-        adapters=BoundaryFreezeAdaptersV2(
-            row_reader=exploding,
-            process_runner=exploding,
-            network_reader=exploding,
+    receipt = write_reconciliation_promotion_receipt(
+        tmp_path / "receipts", run, promotion, coverage
+    )
+    compatibility_manifest = RecoveryManifest(
+        manifest_version=1,
+        source_identity=SourceIdentity(
+            dump_sha256=dump_sha,
+            source_row_count=0,
+            mapping_version="callscore-candles-v1",
         ),
+        as_of="2026-01-02T00:00:00Z",
+        candidate_venue="binance",
+        market_type="spot",
+        envelopes=tuple(
+            ObservedEnvelope(
+                symbol=symbol,
+                timeframe="1m",
+                first_open_time_ms=start,
+                last_open_time_ms=end - 60_000,
+                row_count=1,
+            )
+            for symbol in symbols
+        ),
+        gaps=(),
+        provenance_validation={symbol: ProvenanceState.COMPATIBLE for symbol in symbols},
+    )
+    compatibility = tmp_path / "compatibility.json"
+    compatibility.write_bytes(compatibility_manifest.canonical_bytes())
+    listing = b"42; 0 0 TABLE DATA public candles fixture\n"
+    expectations = cli._AuthorityExpectationsV2(  # noqa: SLF001
+        dump_sha256=dump_sha,
+        promotion_sha256=hashlib.sha256(receipt.path.read_bytes()).hexdigest(),
+        compatibility_sha256=hashlib.sha256(compatibility.read_bytes()).hexdigest(),
+        pg_restore_list=lambda _path: listing,
+    )
+    return {
+        "dump_path": dump,
+        "rr_promotion": receipt.path,
+        "rr_root": rr_root,
+        "compatibility": compatibility,
+        "expectations": expectations,
+    }
+
+
+def _outputs(tmp_path: Path, prefix: str) -> dict[str, Path]:
+    return {
+        "output_coverage": tmp_path / f"{prefix}-coverage.json",
+        "output_split": tmp_path / f"{prefix}-split.json",
+        "output_boundary": tmp_path / f"{prefix}-boundary.json",
+    }
+
+
+def _freeze(tmp_path: Path, prefix: str = "published"):
+    fixture = _fixture(tmp_path)
+    return cli.freeze_boundary_publications_v2(
+        dump_path=fixture["dump_path"],  # type: ignore[arg-type]
+        rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
+        rr_root=fixture["rr_root"],  # type: ignore[arg-type]
+        compatibility=fixture["compatibility"],  # type: ignore[arg-type]
+        **_outputs(tmp_path, prefix),
+        require_zero_row_access=True,
+        require_zero_process_row_extraction=True,
+        require_zero_network_access=True,
+        _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
     )
 
-    assert result.coverage_path == output / "source-coverage-v2.json"
-    assert result.split_path == output / "development-split-v2.json"
-    assert result.boundary_path == output / "development-read-boundary-v2.json"
+
+def test_freezer_recomputes_original_metadata_and_reopens_publications(
+    tmp_path: Path,
+) -> None:
+    result = _freeze(tmp_path)
+
     coverage = SourceCoveragePublicationV2.from_dict(
-        json.loads(result.coverage_path.read_text(encoding="utf-8"))
+        __import__("json").loads(result.coverage_path.read_bytes())
     )
     split = DevelopmentSplitPublicationV2.from_dict(
-        json.loads(result.split_path.read_text(encoding="utf-8")),
-        coverage,
+        __import__("json").loads(result.split_path.read_bytes()), coverage
     )
     boundary = DevelopmentReadBoundaryV2.from_publication_dict(
-        json.loads(result.boundary_path.read_text(encoding="utf-8")),
-        coverage,
-        split,
+        __import__("json").loads(result.boundary_path.read_bytes()), coverage, split
     )
-    assert boundary.coverage_identity == coverage.coverage_identity
-    assert boundary.split_identity == split.split_identity
+    assert boundary == result.boundary
+    assert (
+        coverage.raw_dump.dump_sha256
+        == hashlib.sha256((tmp_path / "callscore.dump").read_bytes()).hexdigest()
+    )
+
+
+def test_freezer_rejects_coherent_forged_compatibility_summary(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    compatibility = fixture["compatibility"]
+    content = compatibility.read_bytes().replace(b'"compatible"', b'"source_conflict"')
+    compatibility.write_bytes(content)
+
+    with pytest.raises(ValueError, match="compatibility SHA-256"):
+        cli.freeze_boundary_publications_v2(
+            dump_path=fixture["dump_path"],  # type: ignore[arg-type]
+            rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
+            rr_root=fixture["rr_root"],  # type: ignore[arg-type]
+            compatibility=compatibility,  # type: ignore[arg-type]
+            **_outputs(tmp_path, "forged"),
+            require_zero_row_access=True,
+            require_zero_process_row_extraction=True,
+            require_zero_network_access=True,
+            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
+        )
+
+
+def test_freezer_requires_all_zero_access_guards(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    with pytest.raises(ValueError, match="zero-row"):
+        cli.freeze_boundary_publications_v2(
+            dump_path=fixture["dump_path"],  # type: ignore[arg-type]
+            rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
+            rr_root=fixture["rr_root"],  # type: ignore[arg-type]
+            compatibility=fixture["compatibility"],  # type: ignore[arg-type]
+            **_outputs(tmp_path, "unguarded"),
+            require_zero_row_access=False,
+            require_zero_process_row_extraction=True,
+            require_zero_network_access=True,
+            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
+        )
 
 
 def test_freezer_is_byte_deterministic_and_no_clobber(tmp_path: Path) -> None:
-    metadata = tmp_path / "metadata.json"
-    _write_metadata(metadata)
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-
-    freeze_boundary_publications_v2(metadata_path=metadata, output_dir=first)
-    freeze_boundary_publications_v2(metadata_path=metadata, output_dir=second)
-
-    assert _tree_bytes(first) == _tree_bytes(second)
-    assert {
-        name: hashlib.sha256(data).hexdigest() for name, data in _tree_bytes(first).items()
-    } == {
-        name: hashlib.sha256(data).hexdigest() for name, data in _tree_bytes(second).items()
+    fixture = _fixture(tmp_path)
+    common = {
+        "dump_path": fixture["dump_path"],
+        "rr_promotion": fixture["rr_promotion"],
+        "rr_root": fixture["rr_root"],
+        "compatibility": fixture["compatibility"],
+        "require_zero_row_access": True,
+        "require_zero_process_row_extraction": True,
+        "require_zero_network_access": True,
+        "_test_expectations": fixture["expectations"],
     }
+    first_paths = _outputs(tmp_path, "first")
+    second_paths = _outputs(tmp_path, "second")
+    cli.freeze_boundary_publications_v2(**common, **first_paths)  # type: ignore[arg-type]
+    cli.freeze_boundary_publications_v2(**common, **second_paths)  # type: ignore[arg-type]
+
+    assert [path.read_bytes() for path in first_paths.values()] == [
+        path.read_bytes() for path in second_paths.values()
+    ]
     with pytest.raises(FileExistsError):
-        freeze_boundary_publications_v2(metadata_path=metadata, output_dir=first)
-    assert _tree_bytes(first) == _tree_bytes(second)
+        cli.freeze_boundary_publications_v2(**common, **first_paths)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "match"),
-    (
-        ("schema_version", "phase5-validation-source-preflight-v1", "schema"),
-        ("scope", "whole_source", "scope"),
-        ("component", "final", "component"),
-        ("final_holdout_access_count", 1, "final"),
-    ),
-)
-def test_freezer_rejects_unexpected_metadata_identity_schema_or_scope(
-    tmp_path: Path,
-    field: str,
-    value: object,
-    match: str,
-) -> None:
-    payload = _metadata()
-    payload[field] = value
-    payload["metadata_sha256"] = hash_json(
-        "phase5-validation-boundary-freeze-input-v2",
-        {key: item for key, item in payload.items() if key != "metadata_sha256"},
-    )
-    metadata = tmp_path / "metadata.json"
-    _write_metadata(metadata, payload)
-
-    with pytest.raises(ValueError, match=match):
-        freeze_boundary_publications_v2(
-            metadata_path=metadata,
-            output_dir=tmp_path / "output",
+def test_freezer_rejects_existing_v1_programme_root(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    root = tmp_path / ("VP-0d65fef04ca44dfc5ba7c7705e0be197480d7456b51178702a0011a18ab4487d")
+    root.mkdir()
+    with pytest.raises(ValueError, match="V1 programme root"):
+        cli.freeze_boundary_publications_v2(
+            dump_path=fixture["dump_path"],  # type: ignore[arg-type]
+            rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
+            rr_root=fixture["rr_root"],  # type: ignore[arg-type]
+            compatibility=fixture["compatibility"],  # type: ignore[arg-type]
+            output_coverage=root / "coverage.json",
+            output_split=root / "split.json",
+            output_boundary=root / "boundary.json",
+            require_zero_row_access=True,
+            require_zero_process_row_extraction=True,
+            require_zero_network_access=True,
+            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
         )
-    assert not (tmp_path / "output").exists()
 
 
-def test_freezer_rejects_metadata_digest_mismatch(tmp_path: Path) -> None:
-    payload = _metadata()
-    payload["metadata_sha256"] = "0" * 64
-    metadata = tmp_path / "metadata.json"
-    _write_metadata(metadata, payload)
+def test_concurrent_output_is_not_replaced_and_partial_outputs_are_rolled_back(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    outputs = _outputs(tmp_path, "race")
+    original_link = os.link
+    calls = 0
 
-    with pytest.raises(ValueError, match="metadata_sha256"):
-        freeze_boundary_publications_v2(metadata_path=metadata, output_dir=tmp_path / "out")
+    def racing_link(source: Path, destination: Path, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            Path(destination).write_bytes(b"concurrent")
+        original_link(source, destination, **kwargs)
+
+    monkeypatch.setattr(cli.os, "link", racing_link)
+    with pytest.raises(FileExistsError):
+        cli.freeze_boundary_publications_v2(
+            dump_path=fixture["dump_path"],  # type: ignore[arg-type]
+            rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
+            rr_root=fixture["rr_root"],  # type: ignore[arg-type]
+            compatibility=fixture["compatibility"],  # type: ignore[arg-type]
+            **outputs,
+            require_zero_row_access=True,
+            require_zero_process_row_extraction=True,
+            require_zero_network_access=True,
+            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
+        )
+    assert not outputs["output_coverage"].exists()
+    assert outputs["output_split"].read_bytes() == b"concurrent"
+    assert not outputs["output_boundary"].exists()
 
 
-def test_cli_main_publishes_without_registered_entrypoint(tmp_path: Path) -> None:
-    metadata = tmp_path / "metadata.json"
-    output = tmp_path / "published"
-    _write_metadata(metadata)
+def test_parser_exposes_exact_plan_arguments() -> None:
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        [
+            "--dump-path",
+            "dump",
+            "--rr-promotion",
+            "promotion",
+            "--rr-root",
+            "rr",
+            "--compatibility",
+            "compatibility",
+            "--output-coverage",
+            "coverage",
+            "--output-split",
+            "split",
+            "--output-boundary",
+            "boundary",
+            "--require-zero-row-access",
+            "--require-zero-process-row-extraction",
+            "--require-zero-network-access",
+        ]
+    )
 
-    assert main(["--metadata", str(metadata), "--output-dir", str(output)]) == 0
-    assert (output / "development-read-boundary-v2.json").is_file()
+    assert args.require_zero_row_access is True
+    assert args.require_zero_process_row_extraction is True
+    assert args.require_zero_network_access is True

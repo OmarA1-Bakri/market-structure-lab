@@ -132,6 +132,34 @@ def test_common_grid_blocks_are_deterministic_and_half_open() -> None:
     assert split.development_blocks == split.blocks[:-1]
 
 
+def test_common_grid_rounds_inward_for_non_midnight_subsecond_coverage() -> None:
+    coverage = _coverage()
+    entries = tuple(
+        replace(
+            entry,
+            complete_start=datetime(2024, 1, 1, 0, 0, 0, 1, tzinfo=UTC),
+            complete_end=datetime(2025, 1, 1, 23, 59, 59, 999999, tzinfo=UTC),
+        )
+        for entry in coverage.entries
+    )
+    changed = SourceCoveragePublicationV2.freeze(
+        raw_dump=coverage.raw_dump,
+        reconciliation=coverage.reconciliation,
+        compatibility_metadata_sha256=coverage.compatibility_metadata_sha256,
+        entries=entries,
+    )
+
+    split = freeze_development_split_v2(coverage=changed, policy=_policy())
+
+    assert split.blocks[0].start == datetime(2024, 1, 2, tzinfo=UTC)
+    assert split.blocks[-1].end <= datetime(2025, 1, 1, tzinfo=UTC)
+    assert all(
+        entry.complete_start <= block.start < block.end <= entry.complete_end
+        for entry in entries
+        for block in split.blocks
+    )
+
+
 def test_ineligible_coverage_is_excluded_before_holdout() -> None:
     coverage = _coverage()
     conflicting = replace(coverage.entries[0], source_conflict=True)

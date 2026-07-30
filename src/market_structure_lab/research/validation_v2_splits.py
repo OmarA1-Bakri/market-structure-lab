@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from math import ceil
 from typing import Any, NamedTuple, Self, TypeVar
+import weakref
 
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.research.validation_v2_models import (
     DevelopmentSplitIdentityV2,
     SourceCoverageIdentityV2,
     SourceCoveragePublicationV2,
+    publication_json_bytes,
+    verified_source_coverage_bytes,
 )
 
 _SPLIT_FACTORY = object()
@@ -22,6 +25,18 @@ _SPLIT_HOLDOUT_DOMAIN = "phase5-validation-asset-holdout-order-v2"
 _SPLIT_IDENTITY_DOMAIN = "phase5-validation-development-split-v2"
 _BOUNDARY_IDENTITY_DOMAIN = "phase5-validation-development-read-boundary-v2"
 _T = TypeVar("_T")
+_VERIFIED_SPLIT_OBJECTS: dict[
+    int, tuple[weakref.ReferenceType[DevelopmentSplitPublicationV2], bytes, bytes]
+] = {}
+_VERIFIED_BOUNDARY_OBJECTS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[DevelopmentReadBoundaryV2],
+        bytes,
+        bytes,
+        bytes,
+    ],
+] = {}
 
 
 def _utc_text(value: datetime) -> str:
@@ -40,11 +55,7 @@ def _parse_utc(value: object, label: str) -> datetime:
 
 
 def _require_utc(value: object, label: str) -> datetime:
-    if (
-        not isinstance(value, datetime)
-        or value.tzinfo is None
-        or value.utcoffset() != timedelta(0)
-    ):
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{label} must be UTC-aware")
     return value
 
@@ -83,8 +94,10 @@ class SplitPolicyV2:
             raise ValueError("V2 split policy requires exactly six blocks")
         if self.minimum_complete_days < 1:
             raise ValueError("minimum_complete_days must be positive")
-        if not 0 < self.asset_holdout_fraction_numerator < (
-            self.asset_holdout_fraction_denominator
+        if (
+            not 0
+            < self.asset_holdout_fraction_numerator
+            < (self.asset_holdout_fraction_denominator)
         ):
             raise ValueError("asset holdout fraction must be strictly between zero and one")
         if (
@@ -188,7 +201,7 @@ class ExcludedCoverageSymbolV2:
         return {"symbol": self.symbol, "reason": self.reason}
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class DevelopmentSplitPublicationV2:
     """Metadata-only development/final split, created before programme identity."""
 
@@ -200,6 +213,7 @@ class DevelopmentSplitPublicationV2:
     asset_holdout_symbols: tuple[str, ...]
     blocks: tuple[GridBlockV2, ...]
     split_identity: DevelopmentSplitIdentityV2
+    canonical_bytes: bytes = field(repr=False, compare=False)
     _factory_token: InitVar[object | None] = None
 
     def __post_init__(self, _factory_token: object | None) -> None:
@@ -217,10 +231,10 @@ class DevelopmentSplitPublicationV2:
             self.eligible_symbols
         ):
             raise ValueError("development and holdout symbols must cover eligible symbols")
-        if self.split_identity != DevelopmentSplitIdentityV2.from_payload(
-            self._identity_payload()
-        ):
+        if self.split_identity != DevelopmentSplitIdentityV2.from_payload(self._identity_payload()):
             raise ValueError("split identity does not match metadata")
+        if self.canonical_bytes != publication_json_bytes(self.to_dict()):
+            raise ValueError("split canonical bytes do not match publication")
 
     @property
     def development_blocks(self) -> tuple[GridBlockV2, ...]:
@@ -305,9 +319,11 @@ def freeze_development_split_v2(
         raise ValueError("split requires at least two eligible symbols")
     common_start = max(item.complete_start for item in eligible)
     common_end = min(item.complete_end for item in eligible)
-    common_start = datetime(
-        common_start.year, common_start.month, common_start.day, tzinfo=UTC
-    )
+    floored_start = datetime(common_start.year, common_start.month, common_start.day, tzinfo=UTC)
+    if common_start != floored_start:
+        common_start = floored_start + timedelta(days=1)
+    else:
+        common_start = floored_start
     common_end = datetime(common_end.year, common_end.month, common_end.day, tzinfo=UTC)
     total_days = (common_end - common_start).days
     if total_days < policy.minimum_complete_days:
@@ -356,9 +372,7 @@ def freeze_development_split_v2(
     if holdout_count >= len(eligible_symbols):
         raise ValueError("asset holdout would consume all eligible symbols")
     asset_holdout = tuple(sorted(ranked[:holdout_count]))
-    development = tuple(
-        symbol for symbol in eligible_symbols if symbol not in set(asset_holdout)
-    )
+    development = tuple(symbol for symbol in eligible_symbols if symbol not in set(asset_holdout))
     identity_payload = {
         "coverage_identity": coverage.coverage_identity.value,
         "policy": policy.to_dict(),
@@ -368,7 +382,13 @@ def freeze_development_split_v2(
         "asset_holdout_symbols": list(asset_holdout),
         "blocks": [item.to_dict() for item in blocks],
     }
-    return DevelopmentSplitPublicationV2(
+    identity = DevelopmentSplitIdentityV2.from_payload(identity_payload)
+    public = {
+        "schema_version": "phase5-validation-development-split-v2",
+        **identity_payload,
+        "split_identity": identity.value,
+    }
+    publication = DevelopmentSplitPublicationV2(
         coverage_identity=coverage.coverage_identity,
         policy=policy,
         eligible_symbols=eligible_symbols,
@@ -376,9 +396,19 @@ def freeze_development_split_v2(
         development_symbols=development,
         asset_holdout_symbols=asset_holdout,
         blocks=blocks,
-        split_identity=DevelopmentSplitIdentityV2.from_payload(identity_payload),
+        split_identity=identity,
+        canonical_bytes=publication_json_bytes(public),
         _factory_token=_SPLIT_FACTORY,
     )
+    coverage_bytes = verified_source_coverage_bytes(coverage)
+    if any(
+        not (entry.complete_start <= block.start < block.end <= entry.complete_end)
+        for entry in eligible
+        for block in publication.blocks
+    ):
+        raise ValueError("split block extends outside eligible verified coverage")
+    _register_verified_split(publication, coverage_bytes)
+    return publication
 
 
 def _grid_block(*, index: int, start: datetime, end: datetime) -> GridBlockV2:
@@ -423,7 +453,7 @@ class BoundaryRequestV2:
             raise TypeError("operation_kind must be AccessOperationKindV2")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class DevelopmentReadBoundaryV2:
     """Factory-issued immutable authority for exact development-only reads."""
 
@@ -435,6 +465,7 @@ class DevelopmentReadBoundaryV2:
     forbidden_asset_symbols: tuple[str, ...]
     forbidden_temporal_intervals: tuple[UtcIntervalV2, ...]
     boundary_sha256: str
+    canonical_bytes: bytes = field(repr=False, compare=False)
     _factory_token: InitVar[object | None] = None
 
     def __post_init__(self, _factory_token: object | None) -> None:
@@ -442,10 +473,10 @@ class DevelopmentReadBoundaryV2:
             raise TypeError("DevelopmentReadBoundaryV2 requires its factory")
         if set(self.allowed_symbols) & set(self.forbidden_asset_symbols):
             raise ValueError("boundary allowed and forbidden symbols overlap")
-        if self.boundary_sha256 != hash_json(
-            _BOUNDARY_IDENTITY_DOMAIN, self._identity_payload()
-        ):
+        if self.boundary_sha256 != hash_json(_BOUNDARY_IDENTITY_DOMAIN, self._identity_payload()):
             raise ValueError("boundary identity does not match its scope")
+        if self.canonical_bytes != publication_json_bytes(self.to_dict()):
+            raise ValueError("boundary canonical bytes do not match publication")
 
     def _identity_payload(self) -> dict[str, object]:
         return {
@@ -483,9 +514,11 @@ class DevelopmentReadBoundaryV2:
             "forbidden_asset_symbols": self.forbidden_asset_symbols,
             "forbidden_temporal_intervals": self.forbidden_temporal_intervals,
             "boundary_sha256": self.boundary_sha256,
+            "canonical_bytes": self.canonical_bytes,
         }
 
     def authorize(self, request: BoundaryRequestV2) -> None:
+        _verify_registered_boundary(self)
         if not isinstance(request, BoundaryRequestV2):
             raise TypeError("boundary request must be BoundaryRequestV2")
         allowed = (
@@ -520,28 +553,38 @@ def issue_development_read_boundary_v2(
 
     if split.coverage_identity != coverage.coverage_identity:
         raise ValueError("split coverage identity differs from coverage publication")
-    intervals = tuple(
-        UtcIntervalV2(block.start, block.end) for block in split.development_blocks
+    coverage_bytes = verified_source_coverage_bytes(coverage)
+    split_bytes = _verified_split_bytes(split, coverage_bytes)
+    reopened_coverage = SourceCoveragePublicationV2.from_dict(
+        _decode_publication(coverage_bytes, "coverage")
     )
-    forbidden = (
-        UtcIntervalV2(split.temporal_holdout.start, split.temporal_holdout.end),
+    reopened_split = DevelopmentSplitPublicationV2.from_dict(
+        _decode_publication(split_bytes, "split"), reopened_coverage
     )
+    if reopened_split.to_dict() != split.to_dict():
+        raise ValueError("split differs from recomputed original publication bytes")
+    intervals = tuple(UtcIntervalV2(block.start, block.end) for block in split.development_blocks)
+    forbidden = (UtcIntervalV2(split.temporal_holdout.start, split.temporal_holdout.end),)
     payload = {
         "coverage_identity": coverage.coverage_identity.value,
         "split_identity": split.split_identity.value,
         "allowed_symbols": list(split.development_symbols),
         "allowed_timeframes": list(split.policy.timeframes),
         "allowed_intervals": [
-            {"start": _utc_text(item.start), "end": _utc_text(item.end)}
-            for item in intervals
+            {"start": _utc_text(item.start), "end": _utc_text(item.end)} for item in intervals
         ],
         "forbidden_asset_symbols": list(split.asset_holdout_symbols),
         "forbidden_temporal_intervals": [
-            {"start": _utc_text(item.start), "end": _utc_text(item.end)}
-            for item in forbidden
+            {"start": _utc_text(item.start), "end": _utc_text(item.end)} for item in forbidden
         ],
     }
-    return DevelopmentReadBoundaryV2(
+    digest = hash_json(_BOUNDARY_IDENTITY_DOMAIN, payload)
+    public = {
+        "schema_version": "phase5-validation-development-read-boundary-v2",
+        **payload,
+        "boundary_sha256": digest,
+    }
+    boundary = DevelopmentReadBoundaryV2(
         coverage_identity=coverage.coverage_identity,
         split_identity=split.split_identity,
         allowed_symbols=split.development_symbols,
@@ -549,9 +592,12 @@ def issue_development_read_boundary_v2(
         allowed_intervals=intervals,
         forbidden_asset_symbols=split.asset_holdout_symbols,
         forbidden_temporal_intervals=forbidden,
-        boundary_sha256=hash_json(_BOUNDARY_IDENTITY_DOMAIN, payload),
+        boundary_sha256=digest,
+        canonical_bytes=publication_json_bytes(public),
         _factory_token=_BOUNDARY_FACTORY,
     )
+    _register_verified_boundary(boundary, coverage_bytes, split_bytes)
+    return boundary
 
 
 def verify_development_read_boundary_v2(
@@ -561,6 +607,7 @@ def verify_development_read_boundary_v2(
 ) -> DevelopmentReadBoundaryV2:
     if not isinstance(boundary, DevelopmentReadBoundaryV2):
         raise TypeError("boundary must be DevelopmentReadBoundaryV2")
+    _verify_registered_boundary(boundary)
     if boundary.coverage_identity != coverage.coverage_identity:
         raise ValueError("boundary coverage identity is stale or wrong")
     if boundary.split_identity != split.split_identity:
@@ -601,31 +648,48 @@ class AccessAuditCountersV2:
 class AccessAuditRecordV2:
     sequence: int
     phase: str
+    programme_id: str
+    attempt_id: str
     boundary_sha256: str
     request: BoundaryRequestV2
     allowed: bool
     row_count: int
     byte_count: int
+    prior_record_sha256: str | None
     record_sha256: str
 
 
 class DevelopmentAccessAttemptLedgerV2:
     """Append-only attempt observations kept separate from boundary authority."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        programme_id: str,
+        attempt_id: str,
+        boundary: DevelopmentReadBoundaryV2,
+    ) -> None:
+        if not programme_id.startswith("VPV2-") or len(programme_id) != 69:
+            raise ValueError("programme_id must be a VPV2 identity")
+        if not attempt_id.startswith("VA-") or len(attempt_id) != 67:
+            raise ValueError("attempt_id must be a VA identity")
+        _verify_registered_boundary(boundary)
+        self._programme_id = programme_id
+        self._attempt_id = attempt_id
+        self._boundary = boundary
         self._records: list[AccessAuditRecordV2] = []
 
     @property
     def records(self) -> tuple[AccessAuditRecordV2, ...]:
-        return tuple(self._records)
+        return self._verified_records()
 
     @property
     def counters(self) -> AccessAuditCountersV2:
+        records = self._verified_records()
         attempts = {
             kind: sum(
-                record.phase == "adjudication"
-                and record.request.operation_kind is kind
-                for record in self._records
+                record.phase == "start" and record.request.operation_kind is kind
+                for record in records
             )
             for kind in AccessOperationKindV2
         }
@@ -635,46 +699,63 @@ class DevelopmentAccessAttemptLedgerV2:
             source_network_attempts=attempts[AccessOperationKindV2.NETWORK],
             source_query_attempts=attempts[AccessOperationKindV2.QUERY],
             source_iterator_attempts=attempts[AccessOperationKindV2.ITERATOR],
-            rows_admitted=sum(record.row_count for record in self._records),
-            bytes_admitted=sum(record.byte_count for record in self._records),
+            rows_admitted=sum(record.row_count for record in records),
+            bytes_admitted=sum(record.byte_count for record in records),
             denied_boundary_attempts=sum(
-                record.phase == "adjudication" and not record.allowed
-                for record in self._records
+                record.phase == "adjudication" and not record.allowed for record in records
             ),
-            final_scope_attempts=0,
+            final_scope_attempts=sum(
+                record.phase == "adjudication"
+                and not record.allowed
+                and _is_final_scope(self._boundary, record.request)
+                for record in records
+            ),
             final_rows=0,
             final_access_records=0,
         )
 
-    def record_adjudication(
-        self,
-        boundary: DevelopmentReadBoundaryV2,
-        request: BoundaryRequestV2,
-        *,
-        allowed: bool,
-    ) -> AccessAuditRecordV2:
-        if allowed:
-            boundary.authorize(request)
-        return self._append(boundary, request, "adjudication", allowed, 0, 0)
+    def start(self, request: BoundaryRequestV2) -> AccessAuditRecordV2:
+        if self._phase_for(request) is not None:
+            raise ValueError("ledger operation ordering requires one start")
+        return self._append(request, "start", False, 0, 0)
 
-    def record_completion(
+    def adjudicate(self, request: BoundaryRequestV2) -> AccessAuditRecordV2:
+        if self._phase_for(request) != "start":
+            raise ValueError("ledger operation ordering requires start before adjudication")
+        try:
+            self._boundary.authorize(request)
+        except PermissionError:
+            self._append(request, "adjudication", False, 0, 0)
+            raise
+        return self._append(request, "adjudication", True, 0, 0)
+
+    def complete(
         self,
-        boundary: DevelopmentReadBoundaryV2,
         request: BoundaryRequestV2,
         *,
         row_count: int,
         byte_count: int,
     ) -> AccessAuditRecordV2:
-        boundary.authorize(request)
+        if self._phase_for(request) != "adjudication_allowed":
+            raise ValueError(
+                "ledger operation ordering requires allowed adjudication before completion"
+            )
+        self._boundary.authorize(request)
         if min(row_count, byte_count) < 0:
             raise ValueError("completion counts must be non-negative")
-        return self._append(
-            boundary, request, "completion", True, row_count, byte_count
-        )
+        return self._append(request, "completion", True, row_count, byte_count)
+
+    def _phase_for(self, request: BoundaryRequestV2) -> str | None:
+        matching = [record for record in self._records if record.request == request]
+        if not matching:
+            return None
+        last = matching[-1]
+        if last.phase == "adjudication" and last.allowed:
+            return "adjudication_allowed"
+        return last.phase
 
     def _append(
         self,
-        boundary: DevelopmentReadBoundaryV2,
         request: BoundaryRequestV2,
         phase: str,
         allowed: bool,
@@ -685,7 +766,9 @@ class DevelopmentAccessAttemptLedgerV2:
         payload = {
             "sequence": sequence,
             "phase": phase,
-            "boundary_sha256": boundary.boundary_sha256,
+            "programme_id": self._programme_id,
+            "attempt_id": self._attempt_id,
+            "boundary_sha256": self._boundary.boundary_sha256,
             "request": {
                 "symbol": request.symbol,
                 "timeframe": request.timeframe,
@@ -697,27 +780,143 @@ class DevelopmentAccessAttemptLedgerV2:
             "allowed": allowed,
             "row_count": row_count,
             "byte_count": byte_count,
-            "prior_record_sha256": (
-                self._records[-1].record_sha256 if self._records else None
-            ),
+            "prior_record_sha256": (self._records[-1].record_sha256 if self._records else None),
         }
         record = AccessAuditRecordV2(
             sequence=sequence,
             phase=phase,
-            boundary_sha256=boundary.boundary_sha256,
+            programme_id=self._programme_id,
+            attempt_id=self._attempt_id,
+            boundary_sha256=self._boundary.boundary_sha256,
             request=request,
             allowed=allowed,
             row_count=row_count,
             byte_count=byte_count,
+            prior_record_sha256=payload["prior_record_sha256"],  # type: ignore[arg-type]
             record_sha256=hash_json("phase5-validation-access-attempt-v2", payload),
         )
         self._records.append(record)
         return record
 
+    def _verified_records(self) -> tuple[AccessAuditRecordV2, ...]:
+        prior: str | None = None
+        for sequence, record in enumerate(self._records, start=1):
+            payload = {
+                "sequence": sequence,
+                "phase": record.phase,
+                "programme_id": record.programme_id,
+                "attempt_id": record.attempt_id,
+                "boundary_sha256": record.boundary_sha256,
+                "request": {
+                    "symbol": record.request.symbol,
+                    "timeframe": record.request.timeframe,
+                    "start": _utc_text(record.request.start),
+                    "end": _utc_text(record.request.end),
+                    "operation_kind": record.request.operation_kind.value,
+                    "target_identity": record.request.target_identity,
+                },
+                "allowed": record.allowed,
+                "row_count": record.row_count,
+                "byte_count": record.byte_count,
+                "prior_record_sha256": prior,
+            }
+            if (
+                record.sequence != sequence
+                or record.programme_id != self._programme_id
+                or record.attempt_id != self._attempt_id
+                or record.boundary_sha256 != self._boundary.boundary_sha256
+                or record.prior_record_sha256 != prior
+                or record.record_sha256 != hash_json("phase5-validation-access-attempt-v2", payload)
+            ):
+                raise ValueError("access ledger chain verification failed")
+            prior = record.record_sha256
+        return tuple(self._records)
 
-def _exact_mapping(
-    payload: object, expected: set[str], label: str
-) -> dict[str, Any]:
+
+def _register_verified_split(split: DevelopmentSplitPublicationV2, coverage_bytes: bytes) -> None:
+    identifier = id(split)
+
+    def cleanup(reference: weakref.ReferenceType[DevelopmentSplitPublicationV2]) -> None:
+        current = _VERIFIED_SPLIT_OBJECTS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_SPLIT_OBJECTS.pop(identifier, None)
+
+    reference = weakref.ref(split, cleanup)
+    _VERIFIED_SPLIT_OBJECTS[identifier] = (
+        reference,
+        split.canonical_bytes,
+        coverage_bytes,
+    )
+
+
+def _verified_split_bytes(split: DevelopmentSplitPublicationV2, coverage_bytes: bytes) -> bytes:
+    registered = _VERIFIED_SPLIT_OBJECTS.get(id(split))
+    if (
+        registered is None
+        or registered[0]() is not split
+        or registered[1] != split.canonical_bytes
+        or registered[2] != coverage_bytes
+    ):
+        raise ValueError("split is not an exact verified original publication")
+    return registered[1]
+
+
+def _register_verified_boundary(
+    boundary: DevelopmentReadBoundaryV2,
+    coverage_bytes: bytes,
+    split_bytes: bytes,
+) -> None:
+    identifier = id(boundary)
+
+    def cleanup(reference: weakref.ReferenceType[DevelopmentReadBoundaryV2]) -> None:
+        current = _VERIFIED_BOUNDARY_OBJECTS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_BOUNDARY_OBJECTS.pop(identifier, None)
+
+    reference = weakref.ref(boundary, cleanup)
+    _VERIFIED_BOUNDARY_OBJECTS[identifier] = (
+        reference,
+        boundary.canonical_bytes,
+        coverage_bytes,
+        split_bytes,
+    )
+
+
+def _verify_registered_boundary(boundary: DevelopmentReadBoundaryV2) -> None:
+    registered = _VERIFIED_BOUNDARY_OBJECTS.get(id(boundary))
+    if (
+        registered is None
+        or registered[0]() is not boundary
+        or registered[1] != boundary.canonical_bytes
+    ):
+        raise ValueError("boundary is not an exact verified original publication")
+    coverage = SourceCoveragePublicationV2.from_dict(_decode_publication(registered[2], "coverage"))
+    split = DevelopmentSplitPublicationV2.from_dict(
+        _decode_publication(registered[3], "split"), coverage
+    )
+    expected = issue_development_read_boundary_v2(coverage, split)
+    if expected.to_dict() != boundary.to_dict():
+        raise ValueError("boundary differs from recomputed original publication bytes")
+
+
+def _decode_publication(content: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = __import__("json").loads(content)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError(f"{label} original publication bytes are invalid") from error
+    if not isinstance(decoded, dict):
+        raise ValueError(f"{label} original publication must be an object")
+    return decoded
+
+
+def _is_final_scope(boundary: DevelopmentReadBoundaryV2, request: BoundaryRequestV2) -> bool:
+    return request.symbol in boundary.forbidden_asset_symbols or any(
+        request.start < interval.end and request.end > interval.start
+        for interval in boundary.forbidden_temporal_intervals
+    )
+
+
+def _exact_mapping(payload: object, expected: set[str], label: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise TypeError(f"{label} must be an object")
     if set(payload) != expected:

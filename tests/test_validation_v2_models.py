@@ -93,9 +93,7 @@ def test_v1_lineage_strings_cannot_substitute_for_v2_publications(
 
 def test_publication_identity_types_are_not_interchangeable() -> None:
     with pytest.raises(TypeError, match="V2 identity"):
-        _config(
-            source_identity=_identity(AggregatePublicationIdentityV2, "not-source")
-        )
+        _config(source_identity=_identity(AggregatePublicationIdentityV2, "not-source"))
 
 
 def test_loader_rejects_v1_programme_schema() -> None:

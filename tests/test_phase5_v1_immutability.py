@@ -18,9 +18,7 @@ _V1_CONFIG_BYTES = {
         "b96036e541c198762ee5cdfd43175ba154fcde5084f56da6a88c52ee2780a463"
     ),
 }
-_V1_PROGRAMME_ID = (
-    "VP-0d65fef04ca44dfc5ba7c7705e0be197480d7456b51178702a0011a18ab4487d"
-)
+_V1_PROGRAMME_ID = "VP-0d65fef04ca44dfc5ba7c7705e0be197480d7456b51178702a0011a18ab4487d"
 _V1_CONFIG_SHA256 = "f98bd334bd8e360d274ad4aad6df0f3336cf6acc9f5c94c7328cab68866f1561"
 
 
@@ -33,9 +31,7 @@ def test_phase5_v1_config_bytes_are_immutable(name: str, expected_sha256: str) -
 
 def test_phase5_v1_documented_programme_identity_is_immutable() -> None:
     payload = json.loads(
-        Path("configs/phase5/phase5-validation-programme-v1.json").read_text(
-            encoding="utf-8"
-        )
+        Path("configs/phase5/phase5-validation-programme-v1.json").read_text(encoding="utf-8")
     )
 
     assert payload["programme_id"] == _V1_PROGRAMME_ID
@@ -43,13 +39,17 @@ def test_phase5_v1_documented_programme_identity_is_immutable() -> None:
 
 
 def test_v1_receipt_count_is_not_v2_slot_computation_evidence() -> None:
-    """A V1 receipt is a wrapper, not a distinct V2 slot-computation result."""
+    from market_structure_lab.research.validation_v2_models import (
+        verify_v2_slot_computation_count,
+    )
 
-    v1_receipt = {
-        "schema_version": "validation-evaluation-receipt-v1",
-        "evaluation_id": "VR-" + "1" * 64,
-    }
+    v1_receipts = tuple(
+        {
+            "schema_version": "validation-evaluation-receipt-v1",
+            "evaluation_id": f"VR-{index:064x}",
+        }
+        for index in range(1_104)
+    )
 
-    assert "slot_attempt_sha256" not in v1_receipt
-    assert "slot_computation_result_sha256" not in v1_receipt
-    assert v1_receipt["schema_version"] != "validation-slot-computation-result-v2"
+    with pytest.raises(ValueError, match="V2 slot computation"):
+        verify_v2_slot_computation_count(v1_receipts, expected_count=1_104)

@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
+import json
 import re
 from typing import Any, ClassVar, Self
+import weakref
 
 from market_structure_lab.core.identity import hash_json
 
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _COMMIT = re.compile(r"^[a-f0-9]{40}$")
 _SOURCE_COVERAGE_FACTORY = object()
+_VERIFIED_COVERAGE_OBJECTS: dict[
+    int, tuple[weakref.ReferenceType[SourceCoveragePublicationV2], bytes]
+] = {}
 
 
 def _require_sha256(value: object, label: str) -> str:
@@ -27,11 +32,7 @@ def _require_string(value: object, label: str) -> str:
 
 
 def _require_utc(value: object, label: str) -> datetime:
-    if (
-        not isinstance(value, datetime)
-        or value.tzinfo is None
-        or value.utcoffset() != timedelta(0)
-    ):
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{label} must be UTC-aware")
     return value
 
@@ -174,17 +175,13 @@ class ReconciliationAuthorityV2:
 
     def __post_init__(self) -> None:
         _require_sha256(self.promotion_receipt_sha256, "promotion_receipt_sha256")
-        _require_digest_tuple(
-            self.work_unit_manifest_sha256, "work_unit_manifest_sha256"
-        )
+        _require_digest_tuple(self.work_unit_manifest_sha256, "work_unit_manifest_sha256")
         _require_digest_tuple(self.comparison_part_sha256, "comparison_part_sha256")
         _require_string(self.replacement_source_policy, "replacement_source_policy")
 
     @property
     def identity_sha256(self) -> str:
-        return hash_json(
-            "phase5-validation-reconciliation-authority-v2", self.to_dict()
-        )
+        return hash_json("phase5-validation-reconciliation-authority-v2", self.to_dict())
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -292,7 +289,7 @@ class SourceCoverageEntryV2:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class SourceCoveragePublicationV2:
     """Self-addressed metadata-only coverage publication."""
 
@@ -301,6 +298,7 @@ class SourceCoveragePublicationV2:
     compatibility_metadata_sha256: str
     entries: tuple[SourceCoverageEntryV2, ...]
     coverage_identity: SourceCoverageIdentityV2
+    canonical_bytes: bytes = field(repr=False, compare=False)
     _factory_token: InitVar[object | None] = None
 
     def __post_init__(self, _factory_token: object | None) -> None:
@@ -310,9 +308,7 @@ class SourceCoveragePublicationV2:
             raise TypeError("raw_dump must be RawDumpIdentityV2")
         if not isinstance(self.reconciliation, ReconciliationAuthorityV2):
             raise TypeError("reconciliation must be ReconciliationAuthorityV2")
-        _require_sha256(
-            self.compatibility_metadata_sha256, "compatibility_metadata_sha256"
-        )
+        _require_sha256(self.compatibility_metadata_sha256, "compatibility_metadata_sha256")
         if (
             not isinstance(self.entries, tuple)
             or not self.entries
@@ -326,6 +322,9 @@ class SourceCoveragePublicationV2:
             self._identity_payload()
         ):
             raise ValueError("coverage identity does not match metadata")
+        if self.canonical_bytes != publication_json_bytes(self.to_dict()):
+            raise ValueError("coverage canonical bytes do not match publication")
+        _register_verified_coverage(self)
 
     @classmethod
     def freeze(
@@ -343,12 +342,19 @@ class SourceCoveragePublicationV2:
             "compatibility_metadata_sha256": compatibility_metadata_sha256,
             "entries": [item.to_dict() for item in ordered],
         }
+        identity = SourceCoverageIdentityV2.from_payload(payload)
+        public = {
+            "schema_version": "phase5-validation-source-coverage-v2",
+            **payload,
+            "coverage_identity": identity.value,
+        }
         return cls(
             raw_dump=raw_dump,
             reconciliation=reconciliation,
             compatibility_metadata_sha256=compatibility_metadata_sha256,
             entries=ordered,
-            coverage_identity=SourceCoverageIdentityV2.from_payload(payload),
+            coverage_identity=identity,
+            canonical_bytes=publication_json_bytes(public),
             _factory_token=_SOURCE_COVERAGE_FACTORY,
         )
 
@@ -388,9 +394,7 @@ class SourceCoveragePublicationV2:
             raise TypeError("coverage entries must be a list")
         publication = cls.freeze(
             raw_dump=RawDumpIdentityV2.from_dict(values["raw_dump"]),
-            reconciliation=ReconciliationAuthorityV2.from_dict(
-                values["reconciliation"]
-            ),
+            reconciliation=ReconciliationAuthorityV2.from_dict(values["reconciliation"]),
             compatibility_metadata_sha256=values[  # type: ignore[arg-type]
                 "compatibility_metadata_sha256"
             ],
@@ -399,6 +403,19 @@ class SourceCoveragePublicationV2:
         if values["coverage_identity"] != publication.coverage_identity.value:
             raise ValueError("coverage_identity does not match publication")
         return publication
+
+
+def verified_source_coverage_bytes(
+    publication: SourceCoveragePublicationV2,
+) -> bytes:
+    """Return bytes only for the exact registry-issued publication object."""
+
+    registered = _VERIFIED_COVERAGE_OBJECTS.get(id(publication))
+    if registered is None or registered[0]() is not publication:
+        raise ValueError("source coverage is not an exact verified original publication")
+    if registered[1] != publication.canonical_bytes:
+        raise ValueError("source coverage original publication bytes changed")
+    return registered[1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,9 +436,10 @@ class ValidationProgrammeConfigV2:
     programme_metadata: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.implementation_checkpoint, str) or _COMMIT.fullmatch(
-            self.implementation_checkpoint
-        ) is None:
+        if (
+            not isinstance(self.implementation_checkpoint, str)
+            or _COMMIT.fullmatch(self.implementation_checkpoint) is None
+        ):
             raise ValueError("implementation_checkpoint must be a 40-character commit")
         identity_fields = {
             "coverage_identity": SourceCoverageIdentityV2,
@@ -513,13 +531,9 @@ class ValidationProgrammeConfigV2:
             access_ledger_identity=AccessAuditLedgerIdentityV2(
                 payload["access_ledger_identity"]  # type: ignore[arg-type]
             ),
-            policy_identities=_pair_tuple(
-                payload["policy_identities"], "policy_identities"
-            ),
+            policy_identities=_pair_tuple(payload["policy_identities"], "policy_identities"),
             work_budget_sha256=payload["work_budget_sha256"],  # type: ignore[arg-type]
-            programme_metadata=_pair_tuple(
-                payload["programme_metadata"], "programme_metadata"
-            ),
+            programme_metadata=_pair_tuple(payload["programme_metadata"], "programme_metadata"),
         )
 
 
@@ -531,9 +545,7 @@ def load_validation_programme_config_v2(payload: object) -> ValidationProgrammeC
     if payload.get("schema_version") != "phase5-validation-programme-config-v2":
         raise ValueError("V2 config schema_version is invalid")
     preimage = {
-        key: value
-        for key, value in payload.items()
-        if key not in {"config_sha256", "programme_id"}
+        key: value for key, value in payload.items() if key not in {"config_sha256", "programme_id"}
     }
     config = ValidationProgrammeConfigV2.from_config_dict(preimage)
     expected_keys = set(config.to_config_dict()) | {"config_sha256", "programme_id"}
@@ -546,9 +558,53 @@ def load_validation_programme_config_v2(payload: object) -> ValidationProgrammeC
     return config
 
 
-def _exact_mapping(
-    payload: object, expected: set[str], label: str
-) -> dict[str, Any]:
+def verify_v2_slot_computation_count(
+    publications: object,
+    *,
+    expected_count: int,
+) -> int:
+    """Count only distinct V2 slot-computation results, never V1 receipt wrappers."""
+
+    if not isinstance(publications, tuple):
+        raise TypeError("V2 slot computation publications must be a tuple")
+    identities: set[str] = set()
+    for publication in publications:
+        if (
+            not isinstance(publication, dict)
+            or publication.get("schema_version") != "validation-slot-computation-result-v2"
+        ):
+            raise ValueError("publication is not a V2 slot computation result")
+        identity = _require_sha256(
+            publication.get("slot_computation_result_sha256"),
+            "slot_computation_result_sha256",
+        )
+        identities.add(identity)
+    if len(publications) != expected_count or len(identities) != expected_count:
+        raise ValueError("V2 slot computation count is incomplete or duplicated")
+    return len(identities)
+
+
+def publication_json_bytes(payload: object) -> bytes:
+    """Return deterministic public JSON bytes used by immutable V2 publications."""
+
+    return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+
+
+def _register_verified_coverage(publication: SourceCoveragePublicationV2) -> None:
+    identifier = id(publication)
+
+    def cleanup(reference: weakref.ReferenceType[SourceCoveragePublicationV2]) -> None:
+        current = _VERIFIED_COVERAGE_OBJECTS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_COVERAGE_OBJECTS.pop(identifier, None)
+
+    reference = weakref.ref(publication, cleanup)
+    _VERIFIED_COVERAGE_OBJECTS[identifier] = (reference, publication.canonical_bytes)
+
+
+def _exact_mapping(payload: object, expected: set[str], label: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise TypeError(f"{label} must be an object")
     if set(payload) != expected:
@@ -557,9 +613,7 @@ def _exact_mapping(
 
 
 def _string_tuple(value: object, label: str) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)) or any(
-        not isinstance(item, str) for item in value
-    ):
+    if not isinstance(value, (list, tuple)) or any(not isinstance(item, str) for item in value):
         raise TypeError(f"{label} must be a string sequence")
     return tuple(value)
 
@@ -586,9 +640,7 @@ def _pair_tuple(value: object, label: str) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
-def _require_pair_tuple(
-    value: object, label: str, *, digest_values: bool = False
-) -> None:
+def _require_pair_tuple(value: object, label: str, *, digest_values: bool = False) -> None:
     if not isinstance(value, tuple):
         raise TypeError(f"{label} must be a tuple")
     pairs = _pair_tuple(value, label)
@@ -617,4 +669,7 @@ __all__ = [
     "ValidationProgrammeConfigV2",
     "ValidationRosterIdentityV2",
     "load_validation_programme_config_v2",
+    "publication_json_bytes",
+    "verified_source_coverage_bytes",
+    "verify_v2_slot_computation_count",
 ]
