@@ -1,0 +1,95 @@
+{
+  "aggregate_config": {
+    "bounded_read_required": true,
+    "required_timeframes": [
+      "1h",
+      "4h"
+    ],
+    "status": "unavailable_no_verified_publication",
+    "substitution_allowed": false
+  },
+  "binding_hashes": {
+    "control_policy_sha256": "44919f3f406b9fdfb834c056ee7273ff28f9ef6f21c405f974d00bb5ff534515",
+    "cost_policy_sha256": "c139f5319c3ee020ba8fd6b4b59e28c918cf24ab113459343412770753ee4547",
+    "profile_config_sha256": "8054f91eb741cf4dc7e4fab62251e062f7ca77837efca2db8518ef8bac478d19",
+    "source_price_precision_sha256": "a243785062cea5929aaca44cb005866a07294a7c310153052a90a0f550d73ada",
+    "split_sha256": "51bb36d88508fc848b4fd947a827376c633d86274b6ed8a43aadb5e79520f79b"
+  },
+  "bindings_sha256": "5c8d7c9167b9d3ed31f5369aec9c817d3d55277aa947005acfe811b80782919d",
+  "component": "development",
+  "control_policy": {
+    "multiple_testing_correction_required": true,
+    "negative_controls_required": true,
+    "serial_dependence_aware": true,
+    "status": "frozen_implementation_not_executed",
+    "trial_count": 1104
+  },
+  "cost_policy": {
+    "requires_fees": true,
+    "requires_funding_when_applicable": true,
+    "requires_latency_and_fill_evidence": true,
+    "requires_slippage": true,
+    "requires_spread": true,
+    "status": "unavailable_no_event_level_cost_publication",
+    "zero_cost_default_allowed": false
+  },
+  "final_holdout_access_count": 0,
+  "profile_config": {
+    "integer_bin_indices_required": true,
+    "ohlcv_volume_at_price_is_approximate": true,
+    "status": "unavailable_without_source_price_precision_authority"
+  },
+  "schema_version": "phase5-validation-bindings-v1",
+  "source_price_precision": {
+    "caller_attestation_allowed": false,
+    "inference_from_validation_data_allowed": false,
+    "status": "unavailable_no_independently_bound_publication"
+  },
+  "source_universe": {
+    "common_complete_days_floor": 825,
+    "common_complete_end": "2026-07-16T11:23:00Z",
+    "common_complete_start": "2024-04-11T12:00:00Z",
+    "coverage_interval_count": 285,
+    "coverage_logical_sha256": "e4b427b3589402809e519afe72f3ff47fee8912906b4fe606eb4201ad5334b3f",
+    "eligible_symbols": [
+      "ADAUSDT",
+      "ALGOUSDT",
+      "BNBUSDT",
+      "DOGEUSDT",
+      "DOTUSDT",
+      "IMXUSDT",
+      "INJUSDT",
+      "LINKUSDT",
+      "NEARUSDT",
+      "TAOUSDT",
+      "XLMUSDT",
+      "XRPUSDT",
+      "ZECUSDT"
+    ],
+    "excluded_source_conflicts": [
+      "ARUSDT",
+      "AVAXUSDT",
+      "BTCUSDT",
+      "ETHUSDT",
+      "FETUSDT",
+      "PENDLEUSDT",
+      "RENDERUSDT",
+      "SOLUSDT",
+      "SUIUSDT"
+    ],
+    "promotion_content_sha256": "19315f0c52c6d3e9a91a5127921ce349fe50e60944c0ccc1a209b5637b3b9cf6",
+    "promotion_manifest_sha256": "1eaa2909e0f564490ebf65fe35027e588d2b46b135c52f1ed9d16f38fbbd2629",
+    "promotion_receipt_path": "data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json",
+    "promotion_receipt_sha256": "cb399ac01d0beeea4666da071d9186e9a144f3f7fe5e4d1bf760696c631e8529",
+    "promotion_run_id": "RR-000008",
+    "status": "coverage_metadata_sufficient"
+  },
+  "split_policy": {
+    "component": "development",
+    "final_holdout_status": "sealed_not_opened",
+    "inner_fold_ceiling": 3,
+    "outer_fold_ceiling": 4,
+    "purge_and_embargo_required": true,
+    "status": "blocked_before_fold_freeze"
+  }
+}

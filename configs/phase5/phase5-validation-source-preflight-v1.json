@@ -1,0 +1,52 @@
+{
+  "common_complete_days": 825,
+  "component": "development",
+  "eligible_symbols": [
+    "ADAUSDT",
+    "ALGOUSDT",
+    "BNBUSDT",
+    "DOGEUSDT",
+    "DOTUSDT",
+    "IMXUSDT",
+    "INJUSDT",
+    "LINKUSDT",
+    "NEARUSDT",
+    "TAOUSDT",
+    "XLMUSDT",
+    "XRPUSDT",
+    "ZECUSDT"
+  ],
+  "final_holdout_access_count": 0,
+  "manifest_sha256": "1eca27a0e8a2a79036d2000e6a5d88babef2ca9f7dfed9f5f203074e7e6a9a5e",
+  "mapping_incompatible_symbols": [
+    "ARUSDT",
+    "AVAXUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "FETUSDT",
+    "PENDLEUSDT",
+    "RENDERUSDT",
+    "SOLUSDT",
+    "SUIUSDT"
+  ],
+  "missing_prerequisites": [
+    "aggregate_publications",
+    "event_level_cost_evidence",
+    "profile_price_precision_evidence"
+  ],
+  "schema_version": "phase5-validation-source-preflight-v1",
+  "source_conflict_symbols": [
+    "ARUSDT",
+    "AVAXUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "FETUSDT",
+    "PENDLEUSDT",
+    "RENDERUSDT",
+    "SOLUSDT",
+    "SUIUSDT"
+  ],
+  "source_publication_path": "data/exports/reconciliation/promotions/run_id=RR-000008/receipt.json",
+  "source_publication_sha256": "cb399ac01d0beeea4666da071d9186e9a144f3f7fe5e4d1bf760696c631e8529",
+  "status": "missing_prerequisites"
+}
