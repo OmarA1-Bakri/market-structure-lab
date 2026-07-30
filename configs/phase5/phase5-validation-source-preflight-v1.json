@@ -1,5 +1,10 @@
 {
+  "bindings_sha256": "4b06188311325042f85b0d67ae6038159db5acb041492cf83dc4e4464c4e984e",
   "common_complete_days": 825,
+  "common_complete_end": "2026-07-16T11:23:00Z",
+  "common_complete_start": "2024-04-11T12:00:00Z",
+  "compatibility_manifest_path": "data/exports/manifests/recovery-callscore-20260714-validated.json",
+  "compatibility_manifest_sha256": "482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2",
   "component": "development",
   "eligible_symbols": [
     "ADAUSDT",
@@ -17,7 +22,7 @@
     "ZECUSDT"
   ],
   "final_holdout_access_count": 0,
-  "manifest_sha256": "1eca27a0e8a2a79036d2000e6a5d88babef2ca9f7dfed9f5f203074e7e6a9a5e",
+  "manifest_sha256": "80730e2523be9c2bf8463716d806164889df2693007316e20127bccb3f19e5d7",
   "mapping_incompatible_symbols": [
     "ARUSDT",
     "AVAXUSDT",

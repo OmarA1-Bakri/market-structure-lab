@@ -15,7 +15,7 @@
     "source_price_precision_sha256": "a243785062cea5929aaca44cb005866a07294a7c310153052a90a0f550d73ada",
     "split_sha256": "51bb36d88508fc848b4fd947a827376c633d86274b6ed8a43aadb5e79520f79b"
   },
-  "bindings_sha256": "5c8d7c9167b9d3ed31f5369aec9c817d3d55277aa947005acfe811b80782919d",
+  "bindings_sha256": "4b06188311325042f85b0d67ae6038159db5acb041492cf83dc4e4464c4e984e",
   "component": "development",
   "control_policy": {
     "multiple_testing_correction_required": true,
@@ -49,6 +49,8 @@
     "common_complete_days_floor": 825,
     "common_complete_end": "2026-07-16T11:23:00Z",
     "common_complete_start": "2024-04-11T12:00:00Z",
+    "compatibility_manifest_path": "data/exports/manifests/recovery-callscore-20260714-validated.json",
+    "compatibility_manifest_sha256": "482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2",
     "coverage_interval_count": 285,
     "coverage_logical_sha256": "e4b427b3589402809e519afe72f3ff47fee8912906b4fe606eb4201ad5334b3f",
     "eligible_symbols": [
