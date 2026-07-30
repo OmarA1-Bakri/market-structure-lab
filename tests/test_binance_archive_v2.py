@@ -4,6 +4,8 @@ from dataclasses import replace
 from dataclasses import fields
 from datetime import UTC, datetime
 import copy
+import hashlib
+import json
 from pathlib import Path
 import zipfile
 
@@ -90,11 +92,7 @@ def test_request_freeze_rejects_final_scope_before_url_construction(
         object.__setattr__(
             bad,
             name,
-            (
-                (boundary.forbidden_asset_symbols[0],)
-                if name == "allowed_symbols"
-                else value
-            ),
+            ((boundary.forbidden_asset_symbols[0],) if name == "allowed_symbols" else value),
         )
     constructed = False
 
@@ -166,24 +164,20 @@ def test_loaded_manifest_rejects_coherent_scope_and_path_forgery_before_io(
         request["symbol"] = boundary.forbidden_asset_symbols[0]
         stamp = str(request["start"])[:10]
         filename = f"{request['symbol']}-aggTrades-{stamp}.zip"
-        request["object_path"] = (
-            f"/data/spot/daily/aggTrades/{request['symbol']}/{filename}"
-        )
+        request["object_path"] = f"/data/spot/daily/aggTrades/{request['symbol']}/{filename}"
         request["checksum_path"] = f"{request['object_path']}.CHECKSUM"
     elif forgery == "final_period":
         interval = boundary.forbidden_temporal_intervals[0]
-        request["start"] = interval.start.isoformat(timespec="seconds").replace(
-            "+00:00", "Z"
+        request["start"] = interval.start.isoformat(timespec="seconds").replace("+00:00", "Z")
+        request["end"] = (
+            (interval.start.replace(hour=0) + module.timedelta(days=1))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
         )
-        request["end"] = (interval.start.replace(hour=0) + module.timedelta(days=1)).isoformat(
-            timespec="seconds"
-        ).replace("+00:00", "Z")
         stamp = str(request["start"])[:10]
         filename = f"{request['symbol']}-aggTrades-{stamp}.zip"
         request["period"] = "daily"
-        request["object_path"] = (
-            f"/data/spot/daily/aggTrades/{request['symbol']}/{filename}"
-        )
+        request["object_path"] = f"/data/spot/daily/aggTrades/{request['symbol']}/{filename}"
         request["checksum_path"] = f"{request['object_path']}.CHECKSUM"
     else:
         request["object_path"] = str(request["object_path"]).replace(
@@ -312,6 +306,99 @@ def test_expected_failure_publishes_paired_audit_and_tamper_rejects(
         )
 
 
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "wrong_manifest",
+        "partial_unavailable",
+        "available_duplicate_inventory",
+        "audit_request_count_mismatch",
+        "unavailable_without_failure",
+    ),
+)
+def test_loader_rejects_self_hashed_fabricated_acquisition_publications(
+    attack: str,
+    issued_v2_publications,
+    unavailable_source_v2,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import binance_archive_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    manifest_path = tmp_path / "requests.json"
+    manifest = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=unavailable_source_v2,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=manifest_path,
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_download_small_with_retries",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ArchiveNetworkUnavailable("fixture unavailable")
+        ),
+    )
+    output = tmp_path / "output"
+    acquire_binance_archives_v2(
+        boundary=boundary,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        audit_ledger_root=tmp_path / "audit",
+        cache_root=cache,
+        output_root=output,
+    )
+    publication_path = output / "publication.json"
+    publication = json.loads(publication_path.read_bytes())
+    cached = b"fabricated archive object"
+    cached_sha256 = hashlib.sha256(cached).hexdigest()
+    relative = Path("sha256") / cached_sha256[:2] / cached_sha256
+    cached_path = cache / relative
+    cached_path.parent.mkdir(parents=True)
+    cached_path.write_bytes(cached)
+    fake_object = {
+        "request_sha256": manifest.requests[0].request_sha256,
+        "official_sha256": cached_sha256,
+        "local_sha256": cached_sha256,
+        "cache_object": relative.as_posix(),
+        "compressed_bytes": len(cached),
+        "decompressed_bytes": 0,
+        "row_count": 0,
+    }
+    if attack == "wrong_manifest":
+        publication["manifest_sha256"] = "0" * 64
+    elif attack == "partial_unavailable":
+        publication["objects"] = [fake_object]
+        publication["compressed_bytes"] = len(cached)
+    elif attack == "available_duplicate_inventory":
+        publication["status"] = "available"
+        publication["failure"] = None
+        publication["objects"] = [copy.deepcopy(fake_object) for _ in manifest.requests]
+        publication["compressed_bytes"] = len(cached) * len(manifest.requests)
+    elif attack == "audit_request_count_mismatch":
+        publication["request_count"] += 1
+    else:
+        publication["failure"] = None
+    identity = {key: value for key, value in publication.items() if key != "publication_sha256"}
+    publication["publication_sha256"] = hash_json(
+        module._ACQUISITION_DOMAIN,
+        identity,  # noqa: SLF001
+    )
+    publication_path.write_bytes(publication_json_bytes(publication))
+
+    with pytest.raises(ValueError, match="acquisition|manifest|inventory|audit|failure"):
+        load_binance_archive_acquisition_v2(
+            publication_root=output,
+            cache_root=cache,
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+
+
 def test_archive_row_budget_rejects_before_reading_an_extra_row(
     issued_v2_publications,
     unavailable_source_v2,
@@ -371,14 +458,14 @@ def test_paired_acquisition_and_audit_publication_roll_back_together(
     )
     audit = tmp_path / "audit"
     output = tmp_path / "output"
-    original_rename = module.os.rename
+    original_reserve = module._reserve_publication_directory  # noqa: SLF001
 
-    def fail_second_publish(source, destination):
+    def fail_second_publish(destination: Path) -> None:
         if Path(destination) == audit:
             raise OSError("fixture second publication failure")
-        return original_rename(source, destination)
+        original_reserve(destination)
 
-    monkeypatch.setattr(module.os, "rename", fail_second_publish)
+    monkeypatch.setattr(module, "_reserve_publication_directory", fail_second_publish)
     with pytest.raises(OSError, match="second publication"):
         acquire_binance_archives_v2(
             boundary=boundary,
@@ -390,3 +477,52 @@ def test_paired_acquisition_and_audit_publication_roll_back_together(
         )
     assert not audit.exists()
     assert not output.exists()
+
+
+def test_paired_acquisition_refuses_concurrent_empty_destination_directory(
+    issued_v2_publications,
+    unavailable_source_v2,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import binance_archive_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    manifest_path = tmp_path / "requests.json"
+    manifest = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=unavailable_source_v2,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=manifest_path,
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_download_small_with_retries",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ArchiveNetworkUnavailable("fixture unavailable")
+        ),
+    )
+    audit = tmp_path / "audit"
+    output = tmp_path / "output"
+    original_reserve = module._reserve_publication_directory  # noqa: SLF001
+
+    def race(destination: Path) -> None:
+        if Path(destination) == output:
+            output.mkdir()
+        original_reserve(destination)
+
+    monkeypatch.setattr(module, "_reserve_publication_directory", race)
+    with pytest.raises(FileExistsError):
+        acquire_binance_archives_v2(
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            audit_ledger_root=audit,
+            cache_root=cache,
+            output_root=output,
+        )
+    assert output.is_dir()
+    assert not tuple(output.iterdir())
+    assert not audit.exists()

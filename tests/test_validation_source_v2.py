@@ -93,9 +93,12 @@ def test_discovery_truthfully_seals_unavailable_without_reading_rows(
     assert result.status is ScopedSourceStatusV2.UNAVAILABLE
     assert result.rows_read == result.final_rows == result.final_access_records == 0
     assert result.candidates[0].rejection_reason == "whole_table_source_forbidden"
-    assert verify_scoped_source_availability_v2(
-        result, boundary=boundary, publication_root=tmp_path / "publication"
-    ) == result
+    assert (
+        verify_scoped_source_availability_v2(
+            result, boundary=boundary, publication_root=tmp_path / "publication"
+        )
+        == result
+    )
     with pytest.raises(FrozenInstanceError):
         result.rows_read = 1  # type: ignore[misc]
 
@@ -132,9 +135,7 @@ def test_availability_rejects_deleted_or_tampered_original_audit(
         )
 
 
-def test_copied_availability_loses_sealed_authority(
-    issued_v2_publications, tmp_path: Path
-) -> None:
+def test_copied_availability_loses_sealed_authority(issued_v2_publications, tmp_path: Path) -> None:
     _, _, boundary = issued_v2_publications
     candidates = tmp_path / "candidates"
     candidates.mkdir()
@@ -239,9 +240,7 @@ def test_admission_requires_original_independent_predicate_evidence(
     candidates = tmp_path / "candidates"
     candidates.mkdir()
     _, verifier_sha256 = _trusted_candidate_files(candidates, boundary)
-    monkeypatch.setattr(
-        module, "_TRUSTED_VERIFIER_EVIDENCE_SHA256", frozenset({verifier_sha256})
-    )
+    monkeypatch.setattr(module, "_TRUSTED_VERIFIER_EVIDENCE_SHA256", frozenset({verifier_sha256}))
     output = tmp_path / "publication"
     availability = discover_scoped_source_v2(
         boundary=boundary,
@@ -280,9 +279,7 @@ def test_self_attested_descriptor_is_immutably_unavailable(
             "original_manifest_sha256": "a" * 64,
         },
     }
-    (candidates / "candidate.json").write_bytes(
-        publication_json_bytes(self_attested)
-    )
+    (candidates / "candidate.json").write_bytes(publication_json_bytes(self_attested))
     availability = discover_scoped_source_v2(
         boundary=boundary,
         candidate_root=candidates,
@@ -291,8 +288,7 @@ def test_self_attested_descriptor_is_immutably_unavailable(
     )
     assert availability.status is ScopedSourceStatusV2.UNAVAILABLE
     assert (
-        availability.candidates[0].rejection_reason
-        == "trusted_original_predicate_evidence_invalid"
+        availability.candidates[0].rejection_reason == "trusted_original_predicate_evidence_invalid"
     )
 
 
@@ -308,14 +304,14 @@ def test_paired_source_and_audit_publication_roll_back_together(
     candidates.mkdir()
     audit = tmp_path / "audit"
     output = tmp_path / "publication"
-    original_rename = module.os.rename
+    original_reserve = module._reserve_publication_directory  # noqa: SLF001
 
-    def fail_second_publish(source, destination):
+    def fail_second_publish(destination: Path) -> None:
         if Path(destination) == audit:
             raise OSError("fixture second publication failure")
-        return original_rename(source, destination)
+        original_reserve(destination)
 
-    monkeypatch.setattr(module.os, "rename", fail_second_publish)
+    monkeypatch.setattr(module, "_reserve_publication_directory", fail_second_publish)
     with pytest.raises(OSError, match="second publication"):
         discover_scoped_source_v2(
             boundary=boundary,
@@ -325,3 +321,35 @@ def test_paired_source_and_audit_publication_roll_back_together(
         )
     assert not audit.exists()
     assert not output.exists()
+
+
+def test_paired_source_refuses_concurrent_empty_destination_directory(
+    issued_v2_publications,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    audit = tmp_path / "audit"
+    output = tmp_path / "publication"
+    original_reserve = module._reserve_publication_directory  # noqa: SLF001
+
+    def race(destination: Path) -> None:
+        if Path(destination) == output:
+            output.mkdir()
+        original_reserve(destination)
+
+    monkeypatch.setattr(module, "_reserve_publication_directory", race)
+    with pytest.raises(FileExistsError):
+        discover_scoped_source_v2(
+            boundary=boundary,
+            candidate_root=candidates,
+            audit_ledger_root=audit,
+            output_root=output,
+        )
+    assert output.is_dir()
+    assert not tuple(output.iterdir())
+    assert not audit.exists()

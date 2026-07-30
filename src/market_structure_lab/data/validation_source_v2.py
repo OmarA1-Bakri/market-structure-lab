@@ -84,9 +84,7 @@ def verify_dump_toc_metadata_v2(pg_restore_list: bytes) -> DumpTocMetadataV2:
         raise ValueError("market_data.candles is not the verified public.candles table")
     return DumpTocMetadataV2(
         table="public.candles",
-        table_data_toc_sha256=hash_json(
-            "phase5-validation-public-candles-toc-v2", matches[0]
-        ),
+        table_data_toc_sha256=hash_json("phase5-validation-public-candles-toc-v2", matches[0]),
     )
 
 
@@ -171,7 +169,12 @@ class ScopedSourceAvailabilityV2:
             value = getattr(self, label)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{label} must be a non-negative integer")
-        if self.rows_read or self.final_scope_attempts or self.final_rows or self.final_access_records:
+        if (
+            self.rows_read
+            or self.final_scope_attempts
+            or self.final_rows
+            or self.final_access_records
+        ):
             raise ValueError("source discovery cannot read rows or access final scope")
         admitted = tuple(item for item in self.candidates if item.admitted)
         if self.status is ScopedSourceStatusV2.AVAILABLE:
@@ -179,9 +182,7 @@ class ScopedSourceAvailabilityV2:
                 raise ValueError("available status requires exactly one admitted source")
         elif admitted or self.admitted_source_identity is not None:
             raise ValueError("unavailable status cannot name an admitted source")
-        if self.availability_sha256 != hash_json(
-            _AVAILABILITY_DOMAIN, self._identity_payload()
-        ):
+        if self.availability_sha256 != hash_json(_AVAILABILITY_DOMAIN, self._identity_payload()):
             raise ValueError("availability identity differs from its payload")
         if self.canonical_bytes != publication_json_bytes(self.to_dict()):
             raise ValueError("availability canonical bytes differ from publication")
@@ -281,9 +282,7 @@ def discover_scoped_source_v2(
         )
     )
     output_stage = Path(
-        tempfile.mkdtemp(
-            prefix=f".{output_root.name}.", suffix=".tmp", dir=output_root.parent
-        )
+        tempfile.mkdtemp(prefix=f".{output_root.name}.", suffix=".tmp", dir=output_root.parent)
     )
     records_dir = audit_stage / "records"
     records_dir.mkdir()
@@ -457,12 +456,18 @@ def verify_scoped_source_availability_v2(
         or registered[2] != publication_path
     ):
         raise ValueError("availability is not an exact verified original publication")
-    if read_bounded_regular(publication_path, _MAX_DESCRIPTOR_BYTES) != availability.canonical_bytes:
+    if (
+        read_bounded_regular(publication_path, _MAX_DESCRIPTOR_BYTES)
+        != availability.canonical_bytes
+    ):
         raise ValueError("availability original publication bytes changed")
     if availability.boundary_sha256 != boundary.boundary_sha256:
         raise ValueError("availability is stale for the development boundary")
     for path, expected_sha in registered[3]:
-        if hashlib.sha256(read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES)).hexdigest() != expected_sha:
+        if (
+            hashlib.sha256(read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES)).hexdigest()
+            != expected_sha
+        ):
             raise ValueError("source candidate original bytes changed")
     for candidate in availability.candidates:
         descriptor_path = Path(candidate.descriptor_path)
@@ -472,9 +477,7 @@ def verify_scoped_source_availability_v2(
             raw,
             hashlib.sha256(raw).hexdigest(),
             boundary,
-            read_reference=lambda path, _target: read_bounded_regular(
-                path, _MAX_DESCRIPTOR_BYTES
-            ),
+            read_reference=lambda path, _target: read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES),
         )
         if reevaluated != candidate:
             raise ValueError("source candidate trusted evidence changed or was reconstructed")
@@ -486,15 +489,11 @@ def verify_scoped_source_availability_v2(
     )
     if (
         audit_bytes != registered[5]
-        or hashlib.sha256(audit_bytes).hexdigest()
-        != hashlib.sha256(registered[5]).hexdigest()
+        or hashlib.sha256(audit_bytes).hexdigest() != hashlib.sha256(registered[5]).hexdigest()
     ):
         raise ValueError("availability original audit bytes changed")
     audit_public = json.loads(audit_bytes)
-    if (
-        audit_public["audit_publication_sha256"]
-        != availability.audit_publication_sha256
-    ):
+    if audit_public["audit_publication_sha256"] != availability.audit_publication_sha256:
         raise ValueError("availability does not bind its original audit digest")
     return availability
 
@@ -524,9 +523,7 @@ def verified_scoped_source_availability_binding_v2(
 ) -> tuple[bytes, Path]:
     """Return original bytes/path after full sealed-publication revalidation."""
 
-    content = verified_scoped_source_availability_bytes_v2(
-        availability, boundary=boundary
-    )
+    content = verified_scoped_source_availability_bytes_v2(availability, boundary=boundary)
     registered = _VERIFIED_AVAILABILITIES[id(availability)]
     return content, registered[2]
 
@@ -817,9 +814,7 @@ def _decode_canonical_object(content: bytes, label: str) -> dict[str, Any]:
     return decoded
 
 
-def _rejected_candidate(
-    path: str, kind: str, digest: str, reason: str
-) -> ScopedSourceCandidateV2:
+def _rejected_candidate(path: str, kind: str, digest: str, reason: str) -> ScopedSourceCandidateV2:
     return ScopedSourceCandidateV2(
         descriptor_path=path,
         source_kind=kind,
@@ -874,9 +869,7 @@ def _append_audit_record(
     }
     digest = hash_json(_AUDIT_RECORD_DOMAIN, payload)
     public = {**payload, "record_sha256": digest}
-    _write_no_clobber(
-        records_dir / f"{sequence:08d}-{digest}.json", publication_json_bytes(public)
-    )
+    _write_no_clobber(records_dir / f"{sequence:08d}-{digest}.json", publication_json_bytes(public))
     return digest
 
 
@@ -928,8 +921,7 @@ def _verify_audit_publication(
         "source access audit publication",
     )
     if (
-        values["schema_version"]
-        != "phase5-validation-source-access-audit-publication-v2"
+        values["schema_version"] != "phase5-validation-source-access-audit-publication-v2"
         or values["boundary_sha256"] != expected_boundary_sha256
         or values["rows_admitted"] != 0
         or values["final_scope_attempts"] != 0
@@ -937,12 +929,8 @@ def _verify_audit_publication(
         or values["final_access_records"] != 0
     ):
         raise ValueError("source audit scope or zero-access counters are invalid")
-    payload = {
-        key: value for key, value in values.items() if key != "audit_publication_sha256"
-    }
-    if values["audit_publication_sha256"] != hash_json(
-        _AUDIT_PUBLICATION_DOMAIN, payload
-    ):
+    payload = {key: value for key, value in values.items() if key != "audit_publication_sha256"}
+    if values["audit_publication_sha256"] != hash_json(_AUDIT_PUBLICATION_DOMAIN, payload):
         raise ValueError("source audit publication digest is invalid")
     records = bounded_regular_files(publication_path.parent / "records", maximum=10_000)
     if values["record_count"] != len(records):
@@ -957,9 +945,7 @@ def _verify_audit_publication(
             "source access audit record",
         )
         digest = record.get("record_sha256")
-        record_payload = {
-            key: value for key, value in record.items() if key != "record_sha256"
-        }
+        record_payload = {key: value for key, value in record.items() if key != "record_sha256"}
         if (
             record.get("sequence") != sequence
             or record.get("boundary_sha256") != expected_boundary_sha256
@@ -980,23 +966,100 @@ def _commit_paired_directories(
     second_stage: Path,
     second_destination: Path,
 ) -> None:
-    first_published = False
+    reserved: list[Path] = []
+    published_files: list[tuple[Path, Path]] = []
+    published_directories: list[Path] = []
     try:
         _fsync_directory(first_stage)
         _fsync_directory(second_stage)
-        os.rename(first_stage, first_destination)
-        first_published = True
-        os.rename(second_stage, second_destination)
+        _reserve_publication_directory(first_destination)
+        reserved.append(first_destination)
+        _reserve_publication_directory(second_destination)
+        reserved.append(second_destination)
+        _populate_reserved_directory(
+            first_stage,
+            first_destination,
+            published_files=published_files,
+            published_directories=published_directories,
+        )
+        _populate_reserved_directory(
+            second_stage,
+            second_destination,
+            published_files=published_files,
+            published_directories=published_directories,
+        )
+        _fsync_directory(first_destination)
+        _fsync_directory(second_destination)
         _fsync_directory(first_destination.parent)
         if second_destination.parent != first_destination.parent:
             _fsync_directory(second_destination.parent)
     except Exception:
-        if first_published and path_exists_no_follow(first_destination):
-            os.rename(first_destination, first_stage)
+        _rollback_reserved_publications(
+            reserved,
+            published_files=published_files,
+            published_directories=published_directories,
+        )
         raise
     finally:
         _remove_staged_tree(first_stage)
         _remove_staged_tree(second_stage)
+
+
+def _reserve_publication_directory(destination: Path) -> None:
+    """Atomically reserve a publication root without replacing any path."""
+
+    destination.mkdir(mode=0o700)
+
+
+def _populate_reserved_directory(
+    stage: Path,
+    destination: Path,
+    *,
+    published_files: list[tuple[Path, Path]],
+    published_directories: list[Path],
+) -> None:
+    directories = sorted(
+        (path for path in stage.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+    )
+    for source_directory in directories:
+        target_directory = destination / source_directory.relative_to(stage)
+        target_directory.mkdir()
+        published_directories.append(target_directory)
+    for relative in bounded_regular_files(stage, maximum=100_000):
+        source = stage / relative
+        target = destination / relative
+        os.link(source, target, follow_symlinks=False)
+        published_files.append((source, target))
+
+
+def _rollback_reserved_publications(
+    reserved: list[Path],
+    *,
+    published_files: list[tuple[Path, Path]],
+    published_directories: list[Path],
+) -> None:
+    for source, target in reversed(published_files):
+        try:
+            source_stat = source.stat(follow_symlinks=False)
+            target_stat = target.stat(follow_symlinks=False)
+            if (
+                source_stat.st_dev == target_stat.st_dev
+                and source_stat.st_ino == target_stat.st_ino
+            ):
+                target.unlink()
+        except FileNotFoundError:
+            continue
+    for directory in reversed(published_directories):
+        try:
+            directory.rmdir()
+        except (FileNotFoundError, OSError):
+            continue
+    for destination in reversed(reserved):
+        try:
+            destination.rmdir()
+        except (FileNotFoundError, OSError):
+            continue
 
 
 def _remove_staged_tree(root: Path) -> None:
@@ -1063,9 +1126,7 @@ def _publish_directory_no_clobber(root: Path, files: dict[str, bytes]) -> None:
     if path_exists_no_follow(root):
         raise FileExistsError(f"refusing stale or concurrent publication: {root}")
     require_regular_directory(root.parent)
-    temporary = Path(
-        tempfile.mkdtemp(prefix=f".{root.name}.", suffix=".tmp", dir=root.parent)
-    )
+    temporary = Path(tempfile.mkdtemp(prefix=f".{root.name}.", suffix=".tmp", dir=root.parent))
     try:
         for relative, content in files.items():
             _write_no_clobber(temporary / relative, content)

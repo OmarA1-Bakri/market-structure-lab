@@ -269,9 +269,7 @@ class ObservedTradeV2:
     unsupported_authorities: ClassVar[tuple[str, ...]] = _UNSUPPORTED_TAPE_AUTHORITIES
 
 
-def parse_observed_trade_row_v2(
-    row: tuple[str, ...], *, archive_kind: str
-) -> ObservedTradeV2:
+def parse_observed_trade_row_v2(row: tuple[str, ...], *, archive_kind: str) -> ObservedTradeV2:
     """Parse only observable tape fields; never synthesize execution authority."""
 
     if archive_kind not in {"trades", "aggTrades"}:
@@ -517,6 +515,26 @@ class BinanceArchiveAcquisitionResultV2:
             raise ValueError("archive acquisition authority exclusions are incomplete")
 
 
+@dataclass(frozen=True, slots=True)
+class _ArchiveAuditOutcome:
+    phase: str
+    symbol: str
+    timeframe: str
+    start: str
+    end: str
+    operation_kind: str
+    target: str
+    byte_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ArchiveAuditVerification:
+    canonical_bytes: bytes
+    publication_sha256: str
+    request_count: int
+    outcomes: tuple[_ArchiveAuditOutcome, ...]
+
+
 def acquire_binance_archives_v2(
     *,
     boundary: DevelopmentReadBoundaryV2,
@@ -545,9 +563,7 @@ def acquire_binance_archives_v2(
         )
     )
     output_stage = Path(
-        tempfile.mkdtemp(
-            prefix=f".{output_root.name}.", suffix=".tmp", dir=output_root.parent
-        )
+        tempfile.mkdtemp(prefix=f".{output_root.name}.", suffix=".tmp", dir=output_root.parent)
     )
     records_dir = audit_stage / "records"
     records_dir.mkdir()
@@ -619,14 +635,10 @@ def acquire_binance_archives_v2(
                 totals,
                 maximum=8192,
                 deadline=deadline,
-                audit=lambda phase, count: record_network(
-                    phase, request.checksum_path, count
-                ),
+                audit=lambda phase, count: record_network(phase, request.checksum_path, count),
             )
             try:
-                expected = _parse_checksum(
-                    checksum_bytes, Path(request.object_path).name
-                )
+                expected = _parse_checksum(checksum_bytes, Path(request.object_path).name)
             except ValueError as error:
                 raise ArchiveIntegrityError(str(error)) from error
             archive_tmp = _download_archive_to_temporary(
@@ -637,19 +649,11 @@ def acquire_binance_archives_v2(
                 deadline=deadline,
                 remaining_disk_bytes=(
                     manifest.budgets.max_disk_bytes
-                    - _disk_usage_unique(
-                        cache_root, maximum=manifest.budgets.max_files * 4
-                    )
-                    - _disk_usage_unique(
-                        audit_stage, maximum=manifest.budgets.max_files * 4
-                    )
-                    - _disk_usage_unique(
-                        output_stage, maximum=manifest.budgets.max_files * 4
-                    )
+                    - _disk_usage_unique(cache_root, maximum=manifest.budgets.max_files * 4)
+                    - _disk_usage_unique(audit_stage, maximum=manifest.budgets.max_files * 4)
+                    - _disk_usage_unique(output_stage, maximum=manifest.budgets.max_files * 4)
                 ),
-                audit=lambda phase, count: record_network(
-                    phase, request.object_path, count
-                ),
+                audit=lambda phase, count: record_network(phase, request.object_path, count),
             )
             try:
                 actual = _sha256_path(archive_tmp, deadline=deadline)
@@ -662,8 +666,7 @@ def acquire_binance_archives_v2(
                     request,
                     manifest.budgets,
                     remaining_decompressed=(
-                        manifest.budgets.max_total_decompressed_bytes
-                        - totals["decompressed"]
+                        manifest.budgets.max_total_decompressed_bytes - totals["decompressed"]
                     ),
                     remaining_rows=manifest.budgets.max_rows - totals["rows"],
                     deadline=deadline,
@@ -673,9 +676,7 @@ def acquire_binance_archives_v2(
                 totals["files"] += 1
                 _enforce_totals(totals, manifest.budgets)
                 if (
-                    _disk_usage_unique(
-                        cache_root, maximum=manifest.budgets.max_files * 4
-                    )
+                    _disk_usage_unique(cache_root, maximum=manifest.budgets.max_files * 4)
                     + _allocated_bytes(archive_tmp)
                     > manifest.budgets.max_disk_bytes
                 ):
@@ -687,9 +688,7 @@ def acquire_binance_archives_v2(
                 )
                 _enforce_deadline(deadline)
                 if (
-                    _disk_usage_unique(
-                        cache_root, maximum=manifest.budgets.max_files * 4
-                    )
+                    _disk_usage_unique(cache_root, maximum=manifest.budgets.max_files * 4)
                     > manifest.budgets.max_disk_bytes
                 ):
                     raise ArchiveBudgetExceeded(
@@ -711,6 +710,10 @@ def acquire_binance_archives_v2(
     except ArchiveAcquisitionExpectedError as error:
         status = "unavailable"
         failure = f"{type(error).__name__}:{error}"
+        objects.clear()
+        totals["decompressed"] = 0
+        totals["files"] = 0
+        totals["rows"] = 0
     except Exception:
         _remove_staged_tree(audit_stage)
         _remove_staged_tree(output_stage)
@@ -732,9 +735,7 @@ def acquire_binance_archives_v2(
     }
     audit_bytes = publication_json_bytes(audit_publication)
     try:
-        _write_no_clobber(
-            audit_stage / "publication.json", audit_bytes, deadline=deadline
-        )
+        _write_no_clobber(audit_stage / "publication.json", audit_bytes, deadline=deadline)
         enforce_actual_disk()
     except Exception:
         _remove_staged_tree(audit_stage)
@@ -761,9 +762,7 @@ def acquire_binance_archives_v2(
     publication_path = output_root / "publication.json"
     canonical_bytes = publication_json_bytes(publication)
     try:
-        _write_no_clobber(
-            output_stage / "publication.json", canonical_bytes, deadline=deadline
-        )
+        _write_no_clobber(output_stage / "publication.json", canonical_bytes, deadline=deadline)
         enforce_actual_disk()
         _commit_paired_directories(
             first_stage=output_stage,
@@ -816,9 +815,7 @@ def verify_binance_archive_acquisition_v2(
 ) -> BinanceArchiveAcquisitionResultV2:
     """Revalidate original acquisition bytes, manifest bytes, and cached objects."""
 
-    _verify_manifest_original(
-        manifest, boundary=boundary, publication_path=manifest_path
-    )
+    _verify_manifest_original(manifest, boundary=boundary, publication_path=manifest_path)
     registered = _VERIFIED_ACQUISITIONS.get(id(result))
     if (
         registered is None
@@ -829,7 +826,10 @@ def verify_binance_archive_acquisition_v2(
         or registered[5] != result.audit_publication_path
     ):
         raise ValueError("acquisition is not an exact verified original publication")
-    if read_bounded_regular(result.publication_path, _MAX_PUBLICATION_BYTES) != result.canonical_bytes:
+    if (
+        read_bounded_regular(result.publication_path, _MAX_PUBLICATION_BYTES)
+        != result.canonical_bytes
+    ):
         raise ValueError("acquisition original publication bytes changed")
     for path, expected_sha256 in registered[3]:
         if _sha256_path(path) != expected_sha256:
@@ -858,6 +858,7 @@ def load_binance_archive_acquisition_v2(
 ) -> BinanceArchiveAcquisitionResultV2:
     """Reopen and revalidate original acquisition, audit, and cache bytes."""
 
+    _verify_manifest_original(manifest, boundary=boundary, publication_path=manifest_path)
     publication_path = Path(publication_root) / "publication.json"
     content = read_bounded_regular(publication_path, _MAX_PUBLICATION_BYTES)
     try:
@@ -884,47 +885,22 @@ def load_binance_archive_acquisition_v2(
     if (
         not isinstance(public, dict)
         or set(public) != expected_fields
-        or public["schema_version"]
-        != "phase5-binance-archive-acquisition-publication-v2"
+        or public["schema_version"] != "phase5-binance-archive-acquisition-publication-v2"
         or publication_json_bytes(public) != content
     ):
         raise ValueError("archive acquisition publication schema is invalid")
-    identity_payload = {
-        key: value for key, value in public.items() if key != "publication_sha256"
-    }
-    if public["publication_sha256"] != hash_json(
-        _ACQUISITION_DOMAIN, identity_payload
-    ):
+    identity_payload = {key: value for key, value in public.items() if key != "publication_sha256"}
+    if public["publication_sha256"] != hash_json(_ACQUISITION_DOMAIN, identity_payload):
         raise ValueError("archive acquisition publication digest is invalid")
-    raw_objects = public["objects"]
-    if not isinstance(raw_objects, list):
-        raise ValueError("archive acquisition objects must be a list")
-    object_bindings: list[tuple[Path, str]] = []
-    for item in raw_objects:
-        if not isinstance(item, dict) or set(item) != {
-            "request_sha256",
-            "official_sha256",
-            "local_sha256",
-            "cache_object",
-            "compressed_bytes",
-            "decompressed_bytes",
-            "row_count",
-        }:
-            raise ValueError("archive acquisition object schema is invalid")
-        relative = Path(item["cache_object"])
-        if (
-            relative.is_absolute()
-            or ".." in relative.parts
-            or relative.as_posix() != item["cache_object"]
-        ):
-            raise ValueError("archive cache object path is invalid")
-        local_sha256 = _require_sha256(item["local_sha256"], "local_sha256")
-        if item["official_sha256"] != local_sha256:
-            raise ValueError("archive object official/local checksum differs")
-        object_bindings.append((Path(cache_root) / relative, local_sha256))
     audit_path = Path(public["audit_publication_path"])
-    audit_bytes = _verify_archive_audit_publication(
+    audit = _inspect_archive_audit_publication(
         audit_path, expected_boundary_sha256=boundary.boundary_sha256
+    )
+    raw_objects, object_bindings = _validate_acquisition_inventory(
+        public,
+        cache_root=Path(cache_root),
+        manifest=manifest,
+        audit=audit,
     )
     result = BinanceArchiveAcquisitionResultV2(
         status=public["status"],
@@ -947,7 +923,7 @@ def load_binance_archive_acquisition_v2(
         result,
         manifest,
         tuple(object_bindings),
-        audit_bytes,
+        audit.canonical_bytes,
     )
     return verify_binance_archive_acquisition_v2(
         result,
@@ -1034,9 +1010,7 @@ def _validate_policy(
         raise ValueError("redirect policy must be one bounded same-origin redirect")
     if tls_min_version != "TLSv1.2":
         raise ValueError("TLS minimum must be TLSv1.2")
-    if not all(
-        (require_ca_validation, require_binance_sha256_sidecar, require_local_sha256)
-    ):
+    if not all((require_ca_validation, require_binance_sha256_sidecar, require_local_sha256)):
         raise ValueError("CA, official checksum, and local checksum verification are required")
 
 
@@ -1086,7 +1060,10 @@ def _manifest_from_dict(payload: dict[str, Any]) -> BinanceArchiveRequestManifes
         "unsupported_authorities",
         "manifest_sha256",
     }
-    if set(payload) != expected or payload["schema_version"] != BinanceArchiveRequestManifestV2._schema:
+    if (
+        set(payload) != expected
+        or payload["schema_version"] != BinanceArchiveRequestManifestV2._schema
+    ):
         raise ValueError("archive manifest schema has unexpected or missing fields")
     requests = tuple(_request_from_dict(item) for item in payload["requests"])
     return BinanceArchiveRequestManifestV2(
@@ -1224,6 +1201,17 @@ def _verify_archive_audit_publication(
     *,
     expected_boundary_sha256: str,
 ) -> bytes:
+    return _inspect_archive_audit_publication(
+        publication_path,
+        expected_boundary_sha256=expected_boundary_sha256,
+    ).canonical_bytes
+
+
+def _inspect_archive_audit_publication(
+    publication_path: Path,
+    *,
+    expected_boundary_sha256: str,
+) -> _ArchiveAuditVerification:
     content = read_bounded_regular(publication_path, _MAX_PUBLICATION_BYTES)
     try:
         public = json.loads(content)
@@ -1244,17 +1232,26 @@ def _verify_archive_audit_publication(
     }
     if (
         set(public) != expected_fields
-        or public["schema_version"]
-        != "phase5-binance-archive-access-audit-publication-v2"
+        or public["schema_version"] != "phase5-binance-archive-access-audit-publication-v2"
         or public["boundary_sha256"] != expected_boundary_sha256
         or public["final_scope_attempts"] != 0
         or public["final_rows"] != 0
         or public["final_access_records"] != 0
     ):
         raise ValueError("archive audit publication scope is invalid")
-    payload = {
-        key: value for key, value in public.items() if key != "audit_publication_sha256"
-    }
+    for counter_name in (
+        "request_count",
+        "record_count",
+        "final_scope_attempts",
+        "final_rows",
+        "final_access_records",
+    ):
+        _nonnegative_int(public[counter_name], f"audit {counter_name}")
+    _require_sha256(public["audit_publication_sha256"], "audit_publication_sha256")
+    terminal = public["terminal_record_sha256"]
+    if terminal is not None:
+        _require_sha256(terminal, "terminal_record_sha256")
+    payload = {key: value for key, value in public.items() if key != "audit_publication_sha256"}
     if public["audit_publication_sha256"] != hash_json(
         "phase5-binance-archive-access-audit-v2", payload
     ):
@@ -1264,6 +1261,24 @@ def _verify_archive_audit_publication(
         raise ValueError("archive audit record count differs from chain")
     prior: str | None = None
     start_count = 0
+    pending: dict[str, object] | None = None
+    outcomes: list[_ArchiveAuditOutcome] = []
+    record_fields = {
+        "sequence",
+        "phase",
+        "boundary_sha256",
+        "symbol",
+        "timeframe",
+        "start",
+        "end",
+        "operation_kind",
+        "target",
+        "allowed",
+        "row_count",
+        "byte_count",
+        "prior_record_sha256",
+        "record_sha256",
+    }
     for sequence, relative in enumerate(records, start=1):
         record_bytes = read_bounded_regular(
             publication_path.parent / "records" / relative,
@@ -1276,25 +1291,217 @@ def _verify_archive_audit_publication(
         if not isinstance(record, dict) or publication_json_bytes(record) != record_bytes:
             raise ValueError("archive audit record bytes are not canonical")
         record_digest = record.get("record_sha256")
-        record_payload = {
-            key: value for key, value in record.items() if key != "record_sha256"
-        }
+        record_payload = {key: value for key, value in record.items() if key != "record_sha256"}
         if (
-            record.get("sequence") != sequence
+            set(record) != record_fields
+            or record.get("sequence") != sequence
             or record.get("boundary_sha256") != expected_boundary_sha256
             or record.get("prior_record_sha256") != prior
             or record_digest
             != hash_json("phase5-binance-archive-access-attempt-v2", record_payload)
         ):
             raise ValueError("archive audit record chain is invalid")
-        if record.get("phase") == "start":
+        phase = record.get("phase")
+        byte_count = record.get("byte_count")
+        if (
+            phase not in {"start", "completion", "failure"}
+            or record.get("allowed") is not True
+            or record.get("operation_kind") != AccessOperationKindV2.NETWORK.value
+            or record.get("timeframe") != "1m"
+            or record.get("row_count") != 0
+            or isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count < 0
+            or not all(
+                isinstance(record.get(field), str) for field in ("symbol", "start", "end", "target")
+            )
+        ):
+            raise ValueError("archive audit record contract is invalid")
+        attempt_identity = {
+            key: record[key]
+            for key in (
+                "boundary_sha256",
+                "symbol",
+                "timeframe",
+                "start",
+                "end",
+                "operation_kind",
+                "target",
+                "allowed",
+                "row_count",
+            )
+        }
+        if phase == "start":
+            if pending is not None or byte_count != 0:
+                raise ValueError("archive audit request outcomes are not paired")
+            pending = attempt_identity
             start_count += 1
+        else:
+            if pending != attempt_identity:
+                raise ValueError("archive audit request outcomes are not paired")
+            outcomes.append(
+                _ArchiveAuditOutcome(
+                    phase=phase,
+                    symbol=record["symbol"],
+                    timeframe=record["timeframe"],
+                    start=record["start"],
+                    end=record["end"],
+                    operation_kind=record["operation_kind"],
+                    target=record["target"],
+                    byte_count=byte_count,
+                )
+            )
+            pending = None
         prior = record_digest  # type: ignore[assignment]
+    if pending is not None:
+        raise ValueError("archive audit request outcome is incomplete")
     if public["terminal_record_sha256"] != prior:
         raise ValueError("archive audit terminal digest differs from chain")
     if public["request_count"] != start_count:
         raise ValueError("archive audit request count differs from request starts")
-    return content
+    return _ArchiveAuditVerification(
+        canonical_bytes=content,
+        publication_sha256=public["audit_publication_sha256"],
+        request_count=start_count,
+        outcomes=tuple(outcomes),
+    )
+
+
+def _validate_acquisition_inventory(
+    public: dict[str, object],
+    *,
+    cache_root: Path,
+    manifest: BinanceArchiveRequestManifestV2,
+    audit: _ArchiveAuditVerification,
+) -> tuple[list[object], list[tuple[Path, str]]]:
+    if public["manifest_sha256"] != manifest.manifest_sha256:
+        raise ValueError("acquisition manifest identity is not the verified manifest")
+    if public["audit_publication_sha256"] != audit.publication_sha256:
+        raise ValueError("acquisition audit identity differs from its original bytes")
+    request_count = _nonnegative_int(public["request_count"], "request_count")
+    compressed_bytes = _nonnegative_int(public["compressed_bytes"], "compressed_bytes")
+    decompressed_bytes = _nonnegative_int(public["decompressed_bytes"], "decompressed_bytes")
+    row_count = _nonnegative_int(public["row_count"], "row_count")
+    if request_count != audit.request_count:
+        raise ValueError("acquisition request count differs from its audit")
+    audit_compressed_bytes, completed_targets = _reconcile_archive_audit(audit, manifest=manifest)
+    if compressed_bytes != audit_compressed_bytes:
+        raise ValueError("acquisition compressed bytes differ from its audit")
+    raw_objects = public["objects"]
+    if not isinstance(raw_objects, list):
+        raise ValueError("archive acquisition objects must be a list")
+    status = public["status"]
+    failure = public["failure"]
+    if status == "available":
+        if failure is not None:
+            raise ValueError("available acquisition cannot contain a failure")
+        if completed_targets != len(manifest.requests) * 2:
+            raise ValueError("available acquisition audit is incomplete")
+        if len(raw_objects) != len(manifest.requests):
+            raise ValueError("available acquisition inventory is incomplete")
+    elif status == "unavailable":
+        if raw_objects:
+            raise ValueError("unavailable acquisition cannot authorize partial inventory")
+        if not _is_expected_acquisition_failure(failure):
+            raise ValueError("unavailable acquisition requires an explicit expected failure")
+        if decompressed_bytes or row_count:
+            raise ValueError("unavailable acquisition cannot authorize derived rows")
+    else:
+        raise ValueError("acquisition status is invalid")
+    object_bindings: list[tuple[Path, str]] = []
+    aggregate_decompressed = 0
+    aggregate_rows = 0
+    aggregate_object_compressed = 0
+    for index, item in enumerate(raw_objects):
+        if not isinstance(item, dict) or set(item) != {
+            "request_sha256",
+            "official_sha256",
+            "local_sha256",
+            "cache_object",
+            "compressed_bytes",
+            "decompressed_bytes",
+            "row_count",
+        }:
+            raise ValueError("archive acquisition object schema is invalid")
+        request = manifest.requests[index]
+        if item["request_sha256"] != request.request_sha256:
+            raise ValueError("archive acquisition inventory order or identity is invalid")
+        local_sha256 = _require_sha256(item["local_sha256"], "local_sha256")
+        if item["official_sha256"] != local_sha256:
+            raise ValueError("archive object official/local checksum differs")
+        expected_relative = Path("sha256") / local_sha256[:2] / local_sha256
+        if item["cache_object"] != expected_relative.as_posix():
+            raise ValueError("archive cache object path is not content addressed")
+        cache_path = cache_root / expected_relative
+        object_compressed = _nonnegative_int(item["compressed_bytes"], "object compressed_bytes")
+        object_decompressed = _nonnegative_int(
+            item["decompressed_bytes"], "object decompressed_bytes"
+        )
+        object_rows = _nonnegative_int(item["row_count"], "object row_count")
+        if cache_path.stat().st_size != object_compressed:
+            raise ValueError("archive cache object byte count changed")
+        if _sha256_path(cache_path) != local_sha256:
+            raise ValueError("archive cache object bytes changed")
+        aggregate_object_compressed += object_compressed
+        aggregate_decompressed += object_decompressed
+        aggregate_rows += object_rows
+        object_bindings.append((cache_path, local_sha256))
+    if (
+        aggregate_decompressed != decompressed_bytes
+        or aggregate_rows != row_count
+        or aggregate_object_compressed > compressed_bytes
+    ):
+        raise ValueError("acquisition aggregate object counts are inconsistent")
+    return raw_objects, object_bindings
+
+
+def _reconcile_archive_audit(
+    audit: _ArchiveAuditVerification,
+    *,
+    manifest: BinanceArchiveRequestManifestV2,
+) -> tuple[int, int]:
+    targets = tuple(
+        (request, target)
+        for request in manifest.requests
+        for target in (request.checksum_path, request.object_path)
+    )
+    target_index = 0
+    compressed_bytes = 0
+    for outcome in audit.outcomes:
+        if target_index >= len(targets):
+            raise ValueError("acquisition audit contains extra request outcomes")
+        request, expected_target = targets[target_index]
+        if (
+            outcome.symbol != request.symbol
+            or outcome.timeframe != "1m"
+            or outcome.start != _utc_text(request.start)
+            or outcome.end != _utc_text(request.end)
+            or outcome.operation_kind != AccessOperationKindV2.NETWORK.value
+            or outcome.target != expected_target
+        ):
+            raise ValueError("acquisition audit request order or scope is invalid")
+        if expected_target == request.object_path:
+            compressed_bytes += outcome.byte_count
+        if outcome.phase == "completion":
+            target_index += 1
+    return compressed_bytes, target_index
+
+
+def _is_expected_acquisition_failure(value: object) -> bool:
+    if not isinstance(value, str) or ":" not in value:
+        return False
+    kind, message = value.split(":", 1)
+    return bool(message) and kind in {
+        ArchiveBudgetExceeded.__name__,
+        ArchiveIntegrityError.__name__,
+        ArchiveNetworkUnavailable.__name__,
+    }
+
+
+def _nonnegative_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"acquisition {label} must be a non-negative integer")
+    return value
 
 
 def _commit_paired_directories(
@@ -1304,23 +1511,100 @@ def _commit_paired_directories(
     second_stage: Path,
     second_destination: Path,
 ) -> None:
-    first_published = False
+    reserved: list[Path] = []
+    published_files: list[tuple[Path, Path]] = []
+    published_directories: list[Path] = []
     try:
         _fsync_directory(first_stage)
         _fsync_directory(second_stage)
-        os.rename(first_stage, first_destination)
-        first_published = True
-        os.rename(second_stage, second_destination)
+        _reserve_publication_directory(first_destination)
+        reserved.append(first_destination)
+        _reserve_publication_directory(second_destination)
+        reserved.append(second_destination)
+        _populate_reserved_directory(
+            first_stage,
+            first_destination,
+            published_files=published_files,
+            published_directories=published_directories,
+        )
+        _populate_reserved_directory(
+            second_stage,
+            second_destination,
+            published_files=published_files,
+            published_directories=published_directories,
+        )
+        _fsync_directory(first_destination)
+        _fsync_directory(second_destination)
         _fsync_directory(first_destination.parent)
         if second_destination.parent != first_destination.parent:
             _fsync_directory(second_destination.parent)
     except Exception:
-        if first_published and path_exists_no_follow(first_destination):
-            os.rename(first_destination, first_stage)
+        _rollback_reserved_publications(
+            reserved,
+            published_files=published_files,
+            published_directories=published_directories,
+        )
         raise
     finally:
         _remove_staged_tree(first_stage)
         _remove_staged_tree(second_stage)
+
+
+def _reserve_publication_directory(destination: Path) -> None:
+    """Atomically reserve a publication root without replacing any path."""
+
+    destination.mkdir(mode=0o700)
+
+
+def _populate_reserved_directory(
+    stage: Path,
+    destination: Path,
+    *,
+    published_files: list[tuple[Path, Path]],
+    published_directories: list[Path],
+) -> None:
+    directories = sorted(
+        (path for path in stage.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+    )
+    for source_directory in directories:
+        target_directory = destination / source_directory.relative_to(stage)
+        target_directory.mkdir()
+        published_directories.append(target_directory)
+    for relative in bounded_regular_files(stage, maximum=100_000):
+        source = stage / relative
+        target = destination / relative
+        os.link(source, target, follow_symlinks=False)
+        published_files.append((source, target))
+
+
+def _rollback_reserved_publications(
+    reserved: list[Path],
+    *,
+    published_files: list[tuple[Path, Path]],
+    published_directories: list[Path],
+) -> None:
+    for source, target in reversed(published_files):
+        try:
+            source_stat = source.stat(follow_symlinks=False)
+            target_stat = target.stat(follow_symlinks=False)
+            if (
+                source_stat.st_dev == target_stat.st_dev
+                and source_stat.st_ino == target_stat.st_ino
+            ):
+                target.unlink()
+        except FileNotFoundError:
+            continue
+    for directory in reversed(published_directories):
+        try:
+            directory.rmdir()
+        except (FileNotFoundError, OSError):
+            continue
+    for destination in reversed(reserved):
+        try:
+            destination.rmdir()
+        except (FileNotFoundError, OSError):
+            continue
 
 
 def _remove_staged_tree(root: Path) -> None:
@@ -1361,7 +1645,10 @@ def _verify_manifest_original(
         or registered[2] != Path(publication_path)
     ):
         raise ValueError("archive manifest is not an exact verified original publication")
-    if read_bounded_regular(Path(publication_path), _MAX_PUBLICATION_BYTES) != manifest.canonical_bytes:
+    if (
+        read_bounded_regular(Path(publication_path), _MAX_PUBLICATION_BYTES)
+        != manifest.canonical_bytes
+    ):
         raise ValueError("archive manifest original publication bytes changed")
     if manifest.boundary_sha256 != boundary.boundary_sha256:
         raise ValueError("archive manifest is stale for the boundary")
@@ -1371,9 +1658,7 @@ def _verify_manifest_original(
         for period, start, end in _bounded_periods(boundary)
     )
     if manifest.requests != expected_requests:
-        raise ValueError(
-            "archive requests differ from deterministic development-scope paths"
-        )
+        raise ValueError("archive requests differ from deterministic development-scope paths")
     for request in manifest.requests:
         boundary.authorize(
             BoundaryRequestV2(
@@ -1403,9 +1688,7 @@ def _download_small_with_retries(
         _enforce_totals(totals, manifest.budgets)
         audit("start", 0)
         try:
-            payload = _https_get_bytes(
-                url, manifest, maximum, deadline=deadline
-            )
+            payload = _https_get_bytes(url, manifest, maximum, deadline=deadline)
             audit("completion", len(payload))
             return payload
         except (OSError, urllib.error.URLError, ssl.SSLError) as error:
@@ -1414,9 +1697,7 @@ def _download_small_with_retries(
         except ArchiveAcquisitionExpectedError:
             audit("failure", 0)
             raise
-    raise ArchiveNetworkUnavailable(
-        "archive checksum request exhausted retry ceiling"
-    ) from last
+    raise ArchiveNetworkUnavailable("archive checksum request exhausted retry ceiling") from last
 
 
 def _download_archive_to_temporary(
@@ -1445,8 +1726,7 @@ def _download_archive_to_temporary(
                     handle,
                     maximum=min(
                         manifest.budgets.max_compressed_object_bytes,
-                        manifest.budgets.max_total_compressed_bytes
-                        - totals["compressed"],
+                        manifest.budgets.max_total_compressed_bytes - totals["compressed"],
                         remaining_disk_bytes,
                     ),
                     chunk_bytes=manifest.budgets.chunk_bytes,
@@ -1473,9 +1753,7 @@ def _download_archive_to_temporary(
             path.unlink(missing_ok=True)
             _enforce_totals(totals, manifest.budgets)
             raise
-    raise ArchiveNetworkUnavailable(
-        "archive object request exhausted retry ceiling"
-    ) from last
+    raise ArchiveNetworkUnavailable("archive object request exhausted retry ceiling") from last
 
 
 class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -1502,9 +1780,7 @@ def _https_get_bytes(
 ) -> bytes:
     _enforce_deadline(deadline)
     opener = _secure_opener(manifest)
-    with opener.open(
-        urllib.request.Request(url), timeout=_remaining_timeout(deadline)
-    ) as response:
+    with opener.open(urllib.request.Request(url), timeout=_remaining_timeout(deadline)) as response:
         _validate_response_url(response.geturl(), manifest.allowed_origin)
         content_length = _bounded_content_length(response, maximum)
         payload = response.read(content_length)
@@ -1529,24 +1805,18 @@ def _https_stream_to_file(
     _enforce_deadline(deadline)
     opener = _secure_opener(manifest)
     total = 0
-    with opener.open(
-        urllib.request.Request(url), timeout=_remaining_timeout(deadline)
-    ) as response:
+    with opener.open(urllib.request.Request(url), timeout=_remaining_timeout(deadline)) as response:
         _validate_response_url(response.geturl(), manifest.allowed_origin)
         content_length = _bounded_content_length(response, maximum)
         while total < content_length:
             _enforce_deadline(deadline)
             chunk = response.read(min(chunk_bytes, content_length - total))
             if not chunk:
-                raise ArchiveNetworkUnavailable(
-                    "compressed archive ended before Content-Length"
-                )
+                raise ArchiveNetworkUnavailable("compressed archive ended before Content-Length")
             total += len(chunk)
             handle.write(chunk)
             if int(getattr(os.fstat(handle.fileno()), "st_blocks", 0)) * 512 > disk_ceiling:
-                raise ArchiveBudgetExceeded(
-                    "temporary archive exceeds actual disk ceiling"
-                )
+                raise ArchiveBudgetExceeded("temporary archive exceeds actual disk ceiling")
             _enforce_deadline(deadline)
     return total
 
@@ -1635,21 +1905,15 @@ def _inspect_archive(
         with zipfile.ZipFile(archive_path) as archive:
             infos = archive.infolist()
             if len(infos) != 1 or infos[0].is_dir():
-                raise ArchiveIntegrityError(
-                    "Binance archive must contain exactly one regular CSV"
-                )
+                raise ArchiveIntegrityError("Binance archive must contain exactly one regular CSV")
             info = infos[0]
-            if Path(info.filename).name != info.filename or not info.filename.endswith(
-                ".csv"
-            ):
+            if Path(info.filename).name != info.filename or not info.filename.endswith(".csv"):
                 raise ArchiveIntegrityError("Binance archive contains an unsafe member")
             if (
                 info.file_size > budgets.max_decompressed_object_bytes
                 or info.file_size > remaining_decompressed
             ):
-                raise ArchiveBudgetExceeded(
-                    "decompressed archive exceeds object or total ceiling"
-                )
+                raise ArchiveBudgetExceeded("decompressed archive exceeds object or total ceiling")
             with archive.open(info) as raw:
                 maximum_line_bytes = min(
                     1024 * 1024,
@@ -1659,9 +1923,7 @@ def _inspect_archive(
                 while decompressed < info.file_size:
                     _enforce_deadline(deadline)
                     if rows >= remaining_rows:
-                        raise ArchiveBudgetExceeded(
-                            "parsed rows would exceed frozen total ceiling"
-                        )
+                        raise ArchiveBudgetExceeded("parsed rows would exceed frozen total ceiling")
                     remaining_file = info.file_size - decompressed
                     line = raw.readline(min(maximum_line_bytes, remaining_file))
                     if not line:
@@ -1669,19 +1931,12 @@ def _inspect_archive(
                             "decompressed archive ended before ZIP metadata size"
                         )
                     decompressed += len(line)
-                    if (
-                        not line.endswith(b"\n")
-                        and decompressed < info.file_size
-                    ):
-                        raise ArchiveBudgetExceeded(
-                            "archive CSV row exceeds bounded line ceiling"
-                        )
+                    if not line.endswith(b"\n") and decompressed < info.file_size:
+                        raise ArchiveBudgetExceeded("archive CSV row exceeds bounded line ceiling")
                     decoded = line.decode("utf-8")
                     parsed_rows = tuple(csv.reader((decoded,)))
                     if len(parsed_rows) != 1:
-                        raise ArchiveIntegrityError(
-                            "archive CSV row framing is invalid"
-                        )
+                        raise ArchiveIntegrityError("archive CSV row framing is invalid")
                     observed = parse_observed_trade_row_v2(
                         tuple(parsed_rows[0]), archive_kind=request.archive_kind
                     )
@@ -1735,22 +1990,16 @@ def _enforce_totals(totals: dict[str, int], budgets: ArchiveBudgetsV2) -> None:
     )
     for label, ceiling in checks:
         if totals[label] > ceiling:
-            raise ArchiveBudgetExceeded(
-                f"archive acquisition exceeds {label} ceiling"
-            )
+            raise ArchiveBudgetExceeded(f"archive acquisition exceeds {label} ceiling")
 
 
-def _write_no_clobber(
-    path: Path, content: bytes, *, deadline: float | None = None
-) -> None:
+def _write_no_clobber(path: Path, content: bytes, *, deadline: float | None = None) -> None:
     if deadline is not None:
         _enforce_deadline(deadline)
     if path_exists_no_follow(path):
         raise FileExistsError(f"refusing stale or concurrent publication: {path}")
     require_regular_directory(path.parent)
-    descriptor, name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
