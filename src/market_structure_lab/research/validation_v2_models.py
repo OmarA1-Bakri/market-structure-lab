@@ -38,6 +38,7 @@ def _require_utc(value: object, label: str) -> datetime:
 
 
 def _utc_text(value: datetime) -> str:
+    _require_minute_aligned(value, "identity timestamp")
     return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
@@ -49,6 +50,12 @@ def _parse_utc(value: object, label: str) -> datetime:
     except ValueError as error:
         raise ValueError(f"{label} must be an ISO-8601 UTC timestamp") from error
     return _require_utc(parsed, label)
+
+
+def _require_minute_aligned(value: datetime, label: str) -> None:
+    _require_utc(value, label)
+    if value.second or value.microsecond:
+        raise ValueError(f"{label} must be minute-aligned")
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +243,8 @@ class SourceCoverageEntryV2:
             raise ValueError("coverage symbol must be a non-empty upper-case identifier")
         _require_utc(self.complete_start, "complete_start")
         _require_utc(self.complete_end, "complete_end")
+        _require_minute_aligned(self.complete_start, "complete_start")
+        _require_minute_aligned(self.complete_end, "complete_end")
         if self.complete_end <= self.complete_start:
             raise ValueError("coverage interval must be positive")
         if (

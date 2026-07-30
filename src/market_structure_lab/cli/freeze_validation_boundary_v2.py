@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
@@ -57,14 +57,6 @@ _V1_PROGRAMME_ID = "VP-0d65fef04ca44dfc5ba7c7705e0be197480d7456b51178702a0011a18
 
 
 @dataclass(frozen=True, slots=True)
-class _AuthorityExpectationsV2:
-    dump_sha256: str
-    promotion_sha256: str
-    compatibility_sha256: str
-    pg_restore_list: Callable[[Path], bytes] | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class BoundaryFreezeResultV2:
     coverage_path: Path
     split_path: Path
@@ -86,7 +78,6 @@ def freeze_boundary_publications_v2(
     require_zero_row_access: bool,
     require_zero_process_row_extraction: bool,
     require_zero_network_access: bool,
-    _test_expectations: _AuthorityExpectationsV2 | None = None,
 ) -> BoundaryFreezeResultV2:
     """Recompute original metadata identities and publish three no-clobber files."""
 
@@ -98,21 +89,15 @@ def freeze_boundary_publications_v2(
         )
     ):
         raise ValueError("all zero-row/process-row-extraction/network guards are required")
-    expectations = _test_expectations or _AuthorityExpectationsV2(
-        dump_sha256=_PRODUCTION_DUMP_SHA256,
-        promotion_sha256=_PRODUCTION_PROMOTION_SHA256,
-        compatibility_sha256=_PRODUCTION_COMPATIBILITY_SHA256,
-    )
-    dump_identity, listing = _verify_dump(Path(dump_path), expectations)
+    dump_identity, listing = _verify_dump(Path(dump_path))
     promotion, reconciliation, run = _verify_rr(
         Path(rr_promotion),
         Path(rr_root),
         dump_identity,
-        expectations,
     )
     compatibility_bytes = _verified_bytes(
         Path(compatibility),
-        expectations.compatibility_sha256,
+        _PRODUCTION_COMPATIBILITY_SHA256,
         "compatibility",
     )
     with tempfile.TemporaryDirectory(prefix="msl-v2-compatibility-") as directory:
@@ -129,8 +114,8 @@ def freeze_boundary_publications_v2(
     entries = _derive_coverage_entries(
         promotion.coverage,
         dict(compatibility_manifest.provenance_validation),
-        promotion_sha256=expectations.promotion_sha256,
-        compatibility_sha256=expectations.compatibility_sha256,
+        promotion_sha256=_PRODUCTION_PROMOTION_SHA256,
+        compatibility_sha256=_PRODUCTION_COMPATIBILITY_SHA256,
     )
     coverage = SourceCoveragePublicationV2.freeze(
         raw_dump=dump_identity,
@@ -161,18 +146,11 @@ def freeze_boundary_publications_v2(
     )
 
 
-def _verify_dump(
-    dump_path: Path,
-    expectations: _AuthorityExpectationsV2,
-) -> tuple[RawDumpIdentityV2, bytes]:
+def _verify_dump(dump_path: Path) -> tuple[RawDumpIdentityV2, bytes]:
     digest, byte_count = _sha256_and_size_no_follow(dump_path)
-    if digest != expectations.dump_sha256:
+    if digest != _PRODUCTION_DUMP_SHA256:
         raise ValueError("dump SHA-256 differs from the independently frozen identity")
-    listing = (
-        expectations.pg_restore_list(dump_path)
-        if expectations.pg_restore_list is not None
-        else _run_pg_restore_list(dump_path)
-    )
+    listing = _run_pg_restore_list(dump_path)
     if not isinstance(listing, bytes) or len(listing) > _MAX_JSON_BYTES:
         raise ValueError("pg_restore --list metadata is invalid or unbounded")
     candle_lines = tuple(
@@ -214,9 +192,8 @@ def _verify_rr(
     promotion_path: Path,
     rr_root: Path,
     dump_identity: RawDumpIdentityV2,
-    expectations: _AuthorityExpectationsV2,
 ) -> tuple[Any, ReconciliationAuthorityV2, Any]:
-    promotion_bytes = _verified_bytes(promotion_path, expectations.promotion_sha256, "RR promotion")
+    promotion_bytes = _verified_bytes(promotion_path, _PRODUCTION_PROMOTION_SHA256, "RR promotion")
     with tempfile.TemporaryDirectory(prefix="msl-v2-promotion-") as directory:
         captured = Path(directory) / "receipt.json"
         captured.write_bytes(promotion_bytes)

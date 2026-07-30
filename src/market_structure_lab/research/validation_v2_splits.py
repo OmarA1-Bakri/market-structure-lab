@@ -40,6 +40,7 @@ _VERIFIED_BOUNDARY_OBJECTS: dict[
 
 
 def _utc_text(value: datetime) -> str:
+    _require_minute_aligned(value, "identity timestamp")
     return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
@@ -58,6 +59,12 @@ def _require_utc(value: object, label: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{label} must be UTC-aware")
     return value
+
+
+def _require_minute_aligned(value: datetime, label: str) -> None:
+    _require_utc(value, label)
+    if value.second or value.microsecond:
+        raise ValueError(f"{label} must be minute-aligned")
 
 
 class UtcIntervalV2(NamedTuple):
@@ -447,6 +454,8 @@ class BoundaryRequestV2:
     def __post_init__(self) -> None:
         _require_utc(self.start, "request start")
         _require_utc(self.end, "request end")
+        _require_minute_aligned(self.start, "request start")
+        _require_minute_aligned(self.end, "request end")
         if self.end <= self.start:
             raise ValueError("request interval must be positive")
         if not isinstance(self.operation_kind, AccessOperationKindV2):
@@ -705,9 +714,7 @@ class DevelopmentAccessAttemptLedgerV2:
                 record.phase == "adjudication" and not record.allowed for record in records
             ),
             final_scope_attempts=sum(
-                record.phase == "adjudication"
-                and not record.allowed
-                and _is_final_scope(self._boundary, record.request)
+                record.phase == "start" and _is_final_scope(self._boundary, record.request)
                 for record in records
             ),
             final_rows=0,

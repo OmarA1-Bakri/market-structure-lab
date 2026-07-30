@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import hashlib
+import inspect
 import os
 from pathlib import Path
 
@@ -59,7 +60,7 @@ def _work_manifest(run_id: str, unit: ReconciliationWorkUnit) -> WorkUnitManifes
     return WorkUnitManifest(**values, manifest_sha256=provisional.sha256())  # type: ignore[arg-type]
 
 
-def _fixture(tmp_path: Path) -> dict[str, object]:
+def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     dump = tmp_path / "callscore.dump"
     dump.write_bytes(b"fixture-postgresql-custom-dump")
     dump_sha = hashlib.sha256(dump.read_bytes()).hexdigest()
@@ -128,18 +129,23 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
     compatibility = tmp_path / "compatibility.json"
     compatibility.write_bytes(compatibility_manifest.canonical_bytes())
     listing = b"42; 0 0 TABLE DATA public candles fixture\n"
-    expectations = cli._AuthorityExpectationsV2(  # noqa: SLF001
-        dump_sha256=dump_sha,
-        promotion_sha256=hashlib.sha256(receipt.path.read_bytes()).hexdigest(),
-        compatibility_sha256=hashlib.sha256(compatibility.read_bytes()).hexdigest(),
-        pg_restore_list=lambda _path: listing,
+    monkeypatch.setattr(cli, "_PRODUCTION_DUMP_SHA256", dump_sha)
+    monkeypatch.setattr(
+        cli,
+        "_PRODUCTION_PROMOTION_SHA256",
+        hashlib.sha256(receipt.path.read_bytes()).hexdigest(),
     )
+    monkeypatch.setattr(
+        cli,
+        "_PRODUCTION_COMPATIBILITY_SHA256",
+        hashlib.sha256(compatibility.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(cli, "_run_pg_restore_list", lambda _path: listing)
     return {
         "dump_path": dump,
         "rr_promotion": receipt.path,
         "rr_root": rr_root,
         "compatibility": compatibility,
-        "expectations": expectations,
     }
 
 
@@ -151,8 +157,12 @@ def _outputs(tmp_path: Path, prefix: str) -> dict[str, Path]:
     }
 
 
-def _freeze(tmp_path: Path, prefix: str = "published"):
-    fixture = _fixture(tmp_path)
+def _freeze(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prefix: str = "published",
+):
+    fixture = _fixture(tmp_path, monkeypatch)
     return cli.freeze_boundary_publications_v2(
         dump_path=fixture["dump_path"],  # type: ignore[arg-type]
         rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
@@ -162,14 +172,14 @@ def _freeze(tmp_path: Path, prefix: str = "published"):
         require_zero_row_access=True,
         require_zero_process_row_extraction=True,
         require_zero_network_access=True,
-        _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
     )
 
 
 def test_freezer_recomputes_original_metadata_and_reopens_publications(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = _freeze(tmp_path)
+    result = _freeze(tmp_path, monkeypatch)
 
     coverage = SourceCoveragePublicationV2.from_dict(
         __import__("json").loads(result.coverage_path.read_bytes())
@@ -187,8 +197,10 @@ def test_freezer_recomputes_original_metadata_and_reopens_publications(
     )
 
 
-def test_freezer_rejects_coherent_forged_compatibility_summary(tmp_path: Path) -> None:
-    fixture = _fixture(tmp_path)
+def test_freezer_rejects_coherent_forged_compatibility_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, monkeypatch)
     compatibility = fixture["compatibility"]
     content = compatibility.read_bytes().replace(b'"compatible"', b'"source_conflict"')
     compatibility.write_bytes(content)
@@ -203,12 +215,13 @@ def test_freezer_rejects_coherent_forged_compatibility_summary(tmp_path: Path) -
             require_zero_row_access=True,
             require_zero_process_row_extraction=True,
             require_zero_network_access=True,
-            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
         )
 
 
-def test_freezer_requires_all_zero_access_guards(tmp_path: Path) -> None:
-    fixture = _fixture(tmp_path)
+def test_freezer_requires_all_zero_access_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="zero-row"):
         cli.freeze_boundary_publications_v2(
             dump_path=fixture["dump_path"],  # type: ignore[arg-type]
@@ -219,12 +232,13 @@ def test_freezer_requires_all_zero_access_guards(tmp_path: Path) -> None:
             require_zero_row_access=False,
             require_zero_process_row_extraction=True,
             require_zero_network_access=True,
-            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
         )
 
 
-def test_freezer_is_byte_deterministic_and_no_clobber(tmp_path: Path) -> None:
-    fixture = _fixture(tmp_path)
+def test_freezer_is_byte_deterministic_and_no_clobber(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, monkeypatch)
     common = {
         "dump_path": fixture["dump_path"],
         "rr_promotion": fixture["rr_promotion"],
@@ -233,7 +247,6 @@ def test_freezer_is_byte_deterministic_and_no_clobber(tmp_path: Path) -> None:
         "require_zero_row_access": True,
         "require_zero_process_row_extraction": True,
         "require_zero_network_access": True,
-        "_test_expectations": fixture["expectations"],
     }
     first_paths = _outputs(tmp_path, "first")
     second_paths = _outputs(tmp_path, "second")
@@ -247,8 +260,10 @@ def test_freezer_is_byte_deterministic_and_no_clobber(tmp_path: Path) -> None:
         cli.freeze_boundary_publications_v2(**common, **first_paths)  # type: ignore[arg-type]
 
 
-def test_freezer_rejects_existing_v1_programme_root(tmp_path: Path) -> None:
-    fixture = _fixture(tmp_path)
+def test_freezer_rejects_existing_v1_programme_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, monkeypatch)
     root = tmp_path / ("VP-0d65fef04ca44dfc5ba7c7705e0be197480d7456b51178702a0011a18ab4487d")
     root.mkdir()
     with pytest.raises(ValueError, match="V1 programme root"):
@@ -263,7 +278,6 @@ def test_freezer_rejects_existing_v1_programme_root(tmp_path: Path) -> None:
             require_zero_row_access=True,
             require_zero_process_row_extraction=True,
             require_zero_network_access=True,
-            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
         )
 
 
@@ -271,7 +285,7 @@ def test_concurrent_output_is_not_replaced_and_partial_outputs_are_rolled_back(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    fixture = _fixture(tmp_path)
+    fixture = _fixture(tmp_path, monkeypatch)
     outputs = _outputs(tmp_path, "race")
     original_link = os.link
     calls = 0
@@ -294,7 +308,6 @@ def test_concurrent_output_is_not_replaced_and_partial_outputs_are_rolled_back(
             require_zero_row_access=True,
             require_zero_process_row_extraction=True,
             require_zero_network_access=True,
-            _test_expectations=fixture["expectations"],  # type: ignore[arg-type]
         )
     assert not outputs["output_coverage"].exists()
     assert outputs["output_split"].read_bytes() == b"concurrent"
@@ -328,3 +341,14 @@ def test_parser_exposes_exact_plan_arguments() -> None:
     assert args.require_zero_row_access is True
     assert args.require_zero_process_row_extraction is True
     assert args.require_zero_network_access is True
+
+
+def test_public_freezer_signature_has_no_authority_override() -> None:
+    signature = inspect.signature(cli.freeze_boundary_publications_v2)
+
+    assert "_test_expectations" not in signature.parameters
+    assert all("sha256" not in name for name in signature.parameters)
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        cli.freeze_boundary_publications_v2(  # type: ignore[call-arg]
+            _test_expectations=object()
+        )

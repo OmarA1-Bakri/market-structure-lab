@@ -107,6 +107,27 @@ def test_boundary_is_factory_issued_immutable_and_verifiable() -> None:
         DevelopmentReadBoundaryV2(**boundary.constructor_fields())  # type: ignore[arg-type]
 
 
+def test_freeze_issue_reopen_preserves_exact_boundary_identity() -> None:
+    coverage, split, boundary = _issued()
+
+    reopened_coverage = SourceCoveragePublicationV2.from_dict(coverage.to_dict())
+    reopened_split = type(split).from_dict(split.to_dict(), reopened_coverage)
+    reopened_boundary = DevelopmentReadBoundaryV2.from_publication_dict(
+        boundary.to_dict(), reopened_coverage, reopened_split
+    )
+
+    assert reopened_boundary.boundary_sha256 == boundary.boundary_sha256
+    assert reopened_boundary.canonical_bytes == boundary.canonical_bytes
+
+
+def test_boundary_request_rejects_one_microsecond_difference() -> None:
+    _, _, boundary = _issued()
+    request = _allowed_request(boundary)
+
+    with pytest.raises(ValueError, match="minute-aligned"):
+        replace(request, start=request.start.replace(microsecond=1))
+
+
 @pytest.mark.parametrize("copier", (copy.copy, copy.deepcopy))
 def test_copied_boundary_loses_original_publication_authority(copier) -> None:
     _, _, boundary = _issued()
@@ -306,6 +327,21 @@ def test_ledger_internally_denies_and_counts_final_scope() -> None:
     assert ledger.counters.final_scope_attempts == 1
     with pytest.raises(ValueError, match="ordering"):
         ledger.complete(request, row_count=0, byte_count=0)
+
+
+def test_ledger_counts_final_scope_at_start_before_crash() -> None:
+    _, _, boundary = _issued()
+    ledger = DevelopmentAccessAttemptLedgerV2(
+        programme_id="VPV2-" + "1" * 64,
+        attempt_id="VA-" + "2" * 64,
+        boundary=boundary,
+    )
+    request = replace(_allowed_request(boundary), symbol=boundary.forbidden_asset_symbols[0])
+
+    ledger.start(request)
+
+    assert ledger.counters.final_scope_attempts == 1
+    assert ledger.counters.denied_boundary_attempts == 0
 
 
 def test_ledger_enforces_start_adjudication_completion_order() -> None:

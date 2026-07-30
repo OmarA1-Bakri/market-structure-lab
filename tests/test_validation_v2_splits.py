@@ -132,13 +132,13 @@ def test_common_grid_blocks_are_deterministic_and_half_open() -> None:
     assert split.development_blocks == split.blocks[:-1]
 
 
-def test_common_grid_rounds_inward_for_non_midnight_subsecond_coverage() -> None:
+def test_common_grid_rounds_inward_for_non_midnight_coverage() -> None:
     coverage = _coverage()
     entries = tuple(
         replace(
             entry,
-            complete_start=datetime(2024, 1, 1, 0, 0, 0, 1, tzinfo=UTC),
-            complete_end=datetime(2025, 1, 1, 23, 59, 59, 999999, tzinfo=UTC),
+            complete_start=datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+            complete_end=datetime(2025, 1, 1, 23, 59, tzinfo=UTC),
         )
         for entry in coverage.entries
     )
@@ -158,6 +158,15 @@ def test_common_grid_rounds_inward_for_non_midnight_subsecond_coverage() -> None
         for entry in entries
         for block in split.blocks
     )
+
+
+def test_coverage_rejects_one_microsecond_identity_collision() -> None:
+    coverage = _coverage()
+    with pytest.raises(ValueError, match="minute-aligned"):
+        replace(
+            coverage.entries[0],
+            complete_start=coverage.entries[0].complete_start.replace(microsecond=1),
+        )
 
 
 def test_ineligible_coverage_is_excluded_before_holdout() -> None:
