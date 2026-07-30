@@ -516,6 +516,65 @@ class ValidationProgrammeResult:
     outer_diagnostic_best_row_identity: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ValidationPreflightFailureResult:
+    """Immutable failed/not-evaluated publication created before source construction."""
+
+    output_root: Path
+    programme_receipt_path: Path
+    programme_receipt: ProgrammeReceipt
+    evaluation_receipts: tuple[ReceiptPublication, ...]
+    reason_code: str
+    missing_prerequisites: tuple[str, ...]
+    source_manifest_sha256: str
+    final_holdout_access_count: int = 0
+
+
+def publish_validation_preflight_failure(
+    config: ValidationProgrammeConfig,
+    *,
+    output_root: Path,
+    reason_code: str,
+    missing_prerequisites: tuple[str, ...],
+    source_manifest_sha256: str,
+) -> ValidationPreflightFailureResult:
+    """Publish the complete terminal ledger when real primitive sources do not exist."""
+
+    if not isinstance(config, ValidationProgrammeConfig):
+        raise TypeError("config must be ValidationProgrammeConfig")
+    if reason_code != "missing_prerequisites":
+        raise ValueError("preflight reason_code must be missing_prerequisites")
+    if (
+        not isinstance(missing_prerequisites, tuple)
+        or not missing_prerequisites
+        or missing_prerequisites != tuple(sorted(set(missing_prerequisites)))
+        or any(
+            not item or len(item) > 64 or set(item) - set("abcdefghijklmnopqrstuvwxyz0123456789_")
+            for item in missing_prerequisites
+        )
+    ):
+        raise ValueError("missing_prerequisites must be a non-empty sorted tuple of safe tokens")
+    _require_sha256(source_manifest_sha256, "source_manifest_sha256")
+    root = Path(output_root)
+    _reject_existing_output_root(root)
+    publication, evaluations = _publish_terminal_receipts(
+        config,
+        root,
+        _failed_terminal_map(config),
+        reason=reason_code,
+        primitive_evidence={"source_preflight_manifest": source_manifest_sha256},
+    )
+    return ValidationPreflightFailureResult(
+        output_root=root,
+        programme_receipt_path=publication.path,
+        programme_receipt=verify_programme_receipt(publication.path),
+        evaluation_receipts=evaluations,
+        reason_code=reason_code,
+        missing_prerequisites=missing_prerequisites,
+        source_manifest_sha256=source_manifest_sha256,
+    )
+
+
 def run_validation_programme(
     config: ValidationProgrammeConfig,
     sources: ValidationProgrammeSources,

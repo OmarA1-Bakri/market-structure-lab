@@ -19,10 +19,12 @@ if TYPE_CHECKING:
         DevelopmentOutcomeCase,
         ProgrammePreflightMetadata,
         SlotLifecycleEvidence,
+        ValidationPreflightFailureResult,
         ValidationProgrammeResult,
         ValidationProgrammeSources,
         VerifiedDevelopmentEvidence,
         freeze_development_evidence,
+        publish_validation_preflight_failure,
         run_validation_programme,
     )
 from market_structure_lab.research.models import (
@@ -89,10 +91,12 @@ def __getattr__(name: str) -> object:
         "DevelopmentOutcomeCase",
         "ProgrammePreflightMetadata",
         "SlotLifecycleEvidence",
+        "ValidationPreflightFailureResult",
         "ValidationProgrammeResult",
         "ValidationProgrammeSources",
         "VerifiedDevelopmentEvidence",
         "freeze_development_evidence",
+        "publish_validation_preflight_failure",
         "run_validation_programme",
     }:
         from market_structure_lab.research.validation import (
@@ -101,10 +105,12 @@ def __getattr__(name: str) -> object:
             CostApplicationCase,
             DevelopmentOutcomeCase,
             SlotLifecycleEvidence,
+            ValidationPreflightFailureResult,
             ValidationProgrammeResult,
             ValidationProgrammeSources,
             VerifiedDevelopmentEvidence,
             freeze_development_evidence,
+            publish_validation_preflight_failure,
             run_validation_programme,
         )
 
@@ -114,10 +120,12 @@ def __getattr__(name: str) -> object:
             "DevelopmentOutcomeCase": DevelopmentOutcomeCase,
             "ProgrammePreflightMetadata": ProgrammePreflightMetadata,
             "SlotLifecycleEvidence": SlotLifecycleEvidence,
+            "ValidationPreflightFailureResult": ValidationPreflightFailureResult,
             "ValidationProgrammeResult": ValidationProgrammeResult,
             "ValidationProgrammeSources": ValidationProgrammeSources,
             "VerifiedDevelopmentEvidence": VerifiedDevelopmentEvidence,
             "freeze_development_evidence": freeze_development_evidence,
+            "publish_validation_preflight_failure": publish_validation_preflight_failure,
             "run_validation_programme": run_validation_programme,
         }[name]
     raise AttributeError(name)
@@ -154,9 +162,11 @@ __all__ = [
     "DevelopmentOutcomeCase",
     "ProgrammePreflightMetadata",
     "SlotLifecycleEvidence",
+    "ValidationPreflightFailureResult",
     "ValidationProgrammeResult",
     "ValidationProgrammeSources",
     "VerifiedDevelopmentEvidence",
     "freeze_development_evidence",
+    "publish_validation_preflight_failure",
     "run_validation_programme",
 ]
