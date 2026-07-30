@@ -657,6 +657,28 @@ def test_no_edge_publishes_verified_vp_and_1104_vrs(
     )
 
 
+def test_v1_characterization_reuses_one_family_statistic_across_slot_receipts(
+    tmp_path: Path,
+    base_sources: tuple[ValidationProgrammeConfig, ValidationProgrammeSources],
+) -> None:
+    """Lock the rejected V1 family-level computation shape without endorsing it for V2."""
+
+    config, sources = base_sources
+    result = run_validation_programme(config, sources, tmp_path / "v1-family-reuse")
+    family_a = tuple(item for item in result.slot_evidence if item.family == "A")
+
+    assert len(family_a) > 1
+    assert len({item.primitive_evidence_sha256 for item in family_a}) == 1
+    assert len({item.family_decision_sha256 for item in family_a}) == 1
+    assert len(
+        {
+            publication.receipt.evaluation_id
+            for publication in result.evaluation_receipts
+            if publication.receipt.slot["family"] == "A"
+        }
+    ) == len(family_a)
+
+
 def test_known_effect_uses_raw_primitives_and_demotes_diagnostics(
     tmp_path: Path,
     base_sources: tuple[ValidationProgrammeConfig, ValidationProgrammeSources],

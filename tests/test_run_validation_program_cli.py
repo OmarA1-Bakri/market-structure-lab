@@ -278,6 +278,16 @@ def test_task10_cli_module_exists() -> None:
     assert importlib.util.find_spec("market_structure_lab.cli.run_validation_program") is not None
 
 
+def test_v1_programme_loader_rejects_other_v1_schemas(tmp_path: Path) -> None:
+    from market_structure_lab.cli.run_validation_program import load_programme_config
+
+    for payload in (_source_payload(), _bindings_payload()):
+        path = tmp_path / f"{payload['schema_version']}.json"
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="unexpected or missing fields"):
+            load_programme_config(path)
+
+
 def test_terminal_preflight_publisher_is_a_narrow_research_export() -> None:
     import market_structure_lab.research as research
 
