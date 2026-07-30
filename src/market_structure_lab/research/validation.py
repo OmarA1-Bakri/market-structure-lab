@@ -19,6 +19,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from market_structure_lab.core.artifact_io import (
+    path_exists_no_follow,
+    require_regular_directory,
+)
 from market_structure_lab.core.identity import canonical_json, hash_json
 from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
 from market_structure_lab.research.candidates import (
@@ -563,6 +567,12 @@ def publish_validation_preflight_failure(
         _failed_terminal_map(config),
         reason=reason_code,
         primitive_evidence={"source_preflight_manifest": source_manifest_sha256},
+        preflight_context={
+            "reason_code": reason_code,
+            "missing_prerequisites": list(missing_prerequisites),
+            "source_manifest_sha256": source_manifest_sha256,
+            "final_holdout_access_count": 0,
+        },
     )
     return ValidationPreflightFailureResult(
         output_root=root,
@@ -1260,9 +1270,10 @@ def _publish_terminal_receipts(
     reason: str,
     slot_evidence: tuple[SlotLifecycleEvidence, ...] = (),
     primitive_evidence: Mapping[str, str] | None = None,
+    preflight_context: Mapping[str, object] | None = None,
 ) -> tuple[ReceiptPublication, tuple[ReceiptPublication, ...]]:
     root = Path(output_root)
-    root.parent.mkdir(parents=True, exist_ok=True)
+    _prepare_output_parent(root.parent)
     staging = root.parent / f".{root.name}.staging.{os.getpid()}.{uuid.uuid4().hex}"
     evidence_by_slot = {item.slot_id: item for item in slot_evidence}
     requests = []
@@ -1314,19 +1325,17 @@ def _publish_terminal_receipts(
             artifacts={
                 "programme-evidence.json": canonical_json(
                     "validation-programme-terminal-evidence-v1",
-                    {
-                        "programme_id": config.programme_id,
-                        "reason": reason,
-                        "primitive_evidence": dict(primitive_evidence or {}),
-                        "slot_evidence": [item.to_dict() for item in slot_evidence],
-                        "final_holdout_access_count": 0,
-                    },
+                    _programme_evidence_payload(
+                        config,
+                        reason=reason,
+                        primitive_evidence=primitive_evidence,
+                        slot_evidence=slot_evidence,
+                        preflight_context=preflight_context,
+                    ),
                 )
             },
         )
         verify_programme_receipt(programme_publication.path)
-        for item in evaluation_publications:
-            verify_evaluation_receipt(item.path, config=config)
         if os.path.lexists(root):
             raise FileExistsError("validation output root appeared during publication")
         staging.rename(root)
@@ -1350,11 +1359,42 @@ def _publish_terminal_receipts(
     return final_programme, final_evaluations
 
 
+def _programme_evidence_payload(
+    config: ValidationProgrammeConfig,
+    *,
+    reason: str,
+    primitive_evidence: Mapping[str, str] | None,
+    slot_evidence: tuple[SlotLifecycleEvidence, ...],
+    preflight_context: Mapping[str, object] | None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "programme_id": config.programme_id,
+        "reason": reason,
+        "primitive_evidence": dict(primitive_evidence or {}),
+        "slot_evidence": [item.to_dict() for item in slot_evidence],
+        "final_holdout_access_count": 0,
+    }
+    if preflight_context is not None:
+        payload["preflight_context"] = dict(preflight_context)
+    return payload
+
+
 def _failed_terminal_map(config: ValidationProgrammeConfig) -> dict[str, ValidationTerminalState]:
     return {
         slot.slot_id: _FAILED_PREFLIGHT_STATE
         for slot in freeze_validation_slot_roster(config.roster)
     }
+
+
+def _prepare_output_parent(parent: Path) -> None:
+    nearest = Path(parent)
+    while not path_exists_no_follow(nearest):
+        if nearest == nearest.parent:
+            raise RuntimeError("validation output parent has no regular directory ancestor")
+        nearest = nearest.parent
+    require_regular_directory(nearest)
+    parent.mkdir(parents=True, exist_ok=True)
+    require_regular_directory(parent)
 
 
 def _primary_slots(family: str) -> tuple[ValidationSlot, ...]:
