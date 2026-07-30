@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from dataclasses import fields
 from datetime import UTC, datetime
+import copy
 from pathlib import Path
+import zipfile
 
 import pytest
 
 from market_structure_lab.data.binance_archive_v2 import (
     ArchiveBudgetsV2,
+    ArchiveBudgetExceeded,
+    ArchiveNetworkUnavailable,
+    acquire_binance_archives_v2,
     freeze_binance_archive_requests_v2,
+    load_binance_archive_acquisition_v2,
+    load_binance_archive_request_manifest_for_acquisition_v2,
     parse_observed_trade_row_v2,
+    verify_binance_archive_acquisition_v2,
 )
+from market_structure_lab.core.identity import hash_json
+from market_structure_lab.research.validation_v2_models import publication_json_bytes
 from market_structure_lab.data.validation_source_v2 import discover_scoped_source_v2
 from market_structure_lab.research.validation_v2_models import (
     RawDumpIdentityV2,
@@ -118,6 +129,7 @@ def test_observed_trade_tape_has_narrow_authority() -> None:
     assert {"fees", "spread", "latency", "fill_probability", "capacity"} <= set(
         trade.unsupported_authorities
     )
+    assert "unsupported_authorities" not in {item.name for item in fields(trade)}
 
 
 def test_budget_schema_rejects_unbounded_or_incoherent_values() -> None:
@@ -129,3 +141,252 @@ def test_budget_schema_rejects_unbounded_or_incoherent_values() -> None:
             chunk_bytes=2_000_000,
             max_compressed_object_bytes=1_000_000,
         )
+
+
+@pytest.mark.parametrize("forgery", ("forbidden_asset", "final_period", "path_date"))
+def test_loaded_manifest_rejects_coherent_scope_and_path_forgery_before_io(
+    forgery: str,
+    issued_v2_publications,
+    unavailable_source_v2,
+    tmp_path: Path,
+) -> None:
+    from market_structure_lab.data import binance_archive_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    original = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=unavailable_source_v2,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=tmp_path / "original.json",
+    )
+    payload = copy.deepcopy(original.to_dict())
+    request = payload["requests"][0]
+    assert isinstance(request, dict)
+    if forgery == "forbidden_asset":
+        request["symbol"] = boundary.forbidden_asset_symbols[0]
+        stamp = str(request["start"])[:10]
+        filename = f"{request['symbol']}-aggTrades-{stamp}.zip"
+        request["object_path"] = (
+            f"/data/spot/daily/aggTrades/{request['symbol']}/{filename}"
+        )
+        request["checksum_path"] = f"{request['object_path']}.CHECKSUM"
+    elif forgery == "final_period":
+        interval = boundary.forbidden_temporal_intervals[0]
+        request["start"] = interval.start.isoformat(timespec="seconds").replace(
+            "+00:00", "Z"
+        )
+        request["end"] = (interval.start.replace(hour=0) + module.timedelta(days=1)).isoformat(
+            timespec="seconds"
+        ).replace("+00:00", "Z")
+        stamp = str(request["start"])[:10]
+        filename = f"{request['symbol']}-aggTrades-{stamp}.zip"
+        request["period"] = "daily"
+        request["object_path"] = (
+            f"/data/spot/daily/aggTrades/{request['symbol']}/{filename}"
+        )
+        request["checksum_path"] = f"{request['object_path']}.CHECKSUM"
+    else:
+        request["object_path"] = str(request["object_path"]).replace(
+            str(request["start"])[:7], "1999-01"
+        )
+        request["checksum_path"] = f"{request['object_path']}.CHECKSUM"
+    request_payload = {key: value for key, value in request.items() if key != "request_sha256"}
+    request["request_sha256"] = hash_json(module._REQUEST_DOMAIN, request_payload)  # noqa: SLF001
+    manifest_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"schema_version", "manifest_sha256"}
+    }
+    payload["manifest_sha256"] = hash_json(module._MANIFEST_DOMAIN, manifest_payload)  # noqa: SLF001
+    forged = tmp_path / f"{forgery}.json"
+    forged.write_bytes(publication_json_bytes(payload))
+
+    with pytest.raises((PermissionError, ValueError), match="development|deterministic"):
+        load_binance_archive_request_manifest_for_acquisition_v2(
+            publication_path=forged,
+            boundary=boundary,
+        )
+
+
+def test_unexpected_acquisition_error_is_not_downgraded(
+    issued_v2_publications,
+    unavailable_source_v2,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import binance_archive_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    manifest_path = tmp_path / "requests.json"
+    manifest = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=unavailable_source_v2,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=manifest_path,
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_download_small_with_retries",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("programming defect")),
+    )
+
+    with pytest.raises(AssertionError, match="programming defect"):
+        acquire_binance_archives_v2(
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            audit_ledger_root=tmp_path / "audit",
+            cache_root=cache,
+            output_root=tmp_path / "output",
+        )
+    assert not (tmp_path / "audit").exists()
+    assert not (tmp_path / "output").exists()
+
+
+def test_expected_failure_publishes_paired_audit_and_tamper_rejects(
+    issued_v2_publications,
+    unavailable_source_v2,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import binance_archive_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    manifest_path = tmp_path / "requests.json"
+    manifest = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=unavailable_source_v2,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=manifest_path,
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_download_small_with_retries",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ArchiveNetworkUnavailable("fixture unavailable")
+        ),
+    )
+    audit = tmp_path / "audit"
+    output = tmp_path / "output"
+    result = acquire_binance_archives_v2(
+        boundary=boundary,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        audit_ledger_root=audit,
+        cache_root=cache,
+        output_root=output,
+    )
+    assert result.status == "unavailable"
+    assert (audit / "publication.json").is_file()
+    assert (output / "publication.json").is_file()
+    assert (
+        verify_binance_archive_acquisition_v2(
+            result,
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+        == result
+    )
+    assert (
+        load_binance_archive_acquisition_v2(
+            publication_root=output,
+            cache_root=cache,
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+        == result
+    )
+    (audit / "publication.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="audit"):
+        verify_binance_archive_acquisition_v2(
+            result,
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+
+
+def test_archive_row_budget_rejects_before_reading_an_extra_row(
+    issued_v2_publications,
+    unavailable_source_v2,
+    tmp_path: Path,
+) -> None:
+    from market_structure_lab.data import binance_archive_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    manifest = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=unavailable_source_v2,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=tmp_path / "requests.json",
+    )
+    request = manifest.requests[0]
+    timestamp = int(request.start.timestamp() * 1_000)
+    row = f"1,42000,1,1,1,{timestamp},false,true\n"
+    archive = tmp_path / "rows.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("rows.csv", row + row)
+
+    with pytest.raises(ArchiveBudgetExceeded, match="rows"):
+        module._inspect_archive(  # noqa: SLF001
+            archive,
+            request,
+            manifest.budgets,
+            remaining_decompressed=manifest.budgets.max_total_decompressed_bytes,
+            remaining_rows=1,
+            deadline=module.time.monotonic() + 60,
+        )
+
+
+def test_paired_acquisition_and_audit_publication_roll_back_together(
+    issued_v2_publications,
+    unavailable_source_v2,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import binance_archive_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    manifest_path = tmp_path / "requests.json"
+    manifest = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=unavailable_source_v2,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=manifest_path,
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_download_small_with_retries",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ArchiveNetworkUnavailable("fixture unavailable")
+        ),
+    )
+    audit = tmp_path / "audit"
+    output = tmp_path / "output"
+    original_rename = module.os.rename
+
+    def fail_second_publish(source, destination):
+        if Path(destination) == audit:
+            raise OSError("fixture second publication failure")
+        return original_rename(source, destination)
+
+    monkeypatch.setattr(module.os, "rename", fail_second_publish)
+    with pytest.raises(OSError, match="second publication"):
+        acquire_binance_archives_v2(
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            audit_ledger_root=audit,
+            cache_root=cache,
+            output_root=output,
+        )
+    assert not audit.exists()
+    assert not output.exists()

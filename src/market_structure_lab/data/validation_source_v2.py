@@ -46,6 +46,7 @@ _AVAILABILITY_DOMAIN = "phase5-validation-scoped-source-availability-v2"
 _AUDIT_RECORD_DOMAIN = "phase5-validation-source-access-audit-record-v2"
 _AUDIT_PUBLICATION_DOMAIN = "phase5-validation-source-access-audit-publication-v2"
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_TRUSTED_VERIFIER_EVIDENCE_SHA256: frozenset[str] = frozenset()
 _VERIFIED_AVAILABILITIES: dict[
     int,
     tuple[
@@ -53,6 +54,8 @@ _VERIFIED_AVAILABILITIES: dict[
         bytes,
         Path,
         tuple[tuple[Path, str], ...],
+        Path,
+        bytes,
     ],
 ] = {}
 
@@ -143,6 +146,7 @@ class ScopedSourceAvailabilityV2:
     final_rows: int
     final_access_records: int
     audit_publication_sha256: str
+    audit_publication_path: str
     availability_sha256: str
     canonical_bytes: bytes = field(repr=False, compare=False)
     _factory_token: InitVar[object | None] = None
@@ -155,6 +159,8 @@ class ScopedSourceAvailabilityV2:
             raise TypeError("status must be ScopedSourceStatusV2")
         _require_sha256(self.boundary_sha256, "boundary_sha256")
         _require_sha256(self.audit_publication_sha256, "audit_publication_sha256")
+        if not Path(self.audit_publication_path).is_absolute():
+            raise ValueError("audit_publication_path must be absolute")
         for label in (
             "rows_read",
             "bytes_read",
@@ -192,6 +198,7 @@ class ScopedSourceAvailabilityV2:
             "final_rows": self.final_rows,
             "final_access_records": self.final_access_records,
             "audit_publication_sha256": self.audit_publication_sha256,
+            "audit_publication_path": self.audit_publication_path,
         }
 
     def to_dict(self) -> dict[str, object]:
@@ -217,6 +224,7 @@ class ScopedSourceAvailabilityV2:
             "final_rows": 0,
             "final_access_records": 0,
             "audit_publication_sha256": empty_audit,
+            "audit_publication_path": "/unsealed/audit/publication.json",
         }
         public = {
             "schema_version": cls._schema,
@@ -234,6 +242,7 @@ class ScopedSourceAvailabilityV2:
             final_rows=0,
             final_access_records=0,
             audit_publication_sha256=empty_audit,
+            audit_publication_path="/unsealed/audit/publication.json",
             availability_sha256=public["availability_sha256"],  # type: ignore[arg-type]
             canonical_bytes=publication_json_bytes(public),
         )
@@ -260,24 +269,37 @@ def discover_scoped_source_v2(
     audit_ledger_root = Path(audit_ledger_root)
     output_root = Path(output_root)
     require_regular_directory(candidate_root)
+    require_regular_directory(audit_ledger_root.parent)
+    require_regular_directory(output_root.parent)
     if path_exists_no_follow(audit_ledger_root):
         raise FileExistsError(f"refusing stale audit ledger root: {audit_ledger_root}")
     if path_exists_no_follow(output_root):
         raise FileExistsError(f"refusing stale source discovery output: {output_root}")
-    audit_ledger_root.mkdir(parents=False)
-    records_dir = audit_ledger_root / "records"
+    audit_stage = Path(
+        tempfile.mkdtemp(
+            prefix=f".{audit_ledger_root.name}.", suffix=".tmp", dir=audit_ledger_root.parent
+        )
+    )
+    output_stage = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_root.name}.", suffix=".tmp", dir=output_root.parent
+        )
+    )
+    records_dir = audit_stage / "records"
     records_dir.mkdir()
     candidates: list[ScopedSourceCandidateV2] = []
     descriptor_bindings: list[tuple[Path, str]] = []
     descriptor_byte_count = 0
     prior: str | None = None
-    files = bounded_regular_files(candidate_root, maximum=_MAX_CANDIDATES)
-    for relative in files:
-        descriptor_path = candidate_root / relative
-        request = _metadata_request(boundary, target_identity=f"candidate:{relative}")
+    audit_sequence = 0
+
+    def read_candidate_evidence(path: Path, target: str) -> bytes:
+        nonlocal audit_sequence, prior, descriptor_byte_count
+        request = _metadata_request(boundary, target_identity=target)
+        audit_sequence += 1
         prior = _append_audit_record(
             records_dir,
-            sequence=len(descriptor_bindings) * 2 + 1,
+            sequence=audit_sequence,
             phase="start",
             boundary=boundary,
             request=request,
@@ -286,23 +308,42 @@ def discover_scoped_source_v2(
             prior=prior,
         )
         boundary.authorize(request)
-        raw = read_bounded_regular(descriptor_path, _MAX_DESCRIPTOR_BYTES)
-        descriptor_byte_count += len(raw)
-        digest = hashlib.sha256(raw).hexdigest()
+        raw_evidence = read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES)
+        descriptor_byte_count += len(raw_evidence)
+        digest_evidence = hashlib.sha256(raw_evidence).hexdigest()
+        audit_sequence += 1
         prior = _append_audit_record(
             records_dir,
-            sequence=len(descriptor_bindings) * 2 + 2,
+            sequence=audit_sequence,
             phase="completion",
             boundary=boundary,
             request=request,
             allowed=True,
-            byte_count=len(raw),
+            byte_count=len(raw_evidence),
             prior=prior,
         )
-        descriptor_bindings.append((descriptor_path, digest))
-        candidates.append(
-            _evaluate_candidate(str(descriptor_path), raw, digest, boundary)
-        )
+        descriptor_bindings.append((path, digest_evidence))
+        return raw_evidence
+
+    try:
+        files = bounded_regular_files(candidate_root, maximum=_MAX_CANDIDATES)
+        for relative in files:
+            descriptor_path = candidate_root / relative
+            raw = read_candidate_evidence(descriptor_path, f"candidate:{relative}")
+            digest = hashlib.sha256(raw).hexdigest()
+            candidates.append(
+                _evaluate_candidate(
+                    descriptor_path,
+                    raw,
+                    digest,
+                    boundary,
+                    read_reference=read_candidate_evidence,
+                )
+            )
+    except Exception:
+        _remove_staged_tree(audit_stage)
+        _remove_staged_tree(output_stage)
+        raise
     admitted = tuple(item for item in candidates if item.admitted)
     if len(admitted) > 1:
         candidates = [
@@ -324,7 +365,7 @@ def discover_scoped_source_v2(
     audit_payload = {
         "schema_version": "phase5-validation-source-access-audit-publication-v2",
         "boundary_sha256": boundary.boundary_sha256,
-        "record_count": len(descriptor_bindings) * 2,
+        "record_count": audit_sequence,
         "terminal_record_sha256": prior,
         "rows_admitted": 0,
         "final_scope_attempts": 0,
@@ -333,8 +374,6 @@ def discover_scoped_source_v2(
     }
     audit_publication_sha256 = hash_json(_AUDIT_PUBLICATION_DOMAIN, audit_payload)
     audit_public = {**audit_payload, "audit_publication_sha256": audit_publication_sha256}
-    _write_no_clobber(audit_ledger_root / "publication.json", publication_json_bytes(audit_public))
-    _fsync_directory(audit_ledger_root)
     status = (
         ScopedSourceStatusV2.AVAILABLE if len(admitted) == 1 else ScopedSourceStatusV2.UNAVAILABLE
     )
@@ -349,6 +388,7 @@ def discover_scoped_source_v2(
         "final_rows": 0,
         "final_access_records": 0,
         "audit_publication_sha256": audit_publication_sha256,
+        "audit_publication_path": str(audit_ledger_root / "publication.json"),
     }
     availability_sha256 = hash_json(_AVAILABILITY_DOMAIN, identity_payload)
     public = {
@@ -367,16 +407,32 @@ def discover_scoped_source_v2(
         final_rows=0,
         final_access_records=0,
         audit_publication_sha256=audit_publication_sha256,
+        audit_publication_path=str(audit_ledger_root / "publication.json"),
         availability_sha256=availability_sha256,
         canonical_bytes=publication_json_bytes(public),
         _factory_token=_AVAILABILITY_FACTORY,
     )
+    audit_bytes = publication_json_bytes(audit_public)
+    try:
+        _write_no_clobber(audit_stage / "publication.json", audit_bytes)
+        _write_no_clobber(output_stage / "publication.json", availability.canonical_bytes)
+        _commit_paired_directories(
+            first_stage=output_stage,
+            first_destination=output_root,
+            second_stage=audit_stage,
+            second_destination=audit_ledger_root,
+        )
+    except Exception:
+        _remove_staged_tree(audit_stage)
+        _remove_staged_tree(output_stage)
+        raise
     publication_path = output_root / "publication.json"
-    _publish_directory_no_clobber(
-        output_root, {"publication.json": availability.canonical_bytes}
-    )
     _register_availability(
-        availability, publication_path, tuple(descriptor_bindings)
+        availability,
+        publication_path,
+        tuple(descriptor_bindings),
+        audit_ledger_root / "publication.json",
+        audit_bytes,
     )
     return availability
 
@@ -408,6 +464,38 @@ def verify_scoped_source_availability_v2(
     for path, expected_sha in registered[3]:
         if hashlib.sha256(read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES)).hexdigest() != expected_sha:
             raise ValueError("source candidate original bytes changed")
+    for candidate in availability.candidates:
+        descriptor_path = Path(candidate.descriptor_path)
+        raw = read_bounded_regular(descriptor_path, _MAX_DESCRIPTOR_BYTES)
+        reevaluated = _evaluate_candidate(
+            descriptor_path,
+            raw,
+            hashlib.sha256(raw).hexdigest(),
+            boundary,
+            read_reference=lambda path, _target: read_bounded_regular(
+                path, _MAX_DESCRIPTOR_BYTES
+            ),
+        )
+        if reevaluated != candidate:
+            raise ValueError("source candidate trusted evidence changed or was reconstructed")
+    if registered[4] != Path(availability.audit_publication_path):
+        raise ValueError("availability audit publication path changed")
+    audit_bytes = _verify_audit_publication(
+        registered[4],
+        expected_boundary_sha256=boundary.boundary_sha256,
+    )
+    if (
+        audit_bytes != registered[5]
+        or hashlib.sha256(audit_bytes).hexdigest()
+        != hashlib.sha256(registered[5]).hexdigest()
+    ):
+        raise ValueError("availability original audit bytes changed")
+    audit_public = json.loads(audit_bytes)
+    if (
+        audit_public["audit_publication_sha256"]
+        != availability.audit_publication_sha256
+    ):
+        raise ValueError("availability does not bind its original audit digest")
     return availability
 
 
@@ -484,6 +572,11 @@ def load_scoped_source_availability_v2(
         availability,
         root / "publication.json",
         candidate_bindings,
+        Path(availability.audit_publication_path),
+        _verify_audit_publication(
+            Path(availability.audit_publication_path),
+            expected_boundary_sha256=boundary.boundary_sha256,
+        ),
     )
     return verify_scoped_source_availability_v2(
         availability, boundary=boundary, publication_root=root
@@ -505,6 +598,7 @@ def _availability_from_dict(payload: object) -> ScopedSourceAvailabilityV2:
             "final_rows",
             "final_access_records",
             "audit_publication_sha256",
+            "audit_publication_path",
             "availability_sha256",
         },
         "scoped source availability",
@@ -550,6 +644,7 @@ def _availability_from_dict(payload: object) -> ScopedSourceAvailabilityV2:
         final_rows=values["final_rows"],  # type: ignore[arg-type]
         final_access_records=values["final_access_records"],  # type: ignore[arg-type]
         audit_publication_sha256=values["audit_publication_sha256"],  # type: ignore[arg-type]
+        audit_publication_path=values["audit_publication_path"],  # type: ignore[arg-type]
         availability_sha256=values["availability_sha256"],  # type: ignore[arg-type]
         canonical_bytes=publication_json_bytes(values),
         _factory_token=_AVAILABILITY_FACTORY,
@@ -557,42 +652,39 @@ def _availability_from_dict(payload: object) -> ScopedSourceAvailabilityV2:
 
 
 def _evaluate_candidate(
-    relative: str,
+    descriptor_path: Path,
     raw: bytes,
     descriptor_sha256: str,
     boundary: DevelopmentReadBoundaryV2,
+    *,
+    read_reference: Any,
 ) -> ScopedSourceCandidateV2:
+    path_text = str(descriptor_path)
     try:
         decoded = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return _rejected_candidate(relative, "invalid", descriptor_sha256, "invalid_descriptor")
+        return _rejected_candidate(path_text, "invalid", descriptor_sha256, "invalid_descriptor")
     if not isinstance(decoded, dict):
-        return _rejected_candidate(relative, "invalid", descriptor_sha256, "invalid_descriptor")
+        return _rejected_candidate(path_text, "invalid", descriptor_sha256, "invalid_descriptor")
     kind = str(decoded.get("source_kind", "invalid"))
     identity = str(decoded.get("source_identity", f"invalid:{descriptor_sha256}"))
     if kind in {"postgres-restored-whole-table", "pg_restore", "generic-whole-table"}:
         reason = "whole_table_source_forbidden"
-    elif decoded.get("read_only") is not True:
-        reason = "source_not_proven_read_only"
-    elif decoded.get("predicate_enforcement") not in {
-        "partition-scope-before-open",
-        "server-side-before-query",
-    }:
-        reason = "predicate_before_read_not_proven"
-    elif decoded.get("boundary_sha256") != boundary.boundary_sha256:
-        reason = "boundary_identity_mismatch"
-    elif kind not in {
-        "content-addressed-development-publication",
-        "predicate-enforcing-read-only-service",
-        "predicate-enforcing-read-only-view",
-    }:
-        reason = "source_kind_not_admissible"
-    elif not _independent_verification_matches(decoded):
-        reason = "independent_verification_missing_or_invalid"
     else:
-        reason = None
+        try:
+            _verify_trusted_candidate_descriptor(
+                decoded,
+                raw,
+                descriptor_path=descriptor_path,
+                boundary=boundary,
+                read_reference=read_reference,
+            )
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+            reason = "trusted_original_predicate_evidence_invalid"
+        else:
+            reason = None
     return ScopedSourceCandidateV2(
-            descriptor_path=relative,
+        descriptor_path=path_text,
         source_kind=kind,
         source_identity=identity,
         descriptor_sha256=descriptor_sha256,
@@ -601,18 +693,128 @@ def _evaluate_candidate(
     )
 
 
-def _independent_verification_matches(decoded: dict[str, object]) -> bool:
-    verification = decoded.get("verification")
-    if not isinstance(verification, dict):
-        return False
-    return (
-        verification.get("immutable") is True
-        and verification.get("predicate_verified_before_read") is True
-        and isinstance(verification.get("verifier_identity"), str)
-        and bool(verification["verifier_identity"])
-        and isinstance(verification.get("original_manifest_sha256"), str)
-        and _SHA256.fullmatch(str(verification["original_manifest_sha256"])) is not None
-    )
+def _verify_trusted_candidate_descriptor(
+    descriptor: dict[str, object],
+    descriptor_bytes: bytes,
+    *,
+    descriptor_path: Path,
+    boundary: DevelopmentReadBoundaryV2,
+    read_reference: Any,
+) -> None:
+    expected_fields = {
+        "schema_version",
+        "source_kind",
+        "source_identity",
+        "original_manifest_path",
+        "original_manifest_sha256",
+        "verifier_evidence_path",
+        "verifier_evidence_sha256",
+        "predicate_evidence_path",
+        "predicate_evidence_sha256",
+    }
+    if (
+        set(descriptor) != expected_fields
+        or descriptor["schema_version"] != "phase5-scoped-source-candidate-v2"
+        or descriptor["source_kind"] != "content-addressed-development-publication"
+        or publication_json_bytes(descriptor) != descriptor_bytes
+    ):
+        raise ValueError("candidate descriptor schema or kind is not trusted")
+    source_identity = descriptor["source_identity"]
+    if not isinstance(source_identity, str) or not source_identity:
+        raise ValueError("candidate source identity is invalid")
+    originals: dict[str, tuple[dict[str, Any], str]] = {}
+    for label in ("original_manifest", "verifier_evidence", "predicate_evidence"):
+        path_value = descriptor[f"{label}_path"]
+        expected_sha = descriptor[f"{label}_sha256"]
+        path = _resolve_evidence_path(descriptor_path.parent, path_value)
+        content = read_reference(path, f"{source_identity}:{label}")
+        actual_sha = hashlib.sha256(content).hexdigest()
+        if expected_sha != actual_sha:
+            raise ValueError(f"{label} digest differs from original bytes")
+        decoded = _decode_canonical_object(content, label)
+        originals[label] = (decoded, actual_sha)
+    original, original_sha = originals["original_manifest"]
+    verifier, verifier_sha = originals["verifier_evidence"]
+    predicate, predicate_sha = originals["predicate_evidence"]
+    scope = _boundary_scope_payload(boundary)
+    original_payload = {
+        "source_identity": source_identity,
+        **scope,
+        "read_only": True,
+        "predicate_enforcement": "partition-scope-before-open",
+    }
+    if original != {
+        "schema_version": "phase5-development-scoped-source-manifest-v2",
+        **original_payload,
+        "manifest_sha256": hash_json(
+            "phase5-development-scoped-source-manifest-v2", original_payload
+        ),
+    }:
+        raise ValueError("original source manifest does not prove exact immutable scope")
+    verifier_payload = {
+        "source_identity": source_identity,
+        "original_manifest_sha256": original_sha,
+        "predicate_evidence_sha256": predicate_sha,
+        "boundary_sha256": boundary.boundary_sha256,
+        "verifier_kind": "independent-original-byte-verifier",
+        "immutable": True,
+    }
+    if verifier != {
+        "schema_version": "phase5-development-source-verifier-evidence-v2",
+        **verifier_payload,
+        "evidence_sha256": hash_json(
+            "phase5-development-source-verifier-evidence-v2", verifier_payload
+        ),
+    }:
+        raise ValueError("independent verifier evidence is invalid")
+    if verifier_sha not in _TRUSTED_VERIFIER_EVIDENCE_SHA256:
+        raise ValueError("verifier evidence is not rooted in the trusted exact allowlist")
+    predicate_payload = {
+        "source_identity": source_identity,
+        **scope,
+        "predicate_stage": "before-file-open-or-query",
+        "client_post_filter": False,
+        "unbounded_scan": False,
+    }
+    if predicate != {
+        "schema_version": "phase5-development-source-predicate-evidence-v2",
+        **predicate_payload,
+        "evidence_sha256": hash_json(
+            "phase5-development-source-predicate-evidence-v2", predicate_payload
+        ),
+    }:
+        raise ValueError("predicate-before-read evidence is invalid")
+
+
+def _boundary_scope_payload(boundary: DevelopmentReadBoundaryV2) -> dict[str, object]:
+    return {
+        "boundary_sha256": boundary.boundary_sha256,
+        "allowed_symbols": list(boundary.allowed_symbols),
+        "allowed_timeframes": list(boundary.allowed_timeframes),
+        "allowed_intervals": [
+            {"start": _utc_text(item.start), "end": _utc_text(item.end)}
+            for item in boundary.allowed_intervals
+        ],
+    }
+
+
+def _resolve_evidence_path(parent: Path, value: object) -> Path:
+    if not isinstance(value, str) or not value or Path(value).is_absolute():
+        raise ValueError("trusted evidence path must be canonical and relative")
+    relative = Path(value)
+    if ".." in relative.parts or relative.as_posix() != value:
+        raise ValueError("trusted evidence path contains traversal")
+    return parent / relative
+
+
+def _decode_canonical_object(content: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{label} is not JSON") from error
+    if not isinstance(decoded, dict) or publication_json_bytes(decoded) != content:
+        raise ValueError(f"{label} is not canonical original bytes")
+    return decoded
 
 
 def _rejected_candidate(
@@ -682,6 +884,8 @@ def _register_availability(
     availability: ScopedSourceAvailabilityV2,
     publication_path: Path,
     descriptor_bindings: tuple[tuple[Path, str], ...],
+    audit_publication_path: Path,
+    audit_bytes: bytes,
 ) -> None:
     identifier = id(availability)
 
@@ -696,7 +900,118 @@ def _register_availability(
         availability.canonical_bytes,
         publication_path,
         descriptor_bindings,
+        audit_publication_path,
+        audit_bytes,
     )
+
+
+def _verify_audit_publication(
+    publication_path: Path,
+    *,
+    expected_boundary_sha256: str,
+) -> bytes:
+    content = read_bounded_regular(publication_path, _MAX_DESCRIPTOR_BYTES)
+    public = _decode_canonical_object(content, "source access audit publication")
+    values = _exact_mapping(
+        public,
+        {
+            "schema_version",
+            "boundary_sha256",
+            "record_count",
+            "terminal_record_sha256",
+            "rows_admitted",
+            "final_scope_attempts",
+            "final_rows",
+            "final_access_records",
+            "audit_publication_sha256",
+        },
+        "source access audit publication",
+    )
+    if (
+        values["schema_version"]
+        != "phase5-validation-source-access-audit-publication-v2"
+        or values["boundary_sha256"] != expected_boundary_sha256
+        or values["rows_admitted"] != 0
+        or values["final_scope_attempts"] != 0
+        or values["final_rows"] != 0
+        or values["final_access_records"] != 0
+    ):
+        raise ValueError("source audit scope or zero-access counters are invalid")
+    payload = {
+        key: value for key, value in values.items() if key != "audit_publication_sha256"
+    }
+    if values["audit_publication_sha256"] != hash_json(
+        _AUDIT_PUBLICATION_DOMAIN, payload
+    ):
+        raise ValueError("source audit publication digest is invalid")
+    records = bounded_regular_files(publication_path.parent / "records", maximum=10_000)
+    if values["record_count"] != len(records):
+        raise ValueError("source audit record count differs from the chain")
+    prior: str | None = None
+    for sequence, relative in enumerate(records, start=1):
+        record = _decode_canonical_object(
+            read_bounded_regular(
+                publication_path.parent / "records" / relative,
+                _MAX_DESCRIPTOR_BYTES,
+            ),
+            "source access audit record",
+        )
+        digest = record.get("record_sha256")
+        record_payload = {
+            key: value for key, value in record.items() if key != "record_sha256"
+        }
+        if (
+            record.get("sequence") != sequence
+            or record.get("boundary_sha256") != expected_boundary_sha256
+            or record.get("prior_record_sha256") != prior
+            or digest != hash_json(_AUDIT_RECORD_DOMAIN, record_payload)
+        ):
+            raise ValueError("source audit record chain is invalid")
+        prior = digest  # type: ignore[assignment]
+    if values["terminal_record_sha256"] != prior:
+        raise ValueError("source audit terminal digest differs from its chain")
+    return content
+
+
+def _commit_paired_directories(
+    *,
+    first_stage: Path,
+    first_destination: Path,
+    second_stage: Path,
+    second_destination: Path,
+) -> None:
+    first_published = False
+    try:
+        _fsync_directory(first_stage)
+        _fsync_directory(second_stage)
+        os.rename(first_stage, first_destination)
+        first_published = True
+        os.rename(second_stage, second_destination)
+        _fsync_directory(first_destination.parent)
+        if second_destination.parent != first_destination.parent:
+            _fsync_directory(second_destination.parent)
+    except Exception:
+        if first_published and path_exists_no_follow(first_destination):
+            os.rename(first_destination, first_stage)
+        raise
+    finally:
+        _remove_staged_tree(first_stage)
+        _remove_staged_tree(second_stage)
+
+
+def _remove_staged_tree(root: Path) -> None:
+    if not root.exists():
+        return
+    for relative in reversed(bounded_regular_files(root, maximum=20_000)):
+        (root / relative).unlink()
+    directories = sorted(
+        (path for path in root.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        directory.rmdir()
+    root.rmdir()
 
 
 def _verify_boundary_original(boundary: DevelopmentReadBoundaryV2) -> None:
