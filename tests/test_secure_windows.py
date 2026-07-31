@@ -65,6 +65,11 @@ class FilesystemBackedWindowsApi:
     def close(self, handle: int) -> None:
         os.close(handle)
 
+    def create_directory_relative(self, parent_handle: int, name: str) -> int:
+        destination = Path(os.readlink(f"/proc/self/fd/{parent_handle}")) / name
+        destination.mkdir()
+        return os.open(destination, os.O_RDONLY)
+
     def duplicate(self, handle: int) -> int:
         return os.dup(handle)
 
@@ -72,7 +77,13 @@ class FilesystemBackedWindowsApi:
         del flags
         return handle
 
-    def rename_handle(self, handle: int, destination: str) -> None:
+    def rename_handle(
+        self,
+        handle: int,
+        destination_directory: int,
+        destination_name: str,
+    ) -> None:
+        destination = Path(os.readlink(f"/proc/self/fd/{destination_directory}")) / destination_name
         os.rename(os.readlink(f"/proc/self/fd/{handle}"), destination)
 
     def final_path(self, handle: int) -> str:

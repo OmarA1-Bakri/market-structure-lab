@@ -16,6 +16,7 @@ from typing import Any, Final, Protocol, cast
 GENERIC_READ: Final = 0x80000000
 GENERIC_WRITE: Final = 0x40000000
 FILE_SHARE_READ: Final = 0x00000001
+FILE_SHARE_WRITE: Final = 0x00000002
 FILE_SHARE_DELETE: Final = 0x00000004
 DELETE: Final = 0x00010000
 CREATE_NEW: Final = 1
@@ -28,13 +29,19 @@ FILE_FLAG_WRITE_THROUGH: Final = 0x80000000
 MOVEFILE_REPLACE_EXISTING: Final = 0x00000001
 MOVEFILE_WRITE_THROUGH: Final = 0x00000008
 _FILE_ATTRIBUTE_TAG_INFO: Final = 9
-_FILE_RENAME_INFO_EX: Final = 22
+_FILE_RENAME_INFORMATION_EX: Final = 65
 _FILE_DISPOSITION_INFO_EX: Final = 21
 _FILE_DISPOSITION_FLAG_DELETE: Final = 0x00000001
 _FILE_DISPOSITION_FLAG_POSIX_SEMANTICS: Final = 0x00000002
 _FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE: Final = 0x00000010
+_FILE_RENAME_FLAG_POSIX_SEMANTICS: Final = 0x00000002
 _ERROR_FILE_EXISTS: Final = 80
 _ERROR_ALREADY_EXISTS: Final = 183
+_FILE_CREATE: Final = 2
+_FILE_DIRECTORY_FILE: Final = 0x00000001
+_FILE_SYNCHRONOUS_IO_NONALERT: Final = 0x00000020
+_OBJ_CASE_INSENSITIVE: Final = 0x00000040
+_DIRECTORY_CLAIM_ACCESS: Final = 0x00110081
 
 
 class WindowsApi(Protocol):
@@ -58,11 +65,18 @@ class WindowsApi(Protocol):
 
     def create_directory(self, path: str) -> None: ...
 
+    def create_directory_relative(self, parent_handle: int, name: str) -> int: ...
+
     def fd_from_handle(self, handle: int, flags: int) -> int: ...
 
     def move_path(self, source: str, destination: str, flags: int) -> None: ...
 
-    def rename_handle(self, handle: int, destination: str) -> None: ...
+    def rename_handle(
+        self,
+        handle: int,
+        destination_directory: int,
+        destination_name: str,
+    ) -> None: ...
 
     def delete_handle(self, handle: int) -> None: ...
 
@@ -87,6 +101,9 @@ class CtypesWindowsApi:
     _duplicate_handle: Any
     _current_process: Any
     _flush_file: Any
+    _nt_set_information: Any
+    _rtl_ntstatus_to_dos_error: Any
+    _nt_create_file: Any
 
     def __init__(self) -> None:
         if os.name != "nt":
@@ -159,6 +176,34 @@ class CtypesWindowsApi:
         self._flush_file = kernel32.FlushFileBuffers
         self._flush_file.argtypes = (wintypes.HANDLE,)
         self._flush_file.restype = wintypes.BOOL
+        ntdll = cast(Any, getattr(ctypes, "WinDLL"))("ntdll", use_last_error=True)
+        self._nt_set_information = ntdll.NtSetInformationFile
+        self._nt_set_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.POINTER(_IoStatusBlock),
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            ctypes.c_int,
+        )
+        self._nt_set_information.restype = wintypes.LONG
+        self._rtl_ntstatus_to_dos_error = ntdll.RtlNtStatusToDosError
+        self._rtl_ntstatus_to_dos_error.argtypes = (wintypes.LONG,)
+        self._rtl_ntstatus_to_dos_error.restype = wintypes.ULONG
+        self._nt_create_file = ntdll.NtCreateFile
+        self._nt_create_file.argtypes = (
+            ctypes.POINTER(wintypes.HANDLE),
+            wintypes.DWORD,
+            ctypes.POINTER(_ObjectAttributes),
+            ctypes.POINTER(_IoStatusBlock),
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        )
+        self._nt_create_file.restype = wintypes.LONG
 
     def open_path(
         self,
@@ -201,6 +246,46 @@ class CtypesWindowsApi:
         if not self._create_directory(path, None):
             _raise_windows_error(path)
 
+    def create_directory_relative(self, parent_handle: int, name: str) -> int:
+        encoded = name.encode("utf-16-le")
+        name_buffer = ctypes.create_unicode_buffer(name)
+        unicode_name = _UnicodeString(
+            len(encoded),
+            len(encoded) + ctypes.sizeof(wintypes.WCHAR),
+            ctypes.cast(name_buffer, wintypes.LPWSTR),
+        )
+        attributes = _ObjectAttributes(
+            ctypes.sizeof(_ObjectAttributes),
+            parent_handle,
+            ctypes.pointer(unicode_name),
+            _OBJ_CASE_INSENSITIVE,
+            None,
+            None,
+        )
+        handle = wintypes.HANDLE()
+        io_status = _IoStatusBlock()
+        status = int(
+            self._nt_create_file(
+                ctypes.byref(handle),
+                _DIRECTORY_CLAIM_ACCESS,
+                ctypes.byref(attributes),
+                ctypes.byref(io_status),
+                None,
+                0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                _FILE_CREATE,
+                (_FILE_DIRECTORY_FILE | _FILE_SYNCHRONOUS_IO_NONALERT),
+                None,
+                0,
+            )
+        )
+        if status < 0:
+            error = int(self._rtl_ntstatus_to_dos_error(status))
+            _raise_windows_error_code(error, name)
+        if handle.value is None:
+            raise RuntimeError("Win32 created an invalid directory handle")
+        return int(handle.value)
+
     def fd_from_handle(self, handle: int, flags: int) -> int:
         import msvcrt
 
@@ -214,18 +299,37 @@ class CtypesWindowsApi:
         if not self._move_file(source, destination, flags):
             _raise_windows_error(destination)
 
-    def rename_handle(self, handle: int, destination: str) -> None:
-        encoded = destination.encode("utf-16-le")
-        name_offset = _FileRenameInfoEx.file_name.offset
-        size = name_offset + len(encoded)
+    def rename_handle(
+        self,
+        handle: int,
+        destination_directory: int,
+        destination_name: str,
+    ) -> None:
+        encoded = destination_name.encode("utf-16-le")
+        name_offset = _FileRenameInformationEx.file_name.offset
+        size = ctypes.sizeof(_FileRenameInformationEx) + len(encoded)
         buffer = ctypes.create_string_buffer(size)
-        information = cast(_FileRenameInfoEx, _FileRenameInfoEx.from_buffer(buffer))
-        information.flags = 0
-        information.root_directory = None
+        information = cast(
+            _FileRenameInformationEx,
+            _FileRenameInformationEx.from_buffer(buffer),
+        )
+        information.flags = _FILE_RENAME_FLAG_POSIX_SEMANTICS
+        information.root_directory = destination_directory
         information.file_name_length = len(encoded)
         ctypes.memmove(ctypes.addressof(buffer) + name_offset, encoded, len(encoded))
-        if not self._set_information(handle, _FILE_RENAME_INFO_EX, buffer, size):
-            _raise_windows_error(destination)
+        io_status = _IoStatusBlock()
+        status = int(
+            self._nt_set_information(
+                handle,
+                ctypes.byref(io_status),
+                buffer,
+                size,
+                _FILE_RENAME_INFORMATION_EX,
+            )
+        )
+        if status < 0:
+            error = int(self._rtl_ntstatus_to_dos_error(status))
+            _raise_windows_error_code(error, destination_name)
 
     def delete_handle(self, handle: int) -> None:
         information = _FileDispositionInfoEx(
@@ -329,26 +433,8 @@ class WindowsHandleFilesystem:
 
     @contextmanager
     def pin_directory_chain(self, path: str | Path) -> Iterator[tuple[int, ...]]:
-        handles: list[int] = []
-        try:
-            for component in _absolute_directory_chain(os.fspath(path)):
-                handle = self._api.open_path(
-                    component,
-                    access=0,
-                    share=FILE_SHARE_READ,
-                    creation=OPEN_EXISTING,
-                    flags=FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-                )
-                handles.append(handle)
-                attributes = self._api.attributes(handle)
-                if attributes & FILE_ATTRIBUTE_REPARSE_POINT:
-                    raise RuntimeError("secure artifact path contains a reparse component")
-                if not attributes & FILE_ATTRIBUTE_DIRECTORY:
-                    raise RuntimeError("secure artifact directory component is not a directory")
-            yield tuple(handles)
-        finally:
-            for handle in reversed(handles):
-                self._api.close(handle)
+        with _pin_directory_chain(self._api, path) as handles:
+            yield handles
 
     @contextmanager
     def create_regular_exclusive(
@@ -487,6 +573,60 @@ class WindowsHandleFilesystem:
         except Exception:
             self._api.close(handle)
             raise
+
+
+@contextmanager
+def _pin_directory_chain(
+    api: WindowsApi,
+    path: str | Path,
+) -> Iterator[tuple[int, ...]]:
+    handles: list[int] = []
+    try:
+        for component in _absolute_directory_chain(os.fspath(path)):
+            handle = api.open_path(
+                component,
+                access=0,
+                share=FILE_SHARE_READ,
+                creation=OPEN_EXISTING,
+                flags=FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            )
+            handles.append(handle)
+            attributes = api.attributes(handle)
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT:
+                raise RuntimeError("secure artifact path contains a reparse component")
+            if not attributes & FILE_ATTRIBUTE_DIRECTORY:
+                raise RuntimeError("secure artifact directory component is not a directory")
+        yield tuple(handles)
+    finally:
+        for handle in reversed(handles):
+            api.close(handle)
+
+
+@contextmanager
+def _pin_rename_directory_chain(
+    api: WindowsApi,
+    path: str | Path,
+) -> Iterator[tuple[int, ...]]:
+    handles: list[int] = []
+    try:
+        for component in _absolute_directory_chain(os.fspath(path)):
+            handle = api.open_path(
+                component,
+                access=GENERIC_READ,
+                share=FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                creation=OPEN_EXISTING,
+                flags=FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            )
+            handles.append(handle)
+            attributes = api.attributes(handle)
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT:
+                raise RuntimeError("secure artifact path contains a reparse component")
+            if not attributes & FILE_ATTRIBUTE_DIRECTORY:
+                raise RuntimeError("secure artifact directory component is not a directory")
+        yield tuple(handles)
+    finally:
+        for handle in reversed(handles):
+            api.close(handle)
 
 
 class WindowsDirectoryClaim:
@@ -657,6 +797,8 @@ class WindowsOwnedTreeClaim:
         self._maximum_file_bytes = maximum_file_bytes
         self._closed = False
         self._published_handles: set[int] = set()
+        self._closed_member_handles: set[int] = set()
+        self._root_handle_closed = False
 
     @classmethod
     def acquire(
@@ -670,7 +812,7 @@ class WindowsOwnedTreeClaim:
         root = root.absolute()
         root_handle = api.open_path(
             os.fspath(root),
-            access=GENERIC_READ | GENERIC_WRITE | DELETE,
+            access=GENERIC_READ | DELETE,
             share=FILE_SHARE_READ | FILE_SHARE_DELETE,
             creation=OPEN_EXISTING,
             flags=(
@@ -704,7 +846,7 @@ class WindowsOwnedTreeClaim:
                         raise RuntimeError("owned publication tree contains a special entry")
                     handle = api.open_path(
                         os.fspath(path),
-                        access=GENERIC_READ | GENERIC_WRITE | DELETE,
+                        access=(GENERIC_READ | DELETE | (0 if is_directory else GENERIC_WRITE)),
                         share=FILE_SHARE_READ | FILE_SHARE_DELETE,
                         creation=OPEN_EXISTING,
                         flags=(
@@ -759,15 +901,103 @@ class WindowsOwnedTreeClaim:
         self._require_open()
         self._verify_contents()
         destination_path = Path(destination).absolute()
-        self._api.rename_handle(self._root_handle, os.fspath(destination_path))
-        if ntpath.normcase(self._api.final_path(self._root_handle)) != ntpath.normcase(
-            os.fspath(destination_path)
-        ):
-            raise RuntimeError("owned publication handle did not reach its destination")
-        for _, handle, is_directory, _ in self._members:
-            if not is_directory:
-                self._api.flush(handle)
+        destination_name = _validated_final_component(destination_path)
+        with _pin_rename_directory_chain(self._api, destination_path.parent) as directory_handles:
+            destination_root = self._api.create_directory_relative(
+                directory_handles[-1],
+                destination_name,
+            )
+            if ntpath.normcase(self._api.final_path(destination_root)) != ntpath.normcase(
+                os.fspath(destination_path)
+            ):
+                self._api.delete_handle(destination_root)
+                self._api.close(destination_root)
+                raise RuntimeError("owned publication destination directory was substituted")
+            self._transfer_tree(destination_path, destination_root)
+            _require_current_directory_identity(
+                self._api,
+                destination_path,
+                destination_root,
+            )
         self._root = destination_path
+
+    def _transfer_tree(self, destination_path: Path, destination_root: int) -> None:
+        source_directories = {
+            relative: handle for relative, handle, is_directory, _ in self._members if is_directory
+        }
+        destination_directories: dict[str, int] = {"": destination_root}
+        moved_files: list[tuple[str, int]] = []
+        try:
+            for relative, _, is_directory, _ in sorted(
+                self._members,
+                key=lambda item: (item[0].count("/"), item[0]),
+            ):
+                if not is_directory:
+                    continue
+                parent, name = _split_relative_member(relative)
+                destination_directories[relative] = self._api.create_directory_relative(
+                    destination_directories[parent],
+                    name,
+                )
+            for relative, handle, is_directory, _ in self._members:
+                if is_directory:
+                    continue
+                parent, name = _split_relative_member(relative)
+                self._api.rename_handle(handle, destination_directories[parent], name)
+                moved_files.append((relative, handle))
+                expected = destination_path.joinpath(*relative.split("/"))
+                if ntpath.normcase(self._api.final_path(handle)) != ntpath.normcase(
+                    os.fspath(expected)
+                ):
+                    raise RuntimeError("owned publication member destination was substituted")
+                self._api.flush(handle)
+        except Exception as error:
+            rollback_errors: list[Exception] = []
+            for relative, handle in reversed(moved_files):
+                parent, name = _split_relative_member(relative)
+                source_parent = self._root_handle if not parent else source_directories[parent]
+                try:
+                    self._api.rename_handle(handle, source_parent, name)
+                except Exception as failure:
+                    rollback_errors.append(failure)
+            for relative, handle in sorted(
+                destination_directories.items(),
+                key=lambda item: item[0].count("/"),
+                reverse=True,
+            ):
+                del relative
+                try:
+                    self._api.delete_handle(handle)
+                    self._api.close(handle)
+                except Exception as failure:
+                    rollback_errors.append(failure)
+            if rollback_errors:
+                raise RuntimeError(
+                    "Windows exact-handle tree transfer rollback failed: "
+                    + "; ".join(str(item) for item in rollback_errors)
+                ) from error
+            raise
+
+        for _, handle, _, _ in sorted(
+            (item for item in self._members if item[2]),
+            key=lambda item: item[0].count("/"),
+            reverse=True,
+        ):
+            self._api.delete_handle(handle)
+            self._api.close(handle)
+        replacement_members = [
+            (
+                relative,
+                destination_directories[relative] if is_directory else handle,
+                is_directory,
+                digest,
+            )
+            for relative, handle, is_directory, digest in self._members
+        ]
+        self._api.delete_handle(self._root_handle)
+        self._api.close(self._root_handle)
+        self._root_handle = destination_root
+        self._members = tuple(replacement_members)
 
     def move_member_to(self, relative_path: str | Path, destination: str | Path) -> None:
         """Move one exact claimed regular-file handle to an additive destination."""
@@ -779,7 +1009,18 @@ class WindowsOwnedTreeClaim:
         if member is None or member[2]:
             raise ValueError("owned publication member is not a claimed regular file")
         destination_path = Path(destination).absolute()
-        self._api.rename_handle(member[1], os.fspath(destination_path))
+        destination_name = _validated_final_component(destination_path)
+        with _pin_rename_directory_chain(self._api, destination_path.parent) as directory_handles:
+            self._api.rename_handle(
+                member[1],
+                directory_handles[-1],
+                destination_name,
+            )
+            _require_current_directory_identity(
+                self._api,
+                destination_path.parent,
+                directory_handles[-1],
+            )
         if ntpath.normcase(self._api.final_path(member[1])) != ntpath.normcase(
             os.fspath(destination_path)
         ):
@@ -792,21 +1033,38 @@ class WindowsOwnedTreeClaim:
         files = [
             item for item in self._members if not item[2] and item[1] not in self._published_handles
         ]
+        published_files = [
+            item for item in self._members if not item[2] and item[1] in self._published_handles
+        ]
         directories = sorted(
             (item for item in self._members if item[2]),
             key=lambda item: item[0].count("/"),
             reverse=True,
         )
-        for _, handle, _, _ in (*files, *directories):
+        for _, handle, _, _ in files:
             self._api.delete_handle(handle)
+            self._api.close(handle)
+            self._closed_member_handles.add(handle)
+        for _, handle, _, _ in published_files:
+            self._api.close(handle)
+            self._closed_member_handles.add(handle)
+        for _, handle, _, _ in directories:
+            self._api.delete_handle(handle)
+            self._api.close(handle)
+            self._closed_member_handles.add(handle)
         self._api.delete_handle(self._root_handle)
+        self._api.close(self._root_handle)
+        self._root_handle_closed = True
+        self._closed = True
 
     def close(self) -> None:
         if self._closed:
             return
         for _, handle, _, _ in reversed(self._members):
-            self._api.close(handle)
-        self._api.close(self._root_handle)
+            if handle not in self._closed_member_handles:
+                self._api.close(handle)
+        if not self._root_handle_closed:
+            self._api.close(self._root_handle)
         self._closed = True
 
     def _require_open(self) -> None:
@@ -854,8 +1112,32 @@ def validated_relative_parts(path: str | Path) -> tuple[str, ...]:
     return parts
 
 
+def _validated_final_component(path: Path) -> str:
+    name = path.name
+    _require_safe_component(name)
+    return name
+
+
+def _split_relative_member(relative: str) -> tuple[str, str]:
+    parent, separator, name = relative.rpartition("/")
+    return (parent if separator else ""), name
+
+
+def _require_current_directory_identity(
+    api: WindowsApi,
+    path: Path,
+    expected_handle: int,
+) -> None:
+    with _pin_directory_chain(api, path) as current_handles:
+        if api.identity(current_handles[-1]) != api.identity(expected_handle):
+            raise RuntimeError("owned publication destination directory was substituted")
+
+
 def _absolute_directory_chain(path: str) -> tuple[str, ...]:
     raw_drive, raw_tail = ntpath.splitdrive(path)
+    if not raw_drive and os.name != "nt" and os.path.isabs(path):
+        parts = Path(path).parts
+        return tuple(os.path.join(*parts[:index]) for index in range(1, len(parts) + 1))
     if not raw_drive or not raw_tail.startswith(("\\", "/")):
         raise ValueError("secure Windows directory path must be absolute")
     raw_parts = tuple(part for part in raw_tail.replace("/", "\\").split("\\") if part)
@@ -902,6 +1184,10 @@ def _require_safe_component(component: str) -> None:
 
 def _raise_windows_error(path: str) -> None:
     error = cast(Any, getattr(ctypes, "get_last_error"))()
+    _raise_windows_error_code(error, path)
+
+
+def _raise_windows_error_code(error: int, path: str) -> None:
     if error in {_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS}:
         raise FileExistsError(error, "secure artifact entry already exists", path)
     raise OSError(error, f"Win32 secure artifact operation failed: {path}")
@@ -936,12 +1222,38 @@ class _FileDispositionInfoEx(ctypes.Structure):
     _fields_ = (("flags", wintypes.DWORD),)
 
 
-class _FileRenameInfoEx(ctypes.Structure):
+class _FileRenameInformationEx(ctypes.Structure):
     _fields_ = (
         ("flags", wintypes.DWORD),
         ("root_directory", wintypes.HANDLE),
         ("file_name_length", wintypes.DWORD),
         ("file_name", wintypes.WCHAR * 1),
+    )
+
+
+class _IoStatusBlock(ctypes.Structure):
+    _fields_ = (
+        ("status", wintypes.LPVOID),
+        ("information", ctypes.c_size_t),
+    )
+
+
+class _UnicodeString(ctypes.Structure):
+    _fields_ = (
+        ("length", wintypes.USHORT),
+        ("maximum_length", wintypes.USHORT),
+        ("buffer", wintypes.LPWSTR),
+    )
+
+
+class _ObjectAttributes(ctypes.Structure):
+    _fields_ = (
+        ("length", wintypes.ULONG),
+        ("root_directory", wintypes.HANDLE),
+        ("object_name", ctypes.POINTER(_UnicodeString)),
+        ("attributes", wintypes.ULONG),
+        ("security_descriptor", wintypes.LPVOID),
+        ("security_quality_of_service", wintypes.LPVOID),
     )
 
 
