@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from market_structure_lab.data.validation_source_v2 import (
+    CanonicalMinuteRowV2,
     MinutePathReadBudgetV2,
     VerifiedMinutePathV2,
     VerifiedMinuteRowV2,
@@ -58,6 +60,107 @@ def _audit(boundary) -> DevelopmentAccessAttemptLedgerV2:
 def test_minute_path_budget_has_fixed_hard_ceilings() -> None:
     with pytest.raises(ValueError, match="fixed hard ceiling"):
         _budget(max_total_rows=50_000_001)
+
+
+def test_minute_path_rejects_tuple_over_hard_horizon_ceiling_before_io(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import test_aggregate_publication_v2 as fixtures
+
+    coverage, split, boundary, availability = v2_chain
+    publication = fixtures._publish_minute(v2_chain, tmp_path)
+    request = _request(publication, boundary)
+    audit = _audit(boundary)
+    monkeypatch.setattr(
+        "market_structure_lab.data.validation_source_v2.verify_validation_source_publication_v2",
+        lambda *_args, **_kwargs: pytest.fail("hard path ceiling reopened publication"),
+    )
+    monkeypatch.setattr(
+        "market_structure_lab.data.validation_source_v2.read_bounded_regular",
+        lambda *_args, **_kwargs: pytest.fail("hard path ceiling opened a file"),
+    )
+
+    with pytest.raises(ValueError, match="hard path row ceiling"):
+        read_verified_minute_path_v2(
+            publication,
+            coverage,
+            split,
+            boundary,
+            availability,
+            request,
+            10_001,
+            _budget(max_returned_rows=50_000_000),
+            audit,
+        )
+    assert tuple(record.phase for record in audit.records) == ("start", "adjudication")
+
+
+def test_minute_path_streams_verified_multi_partition_payload_larger_than_chunk(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import test_aggregate_publication_v2 as fixtures
+    from market_structure_lab.data import validation_source_v2 as source_module
+
+    coverage, split, boundary, availability = v2_chain
+    request_rows = list(fixtures._minute_rows(boundary))
+    interval = boundary.allowed_intervals[0]
+    symbol = boundary.allowed_symbols[0]
+    fractional = "1234567890" * 60
+    request_rows[0] = tuple(
+        CanonicalMinuteRowV2(
+            timestamp=interval.start + timedelta(minutes=offset),
+            symbol=symbol,
+            timeframe="1m",
+            open=Decimal(f"100.{fractional}"),
+            high=Decimal(f"101.{fractional}"),
+            low=Decimal(f"99.{fractional}"),
+            close=Decimal(f"100.{fractional}"),
+            volume=Decimal(f"1.{fractional}"),
+        )
+        for offset in range(400)
+    )
+    publication = fixtures._publish_minute(
+        v2_chain,
+        tmp_path,
+        rows=tuple(request_rows),
+    )
+    request = _request(publication, boundary, minutes=400)
+    selected = tuple(
+        partition
+        for partition in publication.partitions
+        if partition.symbol == request.symbol
+        and partition.min_timestamp < request.end.isoformat().replace("+00:00", "Z")
+        and partition.max_timestamp >= request.start.isoformat().replace("+00:00", "Z")
+    )
+    assert len(selected) > 1
+    assert sum(partition.byte_count for partition in selected) > 1024 * 1024
+    original_read = source_module.read_bounded_regular
+
+    def reject_partition_materialization(path: Path, maximum: int) -> bytes:
+        if "partitions" in path.parts and path.suffix == ".jsonl":
+            pytest.fail("minute partition payload used read_bounded_regular")
+        return original_read(path, maximum)
+
+    monkeypatch.setattr(source_module, "read_bounded_regular", reject_partition_materialization)
+
+    path = read_verified_minute_path_v2(
+        publication,
+        coverage,
+        split,
+        boundary,
+        availability,
+        request,
+        400,
+        _budget(),
+        _audit(boundary),
+    )
+
+    assert path.row_count == 400
+    assert path.verify_original() is path
 
 
 def test_minute_path_reads_exact_original_lines_and_completes_audit(

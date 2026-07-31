@@ -24,6 +24,7 @@ import weakref
 
 from market_structure_lab.core.artifact_io import (
     bounded_regular_files,
+    iter_verified_regular_lines,
     path_exists_no_follow,
     read_bounded_regular,
     require_regular_directory,
@@ -61,6 +62,9 @@ _MINUTE_PUBLICATION_AUDIT_DOMAIN = (
 )
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _MAX_CANONICAL_ROW_BYTES = 4_096
+# Frozen validation outcomes use at most a 24-hour (1,440 row) minute path.
+# Keep tuple-returning readers conservatively bounded above that horizon.
+_MAX_VERIFIED_MINUTE_PATH_ROWS = 10_000
 _MAX_MINUTE_PUBLICATION_BYTES = 64 * 1024 * 1024
 _MAX_MINUTE_PUBLICATION_ENTRIES = 100_000
 _MINUTE_PATH_FACTORY = object()
@@ -1854,6 +1858,13 @@ def _preflight_minute_path(
     expected_row_count: int,
     budget: MinutePathReadBudgetV2,
 ) -> None:
+    if (
+        isinstance(expected_row_count, bool)
+        or not isinstance(expected_row_count, int)
+        or expected_row_count < 1
+        or expected_row_count > _MAX_VERIFIED_MINUTE_PATH_ROWS
+    ):
+        raise ValueError("expected row count exceeds the hard path row ceiling")
     if publication.status is not ScopedSourceStatusV2.AVAILABLE:
         raise ValueError("minute path requires an available publication")
     if publication.row_count > budget.max_total_rows:
@@ -1864,12 +1875,7 @@ def _preflight_minute_path(
         raise ValueError("minute publication exceeds total partition budget")
     duration = request.end - request.start
     duration_minutes = int(duration.total_seconds() // 60)
-    if (
-        isinstance(expected_row_count, bool)
-        or not isinstance(expected_row_count, int)
-        or expected_row_count < 1
-        or expected_row_count != duration_minutes
-    ):
+    if expected_row_count != duration_minutes:
         raise ValueError("expected row count must equal the request's UTC minute count")
     if expected_row_count > budget.max_returned_rows:
         raise ValueError("minute path exceeds returned row budget")
@@ -1890,20 +1896,15 @@ def _read_minute_path_rows(
     byte_count = 0
     expected_timestamp = request.start
     for partition in partitions:
-        content = read_bounded_regular(
+        lines = iter_verified_regular_lines(
             publication.publication_root / partition.path,
-            partition.byte_count,
+            expected_sha256=partition.sha256,
+            expected_byte_count=partition.byte_count,
+            expected_line_count=partition.row_count,
+            maximum_line_bytes=_MAX_CANONICAL_ROW_BYTES - 1,
         )
-        if (
-            len(content) != partition.byte_count
-            or hashlib.sha256(content).hexdigest() != partition.sha256
-            or not content.endswith(b"\n")
-        ):
-            raise ValueError("minute path partition bytes changed")
-        lines = content.splitlines(keepends=True)
-        if len(lines) != partition.row_count:
-            raise ValueError("minute path partition row count changed")
-        for line in lines:
+        for raw_line in lines:
+            line = raw_line + b"\n"
             try:
                 decoded = json.loads(line)
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -2895,21 +2896,18 @@ def _verify_minute_partition_tree(
         if partition.path != expected_path:
             raise ValueError("validation source partition path order is invalid")
         group_part_index[group] = expected_part + 1
-        content = read_bounded_regular(
+        lines = iter_verified_regular_lines(
             publication.publication_root / partition.path,
-            partition.byte_count,
+            expected_sha256=partition.sha256,
+            expected_byte_count=partition.byte_count,
+            expected_line_count=partition.row_count,
+            maximum_line_bytes=_MAX_CANONICAL_ROW_BYTES - 1,
         )
-        if (
-            len(content) != partition.byte_count
-            or hashlib.sha256(content).hexdigest() != partition.sha256
-            or not content.endswith(b"\n")
-        ):
-            raise ValueError("validation source partition bytes changed")
-        lines = content.splitlines(keepends=True)
-        if len(lines) != partition.row_count:
-            raise ValueError("validation source partition row count changed")
-        rows: list[CanonicalMinuteRowV2] = []
-        for line in lines:
+        row_count = 0
+        first_timestamp: datetime | None = None
+        last_timestamp: datetime | None = None
+        for raw_line in lines:
+            line = raw_line + b"\n"
             try:
                 decoded_row = json.loads(line)
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -2976,14 +2974,19 @@ def _verify_minute_partition_tree(
             if prior_key is not None and key <= prior_key:
                 raise ValueError("canonical minute publication keys are not ordered")
             prior_key = key
-            rows.append(row)
+            row_count += 1
+            if first_timestamp is None:
+                first_timestamp = row.timestamp
+            last_timestamp = row.timestamp
         if (
-            _utc_text(rows[0].timestamp) != partition.min_timestamp
-            or _utc_text(rows[-1].timestamp) != partition.max_timestamp
+            first_timestamp is None
+            or last_timestamp is None
+            or _utc_text(first_timestamp) != partition.min_timestamp
+            or _utc_text(last_timestamp) != partition.max_timestamp
         ):
             raise ValueError("validation source partition timestamp bounds changed")
-        total_rows += len(rows)
-        total_bytes += len(content)
+        total_rows += row_count
+        total_bytes += partition.byte_count
     if total_rows != publication.row_count or total_bytes != publication.byte_count:
         raise ValueError("validation source aggregate partition counts changed")
     completion_by_group = {
