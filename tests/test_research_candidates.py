@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import copy
 from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -8,12 +9,15 @@ import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from typing import Protocol
 
 import polars as pl
 import pytest
 import market_structure_lab.research.candidates as research_candidates
 import market_structure_lab.research.models as research_models
 
+from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import (
     CONTINUITY_ID,
     CanonicalAggregateBar,
@@ -64,6 +68,20 @@ TASK15_EVIDENCE = "afce8e889aa645cd9e48e90631698b87866f287f"
 IMPLEMENTATION_CHECKPOINT = "e655152ab729b3e1e530f1bc044febca3509a6fd"
 IMPLEMENTATION_EVIDENCE = "6da307a0d4756c61ddcabdf01f00d828afb55d7e"
 IMPLEMENTATION_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf91915c16111"
+
+
+class _CausalBarInput(Protocol):
+    timestamp: datetime
+    bar_close: datetime
+    symbol: str
+    target_timeframe: str
+    segment_id: int
+    source_row_count: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
 
 
 def _slot(
@@ -209,9 +227,44 @@ def _iso(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _series(bars: tuple[CanonicalAggregateBar, ...]) -> VerifiedAggregateSeries:
+def _independent_canonical_bar(bar: _CausalBarInput) -> CanonicalAggregateBar:
+    minute_rows = _minute_rows(
+        timestamp=bar.timestamp,
+        minutes=bar.source_row_count,
+        symbol=bar.symbol,
+        segment=bar.segment_id,
+        open_=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
+    )
+    source_row_ids = tuple(canonical_source_row_identity(row) for row in minute_rows)
+    return CanonicalAggregateBar(
+        schema_version=1,
+        timestamp=bar.timestamp,
+        bar_close=bar.bar_close,
+        symbol=bar.symbol,
+        source_timeframe="1m",
+        target_timeframe=bar.target_timeframe,
+        segment_id=bar.segment_id,
+        continuity=CONTINUITY_ID,
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
+        source_row_count=bar.source_row_count,
+        source_row_ids=source_row_ids,
+        source_sha256=source_rows_sha256(source_row_ids, identities=True),
+        parent_snapshot_sha256=PARENT,
+    )
+
+
+def _series(bars: tuple[_CausalBarInput, ...]) -> VerifiedAggregateSeries:
     if not bars:
         raise ValueError("test publication requires bars")
+    bars = tuple(_independent_canonical_bar(bar) for bar in bars)
     temporary = TemporaryDirectory(prefix="candidate-series-test-")
     _SERIES_TEMPORARIES.append(temporary)
     base = Path(temporary.name)
@@ -465,6 +518,54 @@ def _definition(
     return candidate_definition_for_slot(slot, series, **kwargs)  # type: ignore[arg-type]
 
 
+def test_series_helper_rebuilds_independent_v1_identities_from_causal_inputs() -> None:
+    source = _bar(0)
+    caller_identity = "f" * 64
+    causal = SimpleNamespace(
+        timestamp=source.timestamp,
+        bar_close=source.bar_close,
+        symbol=source.symbol,
+        target_timeframe=source.target_timeframe,
+        segment_id=source.segment_id,
+        source_row_count=source.source_row_count,
+        open=source.open,
+        high=source.high,
+        low=source.low,
+        close=source.close,
+        volume=source.volume,
+        source_row_ids=(caller_identity,) * source.source_row_count,
+        source_sha256=caller_identity,
+        parent_snapshot_sha256=caller_identity,
+        row_sha256=caller_identity,
+    )
+
+    [rebuilt] = _series((causal,)).bars
+
+    assert (rebuilt.timestamp, rebuilt.bar_close) == (source.timestamp, source.bar_close)
+    assert (rebuilt.open, rebuilt.high, rebuilt.low, rebuilt.close, rebuilt.volume) == (
+        source.open,
+        source.high,
+        source.low,
+        source.close,
+        source.volume,
+    )
+    expected_rows = _minute_rows(
+        timestamp=source.timestamp,
+        minutes=source.source_row_count,
+        symbol=source.symbol,
+        segment=source.segment_id,
+        open_=source.open,
+        high=source.high,
+        low=source.low,
+        close=source.close,
+        volume=source.volume,
+    )
+    assert rebuilt.source_row_ids == tuple(
+        canonical_source_row_identity(row) for row in expected_rows
+    )
+    assert caller_identity not in rebuilt.source_row_ids
+
+
 def _detect(
     slot: ValidationSlot,
     bars: tuple[CanonicalAggregateBar, ...],
@@ -498,6 +599,51 @@ def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin()
         replace(signal, direction=-1)
     with pytest.raises(Exception):
         signal.direction = -1  # type: ignore[misc]
+
+
+def test_candidate_signal_verifier_rejects_copy_lookalike_and_coherent_rehash() -> None:
+    series = _series(_bars([100.0] * 24 + [102.1]))
+    definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+    [signal] = detect_candidate_signals(definition, series)
+    verifier = getattr(research_candidates, "verify_candidate_signal", None)
+    assert verifier is not None, "missing persistent detector signal verifier"
+    assert verifier(signal) is signal
+
+    copied = copy.copy(signal)
+    coherent = copy.copy(signal)
+    object.__setattr__(coherent, "direction", -signal.direction)
+    object.__setattr__(
+        coherent,
+        "signal_id",
+        f"CS-{hash_json('candidate-signal-v1', coherent.to_dict())}",
+    )
+
+    class Lookalike:
+        def __getattr__(self, name: str):
+            return getattr(signal, name)
+
+    for forged in (copied, coherent, Lookalike()):
+        with pytest.raises((TypeError, ValueError), match="signal.*registered|original|factory"):
+            verifier(forged)
+
+
+def test_subordinate_detection_rejects_copied_parent_opportunity() -> None:
+    bars = _bars([100.0] * 24 + [102.0], volumes=[10.0] * 24 + [11.0])
+    series = _series(bars)
+    parent_definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+    [opportunity] = detect_candidate_signals(parent_definition, series)
+    subordinate = _definition(
+        _slot("E", "volume_confirmation", role="volume_filtered_primary", lookback=24),
+        series,
+        parent_a_candidate=parent_definition,
+    )
+
+    with pytest.raises((TypeError, ValueError), match="signal.*registered|original|factory"):
+        detect_candidate_signals(
+            subordinate,
+            series,
+            a_opportunities=(copy.copy(opportunity),),
+        )
 
 
 def test_arbitrary_time_signal_issuer_is_not_public() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import copy
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -280,6 +281,63 @@ def _vs_0001():
     return next(slot for slot in VALIDATION_SLOT_ROSTER if slot.slot_id == "VS-0001")
 
 
+def _family_b_slot():
+    return next(slot for slot in VALIDATION_SLOT_ROSTER if slot.slot_id == "VS-0025")
+
+
+def _profile_stream(bridged):
+    stream_type = candidate_module.VerifiedProfileStream
+    source_row_count = len(bridged.bars) * 60
+    payload = {
+        "aggregate_series_sha256": bridged.series_sha256,
+        "validation_programme_id": "VP-" + "1" * 64,
+        "work_budget_sha256": "2" * 64,
+        "source_minute_publication_sha256": "3" * 64,
+        "profile_config_sha256": "4" * 64,
+        "bin_metadata_sha256": "5" * 64,
+        "bin_step": 1.0,
+        "bin_origin": 0.0,
+        "bin_definition_id": "fixed-step:1.0:origin=0.0:source=test",
+        "source_price_precision_manifest_sha256": "6" * 64,
+        "window_hours": 24,
+        "source_row_count": source_row_count,
+        "source_sha256": "7" * 64,
+        "profile_active_bin_cells": 0,
+        "profile_source_id_bytes": source_row_count * 64,
+        "profile_config_bytes": 1,
+        "profile_serialized_bytes": 0,
+        "ordered_profile_ids": (),
+    }
+    stream_sha256 = hash_json(
+        "verified-candidate-profile-stream-v1",
+        payload,
+    )
+    return stream_type(
+        **payload,
+        profiles=(),
+        stream_sha256=stream_sha256,
+        seal=candidate_module._VERIFIED_PROFILE_STREAM_SEAL,  # noqa: SLF001
+    )
+
+
+def _unregistered_profile_clone(profile, clone_type=None):
+    target_type = clone_type or type(profile)
+    clone = object.__new__(target_type)
+    for item in fields(profile):
+        object.__setattr__(clone, item.name, getattr(profile, item.name))
+    return clone
+
+
+def _family_b_definition(bridged, profile):
+    parent = model_module.candidate_definition_for_verified_series(_vs_0001(), bridged)
+    return model_module.candidate_definition_for_verified_series(
+        _family_b_slot(),
+        bridged,
+        parent_a_candidate=parent,
+        profile_stream=profile,
+    )
+
+
 def test_public_detector_bridge_api_is_exposed() -> None:
     _bridge_api()
 
@@ -294,6 +352,10 @@ def test_verifier_issued_v2_series_uses_the_existing_vs_0001_detector_formula(
     [signal] = detect_candidate_signals(definition, bridged)
 
     assert isinstance(bridged, api["VerifiedCandidateSeriesV2"])
+    assert not hasattr(bridged.bars[0], "source_row_ids")
+    assert not hasattr(bridged.bars[0], "source_sha256")
+    assert not hasattr(bridged.bars[0], "parent_snapshot_sha256")
+    assert not hasattr(bridged.bars[0], "to_dict")
     assert signal.candidate_slot_id == "VS-0001"
     assert signal.information_cutoff == bridged.bars[72].bar_close
     assert signal.feature_start == bridged.bars[0].timestamp
@@ -329,6 +391,53 @@ def test_bridge_capability_rejects_direct_replace_and_lookalike_objects(
     definition = api["candidate_definition_for_verified_series"](_vs_0001(), bridged)
     with pytest.raises(TypeError, match="VerifiedCandidateSeriesV2|verified.*series|capability"):
         detect_candidate_signals(definition, Lookalike())
+
+
+def test_family_b_definition_rejects_subclass_copy_and_mutated_profile_streams(
+    aggregate_publication: AggregatePublicationV2,
+) -> None:
+    bridged = candidate_module.bridge_verified_aggregate_series_v2(
+        _open_series(aggregate_publication)
+    )
+    original = _profile_stream(bridged)
+
+    class ProfileSubclass(type(original)):
+        pass
+
+    subclass = _unregistered_profile_clone(original, ProfileSubclass)
+    copied = copy.copy(original)
+    mutated = copy.copy(original)
+    object.__setattr__(mutated, "bin_step", 2.0)
+
+    for forged in (subclass, copied, mutated):
+        with pytest.raises((TypeError, ValueError), match="profile.*factory|registered|original"):
+            _family_b_definition(bridged, forged)
+
+
+def test_family_b_detection_revalidates_exact_registered_profile_stream(
+    aggregate_publication: AggregatePublicationV2,
+) -> None:
+    bridged = candidate_module.bridge_verified_aggregate_series_v2(
+        _open_series(aggregate_publication)
+    )
+    original = _profile_stream(bridged)
+    definition = _family_b_definition(bridged, original)
+
+    class ProfileSubclass(type(original)):
+        pass
+
+    subclass = _unregistered_profile_clone(original, ProfileSubclass)
+    copied = copy.copy(original)
+    mutated = copy.copy(original)
+    object.__setattr__(mutated, "bin_step", 2.0)
+
+    class Lookalike:
+        def __getattr__(self, name: str):
+            return getattr(original, name)
+
+    for forged in (subclass, copied, mutated, Lookalike()):
+        with pytest.raises((TypeError, ValueError), match="profile.*factory|registered|original"):
+            detect_candidate_signals(definition, bridged, profile_stream=forged)
 
 
 def test_original_aggregate_byte_mutation_rejects_before_detection(

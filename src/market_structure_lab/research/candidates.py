@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, fields as dataclass_fields
 from datetime import datetime, timedelta
 import hashlib
 from io import BytesIO
@@ -19,16 +19,11 @@ import polars as pl
 from market_structure_lab.core.artifact_io import read_bounded_regular
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import (
-    CONTINUITY_ID,
     CanonicalAggregateBar,
     canonical_source_row_identity,
 )
 from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
-from market_structure_lab.data.aggregate_publication_v2 import (
-    AggregatePublicationBudgetV2,
-    VerifiedAggregateSeriesV2,
-    verify_verified_aggregate_series_v2,
-)
+from market_structure_lab.data.aggregate_publication_v2 import VerifiedAggregateSeriesV2
 from market_structure_lab.data.canonical import CANONICAL_SCHEMA, validate_candle_frame
 from market_structure_lab.data.export import read_snapshot_manifest, verify_snapshot
 from market_structure_lab.data.price_precision import read_source_price_precision_manifest
@@ -59,7 +54,7 @@ _AGGREGATE_SCHEMA_V2 = "phase5-validation-development-aggregates-v2"
 
 @dataclass(frozen=True, slots=True)
 class _CausalAggregateBarV2:
-    """Causal V2 fields with an explicitly unavailable V1 provenance adapter."""
+    """Causal aggregate fields consumed by the canonical detectors."""
 
     timestamp: datetime
     bar_close: datetime
@@ -72,46 +67,6 @@ class _CausalAggregateBarV2:
     low: float
     close: float
     volume: float
-    schema_version: int = 1
-    source_timeframe: str = "1m"
-    continuity: str = CONTINUITY_ID
-    source_row_ids: tuple[str, ...] = ()
-    source_sha256: str | None = None
-    parent_snapshot_sha256: str | None = None
-    row_sha256: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize only after a caller supplies complete, valid V1 identities."""
-
-        if (
-            len(self.source_row_ids) != self.source_row_count
-            or self.source_sha256 is None
-            or self.parent_snapshot_sha256 is None
-            or self.row_sha256 is None
-        ):
-            raise ValueError(
-                "V1 serialization requires independently supplied complete source identities"
-            )
-        return CanonicalAggregateBar(
-            schema_version=self.schema_version,
-            timestamp=self.timestamp,
-            bar_close=self.bar_close,
-            symbol=self.symbol,
-            source_timeframe=self.source_timeframe,
-            target_timeframe=self.target_timeframe,
-            segment_id=self.segment_id,
-            continuity=self.continuity,
-            open=self.open,
-            high=self.high,
-            low=self.low,
-            close=self.close,
-            volume=self.volume,
-            source_row_count=self.source_row_count,
-            source_row_ids=self.source_row_ids,
-            source_sha256=self.source_sha256,
-            parent_snapshot_sha256=self.parent_snapshot_sha256,
-            row_sha256=self.row_sha256,
-        ).to_dict()
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -160,7 +115,6 @@ class VerifiedCandidateSeriesV2:
 class _VerifiedCandidateSeriesV2Registration:
     candidate: weakref.ReferenceType[VerifiedCandidateSeriesV2]
     aggregate: VerifiedAggregateSeriesV2
-    budget: AggregatePublicationBudgetV2
     snapshot: tuple[object, ...]
 
 
@@ -184,7 +138,7 @@ _SIGNAL_ISSUANCE_REGISTRY: dict[int, _SignalIssuanceEntry] = {}
 A_SELECTOR_GRID = FROZEN_A_SELECTOR_GRID
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class CandidateSignal:
     """One causal completed-bar signal issued once by the active detector closure."""
 
@@ -440,7 +394,7 @@ class FrozenProfile:
         return self.source_start_timestamp
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class VerifiedProfileStream:
     """Unique ordered content receipt for deterministic rolling one-minute profiles."""
 
@@ -467,7 +421,7 @@ class VerifiedProfileStream:
     seal: InitVar[object]
 
     def __post_init__(self, seal: object) -> None:
-        if seal is not _VERIFIED_PROFILE_STREAM_SEAL:
+        if type(self) is not VerifiedProfileStream or seal is not _VERIFIED_PROFILE_STREAM_SEAL:
             raise TypeError("VerifiedProfileStream requires its verifier capability seal")
         for name in (
             "aggregate_series_sha256",
@@ -518,33 +472,10 @@ class VerifiedProfileStream:
             )
             if profile.source_window_sha256 != expected_window:
                 raise ValueError("profile source window differs from exact ordered parent rows")
-        expected = hash_json(
-            "verified-candidate-profile-stream-v1",
-            {
-                "aggregate_series_sha256": self.aggregate_series_sha256,
-                "validation_programme_id": self.validation_programme_id,
-                "work_budget_sha256": self.work_budget_sha256,
-                "source_minute_publication_sha256": self.source_minute_publication_sha256,
-                "profile_config_sha256": self.profile_config_sha256,
-                "bin_metadata_sha256": self.bin_metadata_sha256,
-                "bin_step": self.bin_step,
-                "bin_origin": self.bin_origin,
-                "bin_definition_id": self.bin_definition_id,
-                "source_price_precision_manifest_sha256": (
-                    self.source_price_precision_manifest_sha256
-                ),
-                "window_hours": self.window_hours,
-                "source_row_count": self.source_row_count,
-                "source_sha256": self.source_sha256,
-                "profile_active_bin_cells": self.profile_active_bin_cells,
-                "profile_source_id_bytes": self.profile_source_id_bytes,
-                "profile_config_bytes": self.profile_config_bytes,
-                "profile_serialized_bytes": self.profile_serialized_bytes,
-                "ordered_profile_ids": self.ordered_profile_ids,
-            },
-        )
+        expected = _profile_stream_identity(self)
         if self.stream_sha256 != expected:
             raise ValueError("verified profile stream identity mismatch")
+        _register_verified_profile_stream(self)
 
     def bin_index(self, price: float) -> int:
         """Map a price through the exact pinned precision without retaining profile maps."""
@@ -554,6 +485,224 @@ class VerifiedProfileStream:
             origin=self.bin_origin,
             provenance=f"verified-price-precision:{self.bin_metadata_sha256}",
         ).bin_index(price)
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedProfileStreamRegistration:
+    stream: weakref.ReferenceType[VerifiedProfileStream]
+    snapshot: tuple[object, ...]
+
+
+_VERIFIED_PROFILE_STREAMS: dict[int, _VerifiedProfileStreamRegistration] = {}
+
+
+def verify_profile_stream(stream: VerifiedProfileStream) -> VerifiedProfileStream:
+    """Revalidate one exact factory-issued profile stream against its frozen snapshot."""
+
+    if type(stream) is not VerifiedProfileStream:
+        raise TypeError("profile stream must be an exact factory-issued registered original")
+    registration = _VERIFIED_PROFILE_STREAMS.get(id(stream))
+    if registration is None or registration.stream() is not stream:
+        raise ValueError("profile stream is not the registered factory-issued original")
+    if _profile_stream_snapshot(stream) != registration.snapshot:
+        raise ValueError("registered profile stream differs from its original frozen snapshot")
+    if stream.stream_sha256 != _profile_stream_identity(stream):
+        raise ValueError("registered profile stream identity differs from its original content")
+    return stream
+
+
+def _register_verified_profile_stream(stream: VerifiedProfileStream) -> None:
+    identifier = id(stream)
+
+    def cleanup(reference: weakref.ReferenceType[VerifiedProfileStream]) -> None:
+        current = _VERIFIED_PROFILE_STREAMS.get(identifier)
+        if current is not None and current.stream is reference:
+            _VERIFIED_PROFILE_STREAMS.pop(identifier, None)
+
+    _VERIFIED_PROFILE_STREAMS[identifier] = _VerifiedProfileStreamRegistration(
+        stream=weakref.ref(stream, cleanup),
+        snapshot=_profile_stream_snapshot(stream),
+    )
+
+
+def _profile_stream_snapshot(stream: VerifiedProfileStream) -> tuple[object, ...]:
+    return (
+        tuple(
+            getattr(stream, item.name)
+            for item in dataclass_fields(stream)
+            if item.name != "profiles"
+        ),
+        tuple(
+            tuple(getattr(profile, item.name) for item in dataclass_fields(profile))
+            for profile in stream.profiles
+        ),
+    )
+
+
+def _profile_stream_identity(stream: VerifiedProfileStream) -> str:
+    return hash_json(
+        "verified-candidate-profile-stream-v1",
+        {
+            "aggregate_series_sha256": stream.aggregate_series_sha256,
+            "validation_programme_id": stream.validation_programme_id,
+            "work_budget_sha256": stream.work_budget_sha256,
+            "source_minute_publication_sha256": stream.source_minute_publication_sha256,
+            "profile_config_sha256": stream.profile_config_sha256,
+            "bin_metadata_sha256": stream.bin_metadata_sha256,
+            "bin_step": stream.bin_step,
+            "bin_origin": stream.bin_origin,
+            "bin_definition_id": stream.bin_definition_id,
+            "source_price_precision_manifest_sha256": (
+                stream.source_price_precision_manifest_sha256
+            ),
+            "window_hours": stream.window_hours,
+            "source_row_count": stream.source_row_count,
+            "source_sha256": stream.source_sha256,
+            "profile_active_bin_cells": stream.profile_active_bin_cells,
+            "profile_source_id_bytes": stream.profile_source_id_bytes,
+            "profile_config_bytes": stream.profile_config_bytes,
+            "profile_serialized_bytes": stream.profile_serialized_bytes,
+            "ordered_profile_ids": stream.ordered_profile_ids,
+        },
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedCandidateSignalRegistration:
+    signal: weakref.ReferenceType[CandidateSignal]
+    snapshot: tuple[object, ...]
+    definition: CandidateDefinition
+    definition_sha256: str
+    series: DetectorSeries
+    series_sha256: str
+    profile_stream: VerifiedProfileStream | None
+    parent_opportunities: tuple[CandidateSignal, ...]
+
+
+_VERIFIED_CANDIDATE_SIGNALS: dict[int, _VerifiedCandidateSignalRegistration] = {}
+
+
+def verify_candidate_signal(signal: CandidateSignal) -> CandidateSignal:
+    """Revalidate one exact detector-issued signal and all retained causal parents."""
+
+    if type(signal) is not CandidateSignal:
+        raise TypeError("candidate signal must be the exact factory-issued registered original")
+    registration = _VERIFIED_CANDIDATE_SIGNALS.get(id(signal))
+    if registration is None or registration.signal() is not signal:
+        raise ValueError("candidate signal is not the registered detector-issued original")
+    if _candidate_signal_snapshot(signal) != registration.snapshot:
+        raise ValueError("registered candidate signal differs from its original frozen snapshot")
+    expected_id = f"CS-{hash_json('candidate-signal-v1', signal.to_dict())}"
+    if signal.signal_id != expected_id:
+        raise ValueError("registered candidate signal identity differs from its exact payload")
+    if (
+        _candidate_definition_sha256(registration.definition)
+        != registration.definition_sha256
+    ):
+        raise ValueError("candidate signal parent definition differs from its original")
+    if _detector_series_sha256(registration.series) != registration.series_sha256:
+        raise ValueError("candidate signal parent series differs from its original")
+    _validate_series(registration.definition, registration.series)
+    expected = (
+        registration.definition.candidate_id,
+        registration.definition.family,
+        registration.series.symbol,
+        registration.definition.timeframe,
+        registration.definition.direction,
+        registration.definition.source_publication_sha256,
+        registration.definition.source_series_sha256,
+        registration.definition.source_segment_id,
+        registration.definition.slot.slot_id,
+    )
+    observed = (
+        signal.candidate_id,
+        signal.family,
+        signal.symbol,
+        signal.timeframe,
+        signal.direction,
+        signal.source_publication_sha256,
+        signal.source_series_sha256,
+        signal.segment_id,
+        signal.candidate_slot_id,
+    )
+    if observed != expected:
+        raise ValueError("candidate signal differs from its retained detector parents")
+    if registration.profile_stream is not None:
+        verify_profile_stream(registration.profile_stream)
+        if (
+            registration.definition.family != "B"
+            or registration.profile_stream.stream_sha256
+            != registration.definition.profile_stream_sha256
+        ):
+            raise ValueError("candidate signal profile evidence differs from its definition")
+    elif registration.definition.family == "B":
+        raise ValueError("family B candidate signal lacks retained profile evidence")
+    if registration.definition.family in ("B", "E"):
+        if not registration.parent_opportunities:
+            raise ValueError("subordinate candidate signal lacks retained parent opportunities")
+        for opportunity in registration.parent_opportunities:
+            verify_candidate_signal(opportunity)
+    elif registration.parent_opportunities:
+        raise ValueError("non-subordinate candidate signal cannot retain parent opportunities")
+    return signal
+
+
+def _register_candidate_signal(
+    signal: CandidateSignal,
+    *,
+    definition: CandidateDefinition,
+    series: DetectorSeries,
+    profile_stream: VerifiedProfileStream | None,
+    parent_opportunities: Sequence[CandidateSignal],
+) -> None:
+    identifier = id(signal)
+
+    def cleanup(reference: weakref.ReferenceType[CandidateSignal]) -> None:
+        current = _VERIFIED_CANDIDATE_SIGNALS.get(identifier)
+        if current is not None and current.signal is reference:
+            _VERIFIED_CANDIDATE_SIGNALS.pop(identifier, None)
+
+    retained_opportunities = (
+        tuple(parent_opportunities) if definition.family in ("B", "E") else ()
+    )
+    _VERIFIED_CANDIDATE_SIGNALS[identifier] = _VerifiedCandidateSignalRegistration(
+        signal=weakref.ref(signal, cleanup),
+        snapshot=_candidate_signal_snapshot(signal),
+        definition=definition,
+        definition_sha256=_candidate_definition_sha256(definition),
+        series=series,
+        series_sha256=_detector_series_sha256(series),
+        profile_stream=profile_stream if definition.family == "B" else None,
+        parent_opportunities=retained_opportunities,
+    )
+
+
+def _candidate_signal_snapshot(signal: CandidateSignal) -> tuple[object, ...]:
+    return (signal.signal_id, *signal.to_dict().values())
+
+
+def _candidate_definition_sha256(definition: CandidateDefinition) -> str:
+    return hash_json(
+        "candidate-signal-parent-definition-v1",
+        {"candidate_id": definition.candidate_id, "definition": definition.to_dict()},
+    )
+
+
+def _detector_series_sha256(series: DetectorSeries) -> str:
+    if type(series) is VerifiedCandidateSeriesV2:
+        payload: object = _candidate_series_v2_snapshot(series)
+    elif type(series) is VerifiedAggregateSeries:
+        payload = {
+            "manifest": series.manifest.to_dict(),
+            "bars": [bar.to_dict() for bar in series.bars],
+            "ordered_row_sha256": series.ordered_row_sha256,
+            "artifact_bindings": series.artifact_bindings,
+            "series_sha256": series.series_sha256,
+            "parent_snapshot_manifest": series.parent_snapshot_manifest.to_dict(),
+        }
+    else:
+        raise TypeError("candidate signal series parent is not a verified aggregate capability")
+    return hash_json("candidate-signal-parent-series-v1", payload)
 
 
 def profile_config_artifact_bytes() -> bytes:
@@ -887,8 +1036,7 @@ def bridge_verified_aggregate_series_v2(
 
     if type(series) is not VerifiedAggregateSeriesV2:
         raise TypeError("bridge requires a verifier-issued VerifiedAggregateSeriesV2 capability")
-    budget = _candidate_bridge_budget(series)
-    verify_verified_aggregate_series_v2(series, budget=budget)
+    series.verify_original()
     timeframe_hours = _TIMEFRAME_HOURS.get(series.key.target_timeframe)
     if timeframe_hours is None:
         raise ValueError("candidate detector supports only 1h or 4h aggregate series")
@@ -937,7 +1085,6 @@ def bridge_verified_aggregate_series_v2(
     _VERIFIED_CANDIDATE_SERIES_V2[identifier] = _VerifiedCandidateSeriesV2Registration(
         candidate=weakref.ref(candidate, cleanup),
         aggregate=series,
-        budget=budget,
         snapshot=snapshot,
     )
     return candidate
@@ -954,24 +1101,8 @@ def verify_candidate_series_v2(series: VerifiedCandidateSeriesV2) -> VerifiedCan
     aggregate = registration.aggregate
     if _candidate_series_v2_snapshot(series) != registration.snapshot:
         raise ValueError("VerifiedCandidateSeriesV2 differs from its verifier-issued snapshot")
-    verify_verified_aggregate_series_v2(aggregate, budget=registration.budget)
+    aggregate.verify_original()
     return series
-
-
-def _candidate_bridge_budget(
-    series: VerifiedAggregateSeriesV2,
-) -> AggregatePublicationBudgetV2:
-    return AggregatePublicationBudgetV2(
-        max_source_rows=1,
-        max_source_bytes=1,
-        max_parent_partitions=1,
-        max_source_rows_per_chunk=240,
-        max_members=1,
-        max_aggregate_rows=series.row_count,
-        max_rows_per_partition=series.row_count,
-        max_output_bytes=series.byte_count,
-        max_output_files=series.row_count,
-    )
 
 
 def _candidate_series_v2_snapshot(series: VerifiedCandidateSeriesV2) -> tuple[object, ...]:
@@ -989,13 +1120,6 @@ def _candidate_series_v2_snapshot(series: VerifiedCandidateSeriesV2) -> tuple[ob
                 bar.low,
                 bar.close,
                 bar.volume,
-                bar.schema_version,
-                bar.source_timeframe,
-                bar.continuity,
-                bar.source_row_ids,
-                bar.source_sha256,
-                bar.parent_snapshot_sha256,
-                bar.row_sha256,
             )
             for bar in series.bars
         ),
@@ -1080,7 +1204,15 @@ def detect_candidate_signals(
                 payload_sha256=hash_json("candidate-signal-issuance-v1", payload),
             )
             try:
-                return CandidateSignal(**payload, issuance_token=token)  # type: ignore[arg-type]
+                signal = CandidateSignal(**payload, issuance_token=token)  # type: ignore[arg-type]
+                _register_candidate_signal(
+                    signal,
+                    definition=definition,
+                    series=series,
+                    profile_stream=profile_stream,
+                    parent_opportunities=a_opportunities,
+                )
+                return signal
             finally:
                 _SIGNAL_ISSUANCE_REGISTRY.pop(id(token), None)
 
@@ -1105,10 +1237,12 @@ def detect_candidate_signals(
     if definition.family == "A":
         return _detect_a(definition, series, issuer)
     if definition.family == "B":
-        if (
-            profile_stream is None
-            or profile_stream.stream_sha256 != definition.profile_stream_sha256
-        ):
+        if type(profile_stream) is not VerifiedProfileStream:
+            raise TypeError(
+                "family B detection requires its exact factory-issued registered profile stream"
+            )
+        verify_profile_stream(profile_stream)
+        if profile_stream.stream_sha256 != definition.profile_stream_sha256:
             raise ValueError("family B detection requires its exact verified profile stream")
         return _detect_b(definition, series, a_opportunities, profile_stream, issuer)
     if definition.family == "G":
@@ -1538,6 +1672,7 @@ def _validate_opportunity(
     series: DetectorSeries,
     signal: CandidateSignal,
 ) -> None:
+    verify_candidate_signal(signal)
     if signal.family != "A":
         raise ValueError("subordinate candidates require family A opportunities")
     if (
@@ -1767,5 +1902,7 @@ __all__ = [
     "profile_config_artifact_bytes",
     "target_bars",
     "value_migration_acceptance",
+    "verify_candidate_signal",
     "verify_candidate_series_v2",
+    "verify_profile_stream",
 ]

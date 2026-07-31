@@ -912,7 +912,10 @@ def candidate_definition_for_slot(
 
     from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
     from market_structure_lab.data.price_precision import read_source_price_precision_manifest
-    from market_structure_lab.research.candidates import VerifiedProfileStream
+    from market_structure_lab.research.candidates import (
+        VerifiedProfileStream,
+        verify_profile_stream,
+    )
 
     if not isinstance(series, VerifiedAggregateSeries):
         raise TypeError("candidate definition requires a VerifiedAggregateSeries capability")
@@ -933,9 +936,13 @@ def candidate_definition_for_slot(
         read_source_price_precision_manifest(series)
         profile_bars = _candidate_parameter_bars(slot, "profile_hours")
         window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
+        if type(profile_stream) is not VerifiedProfileStream:
+            raise TypeError(
+                "family B requires an exact factory-issued registered profile stream"
+            )
+        verify_profile_stream(profile_stream)
         if (
-            not isinstance(profile_stream, VerifiedProfileStream)
-            or profile_stream.aggregate_series_sha256 != series.series_sha256
+            profile_stream.aggregate_series_sha256 != series.series_sha256
             or profile_stream.window_hours != window_hours
         ):
             raise ValueError("family B requires a matching verified profile stream")
@@ -992,6 +999,7 @@ def candidate_definition_for_verified_series(
     from market_structure_lab.research.candidates import (
         VerifiedCandidateSeriesV2,
         VerifiedProfileStream,
+        verify_profile_stream,
     )
 
     if type(series) is not VerifiedCandidateSeriesV2:
@@ -1022,9 +1030,13 @@ def candidate_definition_for_verified_series(
     if slot.family == "B":
         profile_bars = _candidate_parameter_bars(slot, "profile_hours")
         window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
+        if type(profile_stream) is not VerifiedProfileStream:
+            raise TypeError(
+                "family B requires an exact factory-issued registered profile stream"
+            )
+        verify_profile_stream(profile_stream)
         if (
-            not isinstance(profile_stream, VerifiedProfileStream)
-            or profile_stream.aggregate_series_sha256 != series.series_sha256
+            profile_stream.aggregate_series_sha256 != series.series_sha256
             or profile_stream.window_hours != window_hours
         ):
             raise ValueError("family B requires a matching verified profile stream")
