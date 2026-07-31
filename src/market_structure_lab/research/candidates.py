@@ -92,9 +92,8 @@ class VerifiedCandidateSeriesV2:
             raise ValueError("verified candidate series must contain bars")
         _require_sha256(self.publication_sha256, "publication_sha256")
         _require_sha256(self.series_sha256, "series_sha256")
-        if (
-            not isinstance(self.aggregate_identity, str)
-            or not self.aggregate_identity.startswith("AGGV2-")
+        if not isinstance(self.aggregate_identity, str) or not self.aggregate_identity.startswith(
+            "AGGV2-"
         ):
             raise ValueError("verified candidate series aggregate identity is invalid")
         _require_sha256(
@@ -515,7 +514,10 @@ def verify_profile_stream(stream: VerifiedProfileStream) -> VerifiedProfileStrea
     programme = registration.programme
     if programme.sha256 != registration.programme_sha256:
         raise ValueError("registered profile programme differs from its original content")
-    if hashlib.sha256(registration.profile_config_bytes).hexdigest() != stream.profile_config_sha256:
+    if (
+        hashlib.sha256(registration.profile_config_bytes).hexdigest()
+        != stream.profile_config_sha256
+    ):
         raise ValueError("registered profile config differs from its original bytes")
     precision = read_source_price_precision_manifest(series)
     if (
@@ -628,10 +630,7 @@ def verify_candidate_signal(signal: CandidateSignal) -> CandidateSignal:
     expected_id = f"CS-{hash_json('candidate-signal-v1', signal.to_dict())}"
     if signal.signal_id != expected_id:
         raise ValueError("registered candidate signal identity differs from its exact payload")
-    if (
-        _candidate_definition_sha256(registration.definition)
-        != registration.definition_sha256
-    ):
+    if _candidate_definition_sha256(registration.definition) != registration.definition_sha256:
         raise ValueError("candidate signal parent definition differs from its original")
     if _detector_series_sha256(registration.series) != registration.series_sha256:
         raise ValueError("candidate signal parent series differs from its original")
@@ -695,9 +694,7 @@ def _register_candidate_signal(
         if current is not None and current.signal is reference:
             _VERIFIED_CANDIDATE_SIGNALS.pop(identifier, None)
 
-    retained_opportunities = (
-        tuple(parent_opportunities) if definition.family in ("B", "E") else ()
-    )
+    retained_opportunities = tuple(parent_opportunities) if definition.family in ("B", "E") else ()
     _VERIFIED_CANDIDATE_SIGNALS[identifier] = _VerifiedCandidateSignalRegistration(
         signal=weakref.ref(signal, cleanup),
         snapshot=_candidate_signal_snapshot(signal),
@@ -1182,8 +1179,19 @@ def detect_candidate_signals(
     *,
     a_opportunities: Sequence[CandidateSignal] = (),
     profile_stream: VerifiedProfileStream | None = None,
+    max_emitted_signals: int | None = None,
 ) -> tuple[CandidateSignal, ...]:
     """Detect one frozen candidate/comparator over authenticated complete aggregate bars."""
+
+    if max_emitted_signals is not None and (
+        isinstance(max_emitted_signals, bool)
+        or not isinstance(max_emitted_signals, int)
+        or max_emitted_signals < 0
+    ):
+        raise ValueError("max_emitted_signals must be a non-negative integer or None")
+    if max_emitted_signals is not None and definition.family in ("B", "E"):
+        raise ValueError("bounded candidate emission is not implemented for subordinate family B/E")
+    emitted_signal_count = 0
 
     def detector_signal_issuer() -> Callable[[int, int, int], CandidateSignal]:
         evidence_capability = object()
@@ -1196,6 +1204,7 @@ def detect_candidate_signals(
             capability: object
 
         def issue(evidence: DetectorEvidence) -> CandidateSignal:
+            nonlocal emitted_signal_count
             if (
                 type(evidence) is not DetectorEvidence
                 or evidence.capability is not evidence_capability
@@ -1224,6 +1233,8 @@ def detect_candidate_signals(
             )
             if evidence.cutoff_index != expected_cutoff_index:
                 raise ValueError("candidate signal indices violate the frozen family clock")
+            if max_emitted_signals is not None and emitted_signal_count >= max_emitted_signals:
+                raise ValueError("candidate signal emission exceeds the admitted event ceiling")
             payload: dict[str, object] = {
                 "candidate_id": definition.candidate_id,
                 "family": definition.family,
@@ -1253,6 +1264,7 @@ def detect_candidate_signals(
                     profile_stream=profile_stream,
                     parent_opportunities=a_opportunities,
                 )
+                emitted_signal_count += 1
                 return signal
             finally:
                 _SIGNAL_ISSUANCE_REGISTRY.pop(id(token), None)
@@ -1911,9 +1923,7 @@ def _mean_true_range(values: Sequence[float | None]) -> float | None:
     return fsum(cast(float, value) for value in values) / len(values)
 
 
-def _donchian(
-    bars: Sequence[DetectorBar], index: int, lookback: int
-) -> tuple[float, float]:
+def _donchian(bars: Sequence[DetectorBar], index: int, lookback: int) -> tuple[float, float]:
     reference = bars[index - lookback : index]
     return max(bar.high for bar in reference), min(bar.low for bar in reference)
 

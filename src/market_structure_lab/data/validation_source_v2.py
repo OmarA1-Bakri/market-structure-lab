@@ -1495,6 +1495,7 @@ def verify_validation_source_publication_v2(
 ) -> ValidationSourcePublicationV2:
     """Reopen every original parent, audit, partition, and publication byte."""
 
+    verify_validation_source_publication_metadata_v2(publication)
     verify_development_read_boundary_v2(boundary, coverage, split)
     coverage_bytes = verified_source_coverage_bytes(coverage)
     availability_bytes = verified_scoped_source_availability_bytes_v2(
@@ -1554,6 +1555,51 @@ def verify_validation_source_publication_v2(
         "ascii"
     ):
         raise ValueError("validation source success marker changed")
+    return publication
+
+
+def verify_validation_source_publication_metadata_v2(
+    publication: ValidationSourcePublicationV2,
+) -> ValidationSourcePublicationV2:
+    """Verify registered publication metadata without reading observation artifacts."""
+
+    if type(publication) is not ValidationSourcePublicationV2:
+        raise TypeError("validation source publication must be the exact registered type")
+    if (
+        type(publication.status) is not ScopedSourceStatusV2
+        or type(publication.canonical_bytes) is not bytes
+        or type(publication.coverage_identity) is not SourceCoverageIdentityV2
+        or type(publication.split_identity) is not DevelopmentSplitIdentityV2
+        or type(publication.source_publication_identity) is not SourcePublicationIdentityV2
+        or type(publication.allowed_symbols) is not tuple
+        or len(publication.allowed_symbols) > _MAX_MINUTE_PUBLICATION_ENTRIES
+        or any(type(item) is not str for item in publication.allowed_symbols)
+        or type(publication.allowed_intervals) is not tuple
+        or len(publication.allowed_intervals) > _MAX_MINUTE_PUBLICATION_ENTRIES
+        or any(
+            type(item) is not tuple
+            or len(item) != 2
+            or any(type(part) is not str for part in item)
+            for item in publication.allowed_intervals
+        )
+        or type(publication.partitions) is not tuple
+        or len(publication.partitions) > _MAX_MINUTE_PUBLICATION_ENTRIES
+        or any(type(item) is not ValidationSourcePartitionV2 for item in publication.partitions)
+    ):
+        raise TypeError("validation source publication contains non-exact nested metadata")
+    registered = _VERIFIED_SOURCE_PUBLICATIONS.get(id(publication))
+    if registered is None or registered[0]() is not publication:
+        raise ValueError("validation source is not a registered original publication")
+    current_bytes = publication_json_bytes(publication.to_dict())
+    if current_bytes != publication.canonical_bytes or current_bytes != registered[1]:
+        raise ValueError("validation source publication metadata differs from registered bytes")
+    if publication.row_count != sum(item.row_count for item in publication.partitions):
+        raise ValueError("validation source partition row counts differ")
+    if publication.byte_count != sum(item.byte_count for item in publication.partitions):
+        raise ValueError("validation source partition byte counts differ")
+    expected_identity = SourcePublicationIdentityV2.from_payload(publication._identity_payload())
+    if publication.source_publication_identity != expected_identity:
+        raise ValueError("validation source publication identity differs")
     return publication
 
 
@@ -3743,6 +3789,7 @@ __all__ = [
     "verify_dump_toc_metadata_v2",
     "verify_scoped_source_availability_v2",
     "verify_original_minute_path_v2",
+    "verify_validation_source_publication_metadata_v2",
     "verify_validation_source_publication_v2",
     "verify_verified_minute_path_v2",
     "verified_scoped_source_availability_bytes_v2",

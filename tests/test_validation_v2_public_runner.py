@@ -17,13 +17,13 @@ from market_structure_lab.research.models import (
 )
 from market_structure_lab.research.validation_v2 import (
     ValidationV2SourceBundle,
+    development_access_ledger_identity_v2,
     run_validation_programme_v2,
 )
 from market_structure_lab.research.validation_v2_costs import (
     publish_validation_cost_authority_v2,
 )
 from market_structure_lab.research.validation_v2_models import (
-    AccessAuditLedgerIdentityV2,
     ValidationProgrammeConfigV2,
     ValidationRosterIdentityV2,
 )
@@ -34,10 +34,25 @@ pytest_plugins = ("test_aggregate_publication_v2",)
 def _public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import test_aggregate_publication_v2 as aggregate_tests
     import test_validation_precision_authority_v2 as precision_tests
-    import test_validation_v2_costs as cost_tests
+    from test_validation_v2_real_vertical_slice import (
+        _long_development_chain,
+        _real_unavailable_archive_parents,
+        _vs0001_minute_rows,
+    )
+    from market_structure_lab.research.validation_v2_costs import (
+        verified_cost_authority_bytes_v2,
+    )
 
+    chain_root = tmp_path / "real-vs0001-chain"
+    chain_root.mkdir()
+    v2_chain = _long_development_chain(chain_root, monkeypatch)
     coverage, split, boundary, availability = v2_chain
-    minute = aggregate_tests._publish_minute(v2_chain, tmp_path, suffix="-public-runner")
+    minute = aggregate_tests._publish_minute(
+        v2_chain,
+        tmp_path,
+        rows=_vs0001_minute_rows(boundary),
+        suffix="-public-runner",
+    )
     aggregate = aggregate_tests._publish_aggregate(
         v2_chain,
         minute,
@@ -70,8 +85,14 @@ def _public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.Monke
 
     cost_root = tmp_path / "cost-inputs"
     cost_root.mkdir()
-    cost_tests._patch_parent_verifiers(monkeypatch)
-    cost_parents = cost_tests._parents(cost_root)
+    archive_manifest, archive_manifest_path, archive_acquisition = (
+        _real_unavailable_archive_parents(
+            boundary=boundary,
+            availability=availability,
+            root=cost_root,
+            monkeypatch=monkeypatch,
+        )
+    )
     cost = publish_validation_cost_authority_v2(
         source_publication=minute,
         aggregate_publication=aggregate,
@@ -79,11 +100,12 @@ def _public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.Monke
         split=split,
         boundary=boundary,
         availability=availability,
-        archive_manifest=cost_parents.manifest,
-        archive_manifest_path=cost_parents.manifest_path,
-        archive_acquisition=cost_parents.acquisition,
+        archive_manifest=archive_manifest,
+        archive_manifest_path=archive_manifest_path,
+        archive_acquisition=archive_acquisition,
         output_root=tmp_path / "cost-public-runner",
     )
+    assert verified_cost_authority_bytes_v2(cost) == cost.canonical_bytes
 
     sources = ValidationV2SourceBundle(
         coverage=coverage,
@@ -102,6 +124,12 @@ def _public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.Monke
         aggregate_bars=aggregate.row_count,
         symbols=len(boundary.allowed_symbols),
         ranges=len(boundary.allowed_intervals),
+        candidates=1,
+        events=1,
+        outcomes=1,
+        path_cells=24 * 60,
+        outer_folds=4,
+        inner_folds=3,
     )
     config = ValidationProgrammeConfigV2(
         implementation_checkpoint="a" * 40,
@@ -114,9 +142,7 @@ def _public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.Monke
         roster_identity=ValidationRosterIdentityV2.from_payload(
             [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
         ),
-        access_ledger_identity=AccessAuditLedgerIdentityV2.from_payload(
-            {"fixture": "development-only-zero-final-access"}
-        ),
+        access_ledger_identity=development_access_ledger_identity_v2(sources),
         policy_identities=(),
         work_budget_sha256=budget.sha256,
     )
@@ -154,7 +180,7 @@ def test_public_runner_derives_nonempty_outcomes_from_verified_publications(
         demand=demand,
     )
 
-    assert any(result.metrics.get("event_count", 0) > 0 for result in run.results)
+    assert any(result.metrics.get("event_count", 0) > 0 for result in run.results)  # type: ignore[operator]
 
 
 def test_public_runner_rejects_over_budget_before_source_revalidation(

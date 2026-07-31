@@ -594,6 +594,57 @@ def verify_validation_precision_authority_v2(
     return publication
 
 
+def verify_validation_precision_authority_metadata_v2(
+    publication: ValidationPrecisionAuthorityV2,
+) -> ValidationPrecisionAuthorityV2:
+    """Verify registered precision metadata without reopening authority artifacts."""
+
+    if type(publication) is not ValidationPrecisionAuthorityV2:
+        raise TypeError("precision authority must be the exact verifier-issued type")
+    if (
+        type(publication.status) is not PrecisionAuthorityStatusV2
+        or type(publication.canonical_bytes) is not bytes
+        or type(publication.publication_root) is not type(Path())
+        or (
+            publication.authority_source_path is not None
+            and type(publication.authority_source_path) is not type(Path())
+        )
+        or (
+            publication.verifier_evidence_path is not None
+            and type(publication.verifier_evidence_path) is not type(Path())
+        )
+        or type(publication.request) is not PrecisionAuthorityRequestV2
+        or type(publication.request.source_kind) is not PrecisionSourceKindV2
+        or type(publication.request.requested_symbols) is not tuple
+        or len(publication.request.requested_symbols) > 100_000
+        or any(type(item) is not str for item in publication.request.requested_symbols)
+        or type(publication.request.requested_intervals) is not tuple
+        or len(publication.request.requested_intervals) > 100_000
+        or any(
+            type(item) is not tuple or len(item) != 2 or any(type(part) is not str for part in item)
+            for item in publication.request.requested_intervals
+        )
+        or type(publication.entries) is not tuple
+        or len(publication.entries) > 100_000
+        or any(
+            type(item) is not EffectivePrecisionV2
+            or type(item.price_step) is not Decimal
+            or type(item.price_origin) is not Decimal
+            for item in publication.entries
+        )
+        or type(publication.uncovered) is not tuple
+        or len(publication.uncovered) > 100_000
+        or any(
+            type(item) is not tuple or len(item) != 3 or any(type(part) is not str for part in item)
+            for item in publication.uncovered
+        )
+        or type(publication.precision_authority_identity) is not PrecisionAuthorityIdentityV2
+    ):
+        raise TypeError("precision authority contains non-exact nested metadata")
+    _registration(publication)
+    return publication
+
+
 def load_validation_precision_authority_v2(
     *,
     publication_root: Path,
@@ -1398,5 +1449,6 @@ __all__ = [
     "precision_requirement_status_v2",
     "publish_validation_precision_authority_v2",
     "verified_effective_precision_v2",
+    "verify_validation_precision_authority_metadata_v2",
     "verify_validation_precision_authority_v2",
 ]

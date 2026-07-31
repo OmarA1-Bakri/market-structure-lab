@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Context, Decimal
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -24,13 +24,14 @@ from market_structure_lab.research.models import (
 from market_structure_lab.research.outcomes import DevelopmentOutcomeRowV2
 from market_structure_lab.research.validation_v2 import (
     ValidationV2SourceBundle,
+    development_access_ledger_identity_v2,
     run_validation_programme_v2,
 )
 from market_structure_lab.research.validation_v2_costs import (
     publish_validation_cost_authority_v2,
 )
 from market_structure_lab.research.validation_v2_models import (
-    AccessAuditLedgerIdentityV2,
+    SourceCoverageIdentityV2,
     ValidationProgrammeConfigV2,
     ValidationRosterIdentityV2,
 )
@@ -42,6 +43,201 @@ def _vs0001() -> ValidationSlot:
     return next(slot for slot in VALIDATION_SLOT_ROSTER if slot.slot_id == "VS-0001")
 
 
+def test_public_runner_rejects_nominal_boundary_subclasses_before_io() -> None:
+    class ConfigSubclass(ValidationProgrammeConfigV2):
+        pass
+
+    class SourceSubclass(ValidationV2SourceBundle):
+        pass
+
+    class BypassBudget(ValidationWorkBudget):
+        def preflight(self, *_args: object, **_kwargs: object) -> None:
+            pytest.fail("budget subclass overrode the trusted preflight")
+
+    class DemandSubclass(ValidationWorkDemand):
+        pass
+
+    config = object.__new__(ValidationProgrammeConfigV2)
+    sources = object.__new__(ValidationV2SourceBundle)
+    budget = ValidationWorkBudget()
+    demand = ValidationWorkDemand()
+
+    with pytest.raises(TypeError, match="config.*exact"):
+        run_validation_programme_v2(
+            config=object.__new__(ConfigSubclass),
+            sources=sources,
+            budget=budget,
+            demand=demand,
+        )
+    with pytest.raises(TypeError, match="sources.*exact"):
+        run_validation_programme_v2(
+            config=config,
+            sources=object.__new__(SourceSubclass),
+            budget=budget,
+            demand=demand,
+        )
+    with pytest.raises(TypeError, match="budget.*exact"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=BypassBudget(),
+            demand=demand,
+        )
+    with pytest.raises(TypeError, match="demand.*exact"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=DemandSubclass(),
+        )
+
+
+def test_publication_outcome_reader_has_no_reusable_factory_or_registration_surface() -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    assert not hasattr(module, "_PUBLICATION_OUTCOME_READER_FACTORY")
+    assert not hasattr(module, "_register_publication_outcome_reader_v2")
+    before = dict(module._VERIFIED_PUBLICATION_OUTCOME_READERS)
+
+    with pytest.raises(TypeError, match="verifier factory"):
+        module.VerifiedPublicationOutcomeReaderV2(
+            programme_id="VPV2-" + "a" * 64,
+            split_sha256="b" * 64,
+            cost_authority_sha256="c" * 64,
+            source_publication_sha256="d" * 64,
+            aggregate_publication_sha256="e" * 64,
+            slot_ids=("VS-0001",),
+            outcome_set_sha256="f" * 64,
+            canonical_bytes=b"forged",
+            _outcomes_by_slot={},
+            _factory_token=object(),
+        )
+
+    assert module._VERIFIED_PUBLICATION_OUTCOME_READERS == before
+
+
+def test_public_runner_rejects_nested_source_lookalike_before_property_access() -> None:
+    from market_structure_lab.research.validation_v2_models import (
+        AccessAuditLedgerIdentityV2,
+        AggregatePublicationIdentityV2,
+        CostAuthorityIdentityV2,
+        DevelopmentSplitIdentityV2,
+        PrecisionAuthorityIdentityV2,
+        SourcePublicationIdentityV2,
+        ValidationRosterIdentityV2,
+    )
+
+    class CoverageLookalike:
+        @property
+        def coverage_identity(self) -> object:
+            pytest.fail("nested source lookalike property was accessed")
+
+    sources = object.__new__(ValidationV2SourceBundle)
+    object.__setattr__(sources, "coverage", CoverageLookalike())
+    for field_name in (
+        "split",
+        "boundary",
+        "availability",
+        "source_publication",
+        "aggregate_publication",
+        "precision_authority",
+        "cost_authority",
+    ):
+        object.__setattr__(sources, field_name, object())
+    config = ValidationProgrammeConfigV2(
+        implementation_checkpoint="a" * 40,
+        coverage_identity=SourceCoverageIdentityV2.from_payload({"inert": "coverage"}),
+        split_identity=DevelopmentSplitIdentityV2.from_payload({"inert": "split"}),
+        source_identity=SourcePublicationIdentityV2.from_payload({"inert": "source"}),
+        aggregate_identity=AggregatePublicationIdentityV2.from_payload({"inert": "aggregate"}),
+        precision_identity=PrecisionAuthorityIdentityV2.from_payload({"inert": "precision"}),
+        cost_identity=CostAuthorityIdentityV2.from_payload({"inert": "cost"}),
+        roster_identity=ValidationRosterIdentityV2.from_payload({"inert": "roster"}),
+        access_ledger_identity=AccessAuditLedgerIdentityV2.from_payload({"inert": "ledger"}),
+        policy_identities=(),
+        work_budget_sha256=ValidationWorkBudget().sha256,
+    )
+
+    with pytest.raises(TypeError, match="coverage.*exact"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=ValidationWorkBudget(),
+            demand=ValidationWorkDemand(),
+        )
+
+
+def test_public_runner_rejects_config_identity_subclass_before_value_access() -> None:
+    from market_structure_lab.data.aggregate_publication_v2 import AggregatePublicationV2
+    from market_structure_lab.data.validation_precision_authority_v2 import (
+        ValidationPrecisionAuthorityV2,
+    )
+    from market_structure_lab.data.validation_source_v2 import (
+        ScopedSourceAvailabilityV2,
+        ValidationSourcePublicationV2,
+    )
+    from market_structure_lab.research.validation_v2_costs import VerifiedCostAuthorityV2
+    from market_structure_lab.research.validation_v2_models import SourceCoveragePublicationV2
+    from market_structure_lab.research.validation_v2_splits import (
+        DevelopmentReadBoundaryV2,
+        DevelopmentSplitPublicationV2,
+    )
+
+    class CoverageIdentitySubclass(SourceCoverageIdentityV2):
+        @property
+        def value(self) -> str:  # type: ignore[override]
+            pytest.fail("config identity subclass value was accessed")
+
+    config = object.__new__(ValidationProgrammeConfigV2)
+    object.__setattr__(config, "coverage_identity", object.__new__(CoverageIdentitySubclass))
+    for field_name in (
+        "split_identity",
+        "source_identity",
+        "aggregate_identity",
+        "precision_identity",
+        "cost_identity",
+        "roster_identity",
+        "access_ledger_identity",
+    ):
+        object.__setattr__(config, field_name, object())
+
+    sources = object.__new__(ValidationV2SourceBundle)
+    for field_name, parent_type in (
+        ("coverage", SourceCoveragePublicationV2),
+        ("split", DevelopmentSplitPublicationV2),
+        ("boundary", DevelopmentReadBoundaryV2),
+        ("availability", ScopedSourceAvailabilityV2),
+        ("source_publication", ValidationSourcePublicationV2),
+        ("aggregate_publication", AggregatePublicationV2),
+        ("precision_authority", ValidationPrecisionAuthorityV2),
+        ("cost_authority", VerifiedCostAuthorityV2),
+    ):
+        object.__setattr__(sources, field_name, object.__new__(parent_type))
+
+    with pytest.raises(TypeError, match="coverage_identity.*exact"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=ValidationWorkBudget(),
+            demand=ValidationWorkDemand(),
+        )
+
+
+def test_public_runner_rejects_runner_version_substitution_before_inputs() -> None:
+    class VersionSubclass(str):
+        pass
+
+    inputs = {
+        "config": object.__new__(ValidationProgrammeConfigV2),
+        "sources": object.__new__(ValidationV2SourceBundle),
+        "budget": ValidationWorkBudget(),
+        "demand": ValidationWorkDemand(),
+    }
+    for version in ("forged-runner", VersionSubclass("phase5-validation-slot-runner-v2")):
+        with pytest.raises(ValueError, match="runner_version.*frozen"):
+            run_validation_programme_v2(**inputs, runner_version=version)  # type: ignore[arg-type]
+
+
 def _long_development_chain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -50,14 +246,79 @@ def _long_development_chain(
 
     real_datetime = fixtures.datetime
 
-    def long_datetime(*args: object, **kwargs: object) -> datetime:
+    def long_datetime(*args: Any, **kwargs: Any) -> datetime:
         value = real_datetime(*args, **kwargs)
         if value == datetime(2025, 1, 7, tzinfo=UTC):
             return datetime(2025, 2, 6, tzinfo=UTC)
         return value
 
     monkeypatch.setattr(fixtures, "datetime", long_datetime)
-    return fixtures.v2_chain.__wrapped__(tmp_path, monkeypatch)
+    return fixtures.v2_chain.__wrapped__(tmp_path, monkeypatch)  # type: ignore[attr-defined]
+
+
+def _real_unavailable_archive_parents(
+    *,
+    boundary: Any,
+    availability: Any,
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Any, Path, Any]:
+    from market_structure_lab.data import binance_archive_v2 as archive_module
+    from market_structure_lab.data.binance_archive_v2 import (
+        ArchiveBudgetsV2,
+        ArchiveNetworkUnavailable,
+        acquire_binance_archives_v2,
+        freeze_binance_archive_requests_v2,
+        verify_binance_archive_acquisition_v2,
+        verify_binance_archive_request_manifest_v2,
+    )
+
+    manifest_path = root / "archive-manifest.json"
+    manifest = freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=availability,
+        budgets=ArchiveBudgetsV2.testing(max_requests=20_000),
+        output=manifest_path,
+    )
+    assert {request.symbol for request in manifest.requests} == set(boundary.allowed_symbols)
+    assert not {"BTCUSDT", "ETHUSDT"} & {request.symbol for request in manifest.requests}
+    assert (
+        verify_binance_archive_request_manifest_v2(
+            manifest,
+            boundary=boundary,
+            source_availability=availability,
+            publication_path=manifest_path,
+        )
+        is manifest
+    )
+    cache_root = root / "archive-cache"
+    cache_root.mkdir()
+    monkeypatch.setattr(
+        archive_module,
+        "_download_small_with_retries",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ArchiveNetworkUnavailable("bounded real-slice archive unavailable")
+        ),
+    )
+    acquisition = acquire_binance_archives_v2(
+        boundary=boundary,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        audit_ledger_root=root / "archive-audit",
+        cache_root=cache_root,
+        output_root=root / "archive-publication",
+    )
+    assert acquisition.status == "unavailable"
+    assert (
+        verify_binance_archive_acquisition_v2(
+            acquisition,
+            boundary=boundary,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+        is acquisition
+    )
+    return manifest, manifest_path, acquisition
 
 
 def _vs0001_minute_rows(boundary: Any) -> tuple[tuple[CanonicalMinuteRowV2, ...], ...]:
@@ -117,7 +378,9 @@ def _real_public_programme_inputs(
 ]:
     import test_aggregate_publication_v2 as aggregate_tests
     import test_validation_precision_authority_v2 as precision_tests
-    import test_validation_v2_costs as cost_tests
+    from market_structure_lab.research.validation_v2_costs import (
+        verified_cost_authority_bytes_v2,
+    )
 
     coverage, split, boundary, availability = _long_development_chain(
         tmp_path,
@@ -162,8 +425,14 @@ def _real_public_programme_inputs(
 
     cost_root = tmp_path / "cost-inputs"
     cost_root.mkdir()
-    cost_tests._patch_parent_verifiers(monkeypatch)  # noqa: SLF001
-    cost_parents = cost_tests._parents(cost_root)  # noqa: SLF001
+    archive_manifest, archive_manifest_path, archive_acquisition = (
+        _real_unavailable_archive_parents(
+            boundary=boundary,
+            availability=availability,
+            root=cost_root,
+            monkeypatch=monkeypatch,
+        )
+    )
     cost = publish_validation_cost_authority_v2(
         source_publication=minute,
         aggregate_publication=aggregate,
@@ -171,11 +440,12 @@ def _real_public_programme_inputs(
         split=split,
         boundary=boundary,
         availability=availability,
-        archive_manifest=cost_parents.manifest,
-        archive_manifest_path=cost_parents.manifest_path,
-        archive_acquisition=cost_parents.acquisition,
+        archive_manifest=archive_manifest,
+        archive_manifest_path=archive_manifest_path,
+        archive_acquisition=archive_acquisition,
         output_root=tmp_path / "cost-real-vs0001",
     )
+    assert verified_cost_authority_bytes_v2(cost) == cost.canonical_bytes
 
     sources = ValidationV2SourceBundle(
         coverage=coverage,
@@ -212,9 +482,7 @@ def _real_public_programme_inputs(
         roster_identity=ValidationRosterIdentityV2.from_payload(
             [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
         ),
-        access_ledger_identity=AccessAuditLedgerIdentityV2.from_payload(
-            {"fixture": "real-vs0001-development-only-zero-final-access"}
-        ),
+        access_ledger_identity=development_access_ledger_identity_v2(sources),
         policy_identities=(),
         work_budget_sha256=budget.sha256,
     )
@@ -275,6 +543,10 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     assert outcome.exit_time == outcome.entry_time + timedelta(hours=24)
     assert outcome.net_return is None
     assert outcome.incomplete_cost_dimensions
+    assert outcome.entry_price == outcome.exit_price == Decimal("120")
+    assert outcome.gross_signed_return == Decimal("0")
+    assert outcome.mfe == Decimal("0.008333333333333333333333333")
+    assert outcome.mae == Decimal("-0.0083333333333333333333333333")
     assert (
         outcome.aggregate_publication_sha256
         == hashlib.sha256(sources.aggregate_publication.canonical_bytes).hexdigest()
@@ -282,6 +554,12 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     assert outcome.final_access_records == 0
     assert sources.source_publication.final_access_records == 0
     assert sources.aggregate_publication.final_access_records == 0
+    assert run.execution_scope == "gate-b-vs0001-development-slice"
+    assert run.planned_slot_count == 1_104
+    assert run.executed_slot_count == 1
+    assert run.roster_complete is False
+    assert run.scientific_terminal is False
+    assert run.holm == ()
 
     result = next(item for item in run.results if item.slot_id == "VS-0001")
     assert result.execution_status == "completed"
@@ -360,6 +638,401 @@ def test_public_runner_rejects_over_budget_path_demand_before_any_minute_read(
         )
 
 
+def test_public_runner_rejects_underdeclared_physical_demand_before_aggregate_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    underdeclared = replace(demand, source_rows=demand.source_rows - 1)
+    monkeypatch.setattr(
+        ValidationV2SourceBundle,
+        "revalidate",
+        lambda _self: pytest.fail("underdeclared physical demand revalidated source parents"),
+    )
+    monkeypatch.setattr(
+        module,
+        "open_verified_aggregate_series_v2",
+        lambda *_args, **_kwargs: pytest.fail(
+            "underdeclared physical demand opened aggregate rows"
+        ),
+    )
+
+    with pytest.raises(ValidationWorkBudgetViolation, match="source_rows"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=underdeclared,
+        )
+
+
+def test_public_runner_rejects_unadmitted_candidate_before_aggregate_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    underdeclared = replace(demand, candidates=0)
+    monkeypatch.setattr(
+        module,
+        "open_verified_aggregate_series_v2",
+        lambda *_args, **_kwargs: pytest.fail("unadmitted candidate opened aggregate rows"),
+    )
+
+    with pytest.raises(ValidationWorkBudgetViolation, match="candidates"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=underdeclared,
+        )
+
+
+def test_public_runner_rejects_mutated_source_counts_before_observation_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as source_module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    object.__setattr__(
+        sources.source_publication,
+        "row_count",
+        sources.source_publication.row_count - 1,
+    )
+    monkeypatch.setattr(
+        source_module,
+        "read_bounded_regular",
+        lambda *_args, **_kwargs: pytest.fail("mutated source metadata opened observations"),
+    )
+
+    with pytest.raises(ValueError, match="metadata|row counts"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=demand,
+        )
+
+
+def test_public_runner_rejects_mutated_aggregate_counts_before_artifact_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import aggregate_publication_v2 as aggregate_module
+    from market_structure_lab.data import validation_source_v2 as source_module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    object.__setattr__(
+        sources.aggregate_publication,
+        "row_count",
+        sources.aggregate_publication.row_count - 1,
+    )
+
+    def no_read(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("mutated aggregate metadata opened publication artifacts")
+
+    monkeypatch.setattr(source_module, "read_bounded_regular", no_read)
+    monkeypatch.setattr(aggregate_module, "read_bounded_regular", no_read)
+
+    with pytest.raises(ValueError, match="serialization|identity"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=demand,
+        )
+
+
+def test_budget_invariants_replay_before_metadata_and_allow_lower_ceilings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    source_metadata_verifier = module.verify_validation_source_publication_metadata_v2
+    monkeypatch.setattr(
+        module,
+        "verify_validation_source_publication_metadata_v2",
+        lambda *_args, **_kwargs: pytest.fail("invalid budget reached source metadata"),
+    )
+    oversized = replace(budget)
+    object.__setattr__(oversized, "max_source_rows", budget.max_source_rows + 1)
+    oversized_config = replace(config, work_budget_sha256=oversized.sha256)
+    with pytest.raises(ValueError, match="authoritative ceiling"):
+        run_validation_programme_v2(
+            config=oversized_config,
+            sources=sources,
+            budget=oversized,
+            demand=demand,
+        )
+
+    lower = replace(budget, max_source_rows=demand.source_rows - 1)
+    lower_config = replace(config, work_budget_sha256=lower.sha256)
+    with pytest.raises(ValidationWorkBudgetViolation, match="source_rows"):
+        run_validation_programme_v2(
+            config=lower_config,
+            sources=sources,
+            budget=lower,
+            demand=demand,
+        )
+
+    invalid_demand = replace(demand)
+    object.__setattr__(invalid_demand, "source_rows", -1)
+    with pytest.raises(ValueError, match="source_rows"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=invalid_demand,
+        )
+
+    invalid_config = replace(config)
+    object.__setattr__(invalid_config, "implementation_checkpoint", "invalid")
+    with pytest.raises(ValueError, match="implementation_checkpoint"):
+        run_validation_programme_v2(
+            config=invalid_config,
+            sources=sources,
+            budget=budget,
+            demand=demand,
+        )
+
+    monkeypatch.setattr(
+        module,
+        "verify_validation_source_publication_metadata_v2",
+        source_metadata_verifier,
+    )
+    monkeypatch.setattr(
+        ValidationV2SourceBundle,
+        "revalidate",
+        lambda _self: pytest.fail("mutated authority reached source observations"),
+    )
+    precision_bytes = sources.precision_authority.canonical_bytes
+    object.__setattr__(sources.precision_authority, "canonical_bytes", b"forged")
+    with pytest.raises(ValueError, match="precision authority.*serialization|serialization"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=demand,
+        )
+    object.__setattr__(sources.precision_authority, "canonical_bytes", precision_bytes)
+
+    cost_bytes = sources.cost_authority.canonical_bytes
+    object.__setattr__(sources.cost_authority, "canonical_bytes", b"forged")
+    with pytest.raises(ValueError, match="cost authority.*serialization|serialization"):
+        run_validation_programme_v2(
+            config=config,
+            sources=sources,
+            budget=budget,
+            demand=demand,
+        )
+    object.__setattr__(sources.cost_authority, "canonical_bytes", cost_bytes)
+
+    class NestedLookalike:
+        def __getattribute__(self, name: str) -> object:
+            if name in {"value", "to_dict"}:
+                pytest.fail("nested metadata lookalike accessor was invoked")
+            return object.__getattribute__(self, name)
+
+    source_identity = sources.source_publication.coverage_identity
+    object.__setattr__(sources.source_publication, "coverage_identity", NestedLookalike())
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_source_publication_metadata_v2(sources.source_publication)
+    object.__setattr__(sources.source_publication, "coverage_identity", source_identity)
+
+    aggregate_identity = sources.aggregate_publication.aggregate_identity
+    object.__setattr__(sources.aggregate_publication, "aggregate_identity", NestedLookalike())
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_aggregate_publication_metadata_v2(sources.aggregate_publication)
+    object.__setattr__(sources.aggregate_publication, "aggregate_identity", aggregate_identity)
+
+    precision_request = sources.precision_authority.request
+    object.__setattr__(sources.precision_authority, "request", NestedLookalike())
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_precision_authority_metadata_v2(sources.precision_authority)
+    object.__setattr__(sources.precision_authority, "request", precision_request)
+
+    class DecimalSubclass(Decimal):
+        def __format__(self, format_spec: str, context: Context | None = None, /) -> str:
+            pytest.fail("Decimal subclass formatting was invoked")
+
+    first_precision = sources.precision_authority.entries[0]
+    price_step = first_precision.price_step
+    object.__setattr__(first_precision, "price_step", DecimalSubclass(price_step))
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_precision_authority_metadata_v2(sources.precision_authority)
+    object.__setattr__(first_precision, "price_step", price_step)
+
+    authority_path = sources.precision_authority.authority_source_path
+    object.__setattr__(sources.precision_authority, "authority_source_path", NestedLookalike())
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_precision_authority_metadata_v2(sources.precision_authority)
+    object.__setattr__(sources.precision_authority, "authority_source_path", authority_path)
+
+    cost_dimensions = sources.cost_authority.dimensions
+    object.__setattr__(sources.cost_authority, "dimensions", (NestedLookalike(),))
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_cost_authority_metadata_v2(sources.cost_authority)
+    object.__setattr__(sources.cost_authority, "dimensions", cost_dimensions)
+
+    class FailOnIterationTuple(tuple[object, ...]):
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            pytest.fail("metadata container was iterated before exact-type rejection")
+
+    source_partitions = sources.source_publication.partitions
+    object.__setattr__(
+        sources.source_publication,
+        "partitions",
+        FailOnIterationTuple(source_partitions),
+    )
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_source_publication_metadata_v2(sources.source_publication)
+    object.__setattr__(sources.source_publication, "partitions", source_partitions)
+
+    aggregate_symbols = sources.aggregate_publication.allowed_symbols
+    object.__setattr__(
+        sources.aggregate_publication,
+        "allowed_symbols",
+        FailOnIterationTuple(aggregate_symbols),
+    )
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_aggregate_publication_metadata_v2(sources.aggregate_publication)
+    object.__setattr__(sources.aggregate_publication, "allowed_symbols", aggregate_symbols)
+    object.__setattr__(
+        sources.aggregate_publication,
+        "allowed_symbols",
+        (aggregate_symbols[0],) * 100_001,
+    )
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_aggregate_publication_metadata_v2(sources.aggregate_publication)
+    object.__setattr__(sources.aggregate_publication, "allowed_symbols", aggregate_symbols)
+
+    requested_symbols = sources.precision_authority.request.requested_symbols
+    object.__setattr__(
+        sources.precision_authority.request,
+        "requested_symbols",
+        FailOnIterationTuple(requested_symbols),
+    )
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_precision_authority_metadata_v2(sources.precision_authority)
+    object.__setattr__(
+        sources.precision_authority.request,
+        "requested_symbols",
+        requested_symbols,
+    )
+    object.__setattr__(
+        sources.precision_authority.request,
+        "requested_symbols",
+        (requested_symbols[0],) * 100_001,
+    )
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_precision_authority_metadata_v2(sources.precision_authority)
+    object.__setattr__(
+        sources.precision_authority.request,
+        "requested_symbols",
+        requested_symbols,
+    )
+
+    first_dimension = sources.cost_authority.dimensions[0]
+    exclusions = first_dimension.exclusions
+    object.__setattr__(
+        first_dimension,
+        "exclusions",
+        FailOnIterationTuple(exclusions),
+    )
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_cost_authority_metadata_v2(sources.cost_authority)
+    object.__setattr__(first_dimension, "exclusions", exclusions)
+    reasons = sources.cost_authority.not_evaluated_reasons
+    object.__setattr__(sources.cost_authority, "not_evaluated_reasons", ("missing",) * 10)
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_cost_authority_metadata_v2(sources.cost_authority)
+    object.__setattr__(sources.cost_authority, "not_evaluated_reasons", reasons)
+
+    class PathLookalike:
+        def __eq__(self, other: object) -> bool:
+            pytest.fail("publication-root lookalike equality was invoked")
+
+    aggregate_root = sources.aggregate_publication.publication_root
+    object.__setattr__(sources.aggregate_publication, "publication_root", PathLookalike())
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_aggregate_publication_metadata_v2(sources.aggregate_publication)
+    object.__setattr__(sources.aggregate_publication, "publication_root", aggregate_root)
+
+    cost_root = sources.cost_authority.publication_root
+    object.__setattr__(sources.cost_authority, "publication_root", PathLookalike())
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_cost_authority_metadata_v2(sources.cost_authority)
+    object.__setattr__(sources.cost_authority, "publication_root", cost_root)
+
+    object.__setattr__(
+        sources.source_publication,
+        "partitions",
+        (source_partitions[0],) * 100_001,
+    )
+    with pytest.raises(TypeError, match="non-exact nested metadata"):
+        module.verify_validation_source_publication_metadata_v2(sources.source_publication)
+    object.__setattr__(sources.source_publication, "partitions", source_partitions)
+
+
+def test_public_runner_rejects_mismatched_ledger_policy_before_minute_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    mismatched = replace(
+        config,
+        access_ledger_identity=type(config.access_ledger_identity).from_payload(
+            {"mismatch": "caller-created-ledger-policy"}
+        ),
+    )
+    monkeypatch.setattr(
+        ValidationV2SourceBundle,
+        "revalidate",
+        lambda _self: pytest.fail("mismatched ledger policy revalidated source parents"),
+    )
+    monkeypatch.setattr(
+        module,
+        "read_verified_minute_path_v2",
+        lambda *_args, **_kwargs: pytest.fail(
+            "mismatched ledger policy opened protected minute rows"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="access ledger identity"):
+        run_validation_programme_v2(
+            config=mismatched,
+            sources=sources,
+            budget=budget,
+            demand=demand,
+        )
+
+
 def test_public_runner_rejects_mutated_aggregate_bytes_before_minute_read(
     v2_chain: tuple[Any, ...],
     tmp_path: Path,
@@ -409,6 +1082,11 @@ def test_public_runner_rejects_final_scope_substitution_before_minute_read(
         sources.boundary,
         "allowed_intervals",
         sources.boundary.forbidden_temporal_intervals,
+    )
+    monkeypatch.setattr(
+        ValidationV2SourceBundle,
+        "revalidate",
+        lambda _self: pytest.fail("final-scope substitution revalidated source parents"),
     )
     monkeypatch.setattr(
         module,

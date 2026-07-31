@@ -651,7 +651,9 @@ def test_candidate_signal_verifier_reopens_original_v1_parent_bytes() -> None:
     series = _series(_bars([100.0] * 24 + [102.1]))
     definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
     [signal] = detect_candidate_signals(definition, series)
-    partition = series.parent_snapshot_directory / series.parent_snapshot_manifest.partitions[0].path
+    partition = (
+        series.parent_snapshot_directory / series.parent_snapshot_manifest.partitions[0].path
+    )
     original = partition.read_bytes()
     partition.write_bytes(original + b"tamper")
     try:
@@ -920,6 +922,35 @@ def test_a_sma_and_tsmom_emit_only_nonzero_sign_transitions_after_warmup() -> No
     momentum = _detect(_slot("A", "time_series_momentum", lookback=24), _bars(momentum_closes))
     assert len(momentum) == 1
     assert momentum[0].direction == 1
+
+
+def test_detector_rejects_first_signal_beyond_optional_emission_ceiling() -> None:
+    slot = _slot("A", "donchian_breakout", lookback=24)
+    overlapping_series = _series(_bars([100.0] * 24 + [102.0, 100.0, 103.0]))
+    overlapping_definition = _definition(slot, overlapping_series)
+
+    assert len(detect_candidate_signals(overlapping_definition, overlapping_series)) == 1
+    assert (
+        len(
+            detect_candidate_signals(
+                overlapping_definition,
+                overlapping_series,
+                max_emitted_signals=1,
+            )
+        )
+        == 1
+    )
+
+    nonoverlapping_series = _series(_bars([100.0] * 24 + [102.0, 100.0] + [100.0] * 23 + [103.0]))
+    nonoverlapping_definition = _definition(slot, nonoverlapping_series)
+
+    assert len(detect_candidate_signals(nonoverlapping_definition, nonoverlapping_series)) == 2
+    with pytest.raises(ValueError, match="signal emission.*ceiling"):
+        detect_candidate_signals(
+            nonoverlapping_definition,
+            nonoverlapping_series,
+            max_emitted_signals=1,
+        )
 
 
 def test_a_transition_feature_start_includes_the_prior_state_input() -> None:

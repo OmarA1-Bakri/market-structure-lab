@@ -416,8 +416,7 @@ def verify_validation_cost_authority_v2(
 ) -> VerifiedCostAuthorityV2:
     """Reopen every original parent and authority byte before consumption."""
 
-    if not isinstance(authority, VerifiedCostAuthorityV2):
-        raise TypeError("cost authority must be publisher-issued")
+    verify_validation_cost_authority_metadata_v2(authority)
     registered = _VERIFIED_COST_AUTHORITIES.get(id(authority))
     if registered is None or registered.authority() is not authority:
         raise ValueError("cost authority is not the registered original")
@@ -480,6 +479,62 @@ def verify_validation_cost_authority_v2(
         "_SUCCESS",
     }:
         raise ValueError("cost authority publication has missing or extra artifacts")
+    return authority
+
+
+def verify_validation_cost_authority_metadata_v2(
+    authority: VerifiedCostAuthorityV2,
+) -> VerifiedCostAuthorityV2:
+    """Verify registered cost metadata without reopening authority artifacts."""
+
+    if type(authority) is not VerifiedCostAuthorityV2:
+        raise TypeError("cost authority must be the exact publisher-issued type")
+    if (
+        type(authority.evaluation_status) is not CostEvaluationStatusV2
+        or type(authority.canonical_bytes) is not bytes
+        or type(authority.publication_root) is not type(Path())
+        or type(authority.conclusion) is not CostConclusionV2
+        or type(authority.cost_identity) is not CostAuthorityIdentityV2
+        or type(authority.incomplete_promotion_grade_dimensions) is not tuple
+        or len(authority.incomplete_promotion_grade_dimensions) > len(REQUIRED_COST_DIMENSIONS_V2)
+        or any(type(item) is not str for item in authority.incomplete_promotion_grade_dimensions)
+        or type(authority.not_evaluated_reasons) is not tuple
+        or len(authority.not_evaluated_reasons) > len(REQUIRED_COST_DIMENSIONS_V2)
+        or any(type(item) is not str for item in authority.not_evaluated_reasons)
+        or type(authority.dimensions) is not tuple
+        or len(authority.dimensions) != len(REQUIRED_COST_DIMENSIONS_V2)
+        or any(
+            type(item) is not CostDimensionEvidenceV2
+            or type(item.dimension) is not CostDimensionV2
+            or type(item.status) is not CostEvidenceStatusV2
+            or type(item.exclusions) is not tuple
+            or len(item.exclusions) > 100_000
+            or any(type(value) is not str for value in item.exclusions)
+            or type(item.archive_sha256) is not tuple
+            or len(item.archive_sha256) > 100_000
+            or any(type(value) is not str for value in item.archive_sha256)
+            or type(item.checksum_sha256) is not tuple
+            or len(item.checksum_sha256) > 100_000
+            or any(type(value) is not str for value in item.checksum_sha256)
+            for item in authority.dimensions
+        )
+    ):
+        raise TypeError("cost authority contains non-exact nested metadata")
+    registered = _VERIFIED_COST_AUTHORITIES.get(id(authority))
+    if registered is None or registered.authority() is not authority:
+        raise ValueError("cost authority is not the registered original")
+    try:
+        current = publication_json_bytes(authority.to_dict())
+        identity = CostAuthorityIdentityV2.from_payload(authority._identity_payload())
+    except Exception as error:
+        raise ValueError("cost authority current serialization is invalid") from error
+    if (
+        current != registered.canonical_bytes
+        or authority.canonical_bytes != registered.canonical_bytes
+        or authority.cost_identity != identity
+        or authority.publication_root != registered.publication_root
+    ):
+        raise ValueError("cost authority serialization or identity differs from original")
     return authority
 
 
@@ -976,5 +1031,6 @@ __all__ = [
     "load_validation_cost_authority_v2",
     "publish_validation_cost_authority_v2",
     "verified_cost_authority_bytes_v2",
+    "verify_validation_cost_authority_metadata_v2",
     "verify_validation_cost_authority_v2",
 ]

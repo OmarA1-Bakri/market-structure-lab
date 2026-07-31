@@ -788,6 +788,60 @@ def verify_validation_aggregate_publication_v2(
     return publication
 
 
+def verify_validation_aggregate_publication_metadata_v2(
+    publication: AggregatePublicationV2,
+) -> AggregatePublicationV2:
+    """Verify registered aggregate metadata without reading aggregate artifacts."""
+
+    if type(publication) is not AggregatePublicationV2:
+        raise TypeError("aggregate publication must be the exact verifier-issued type")
+    if (
+        type(publication.status) is not ScopedSourceStatusV2
+        or type(publication.canonical_bytes) is not bytes
+        or type(publication.publication_root) is not type(Path())
+        or type(publication.aggregate_identity) is not AggregatePublicationIdentityV2
+        or type(publication.allowed_symbols) is not tuple
+        or len(publication.allowed_symbols) > _HARD_BUDGET_CEILINGS["max_members"]
+        or any(type(item) is not str for item in publication.allowed_symbols)
+        or type(publication.allowed_intervals) is not tuple
+        or len(publication.allowed_intervals) > _HARD_BUDGET_CEILINGS["max_members"]
+        or any(
+            type(item) is not tuple
+            or len(item) != 2
+            or any(type(part) is not str for part in item)
+            for item in publication.allowed_intervals
+        )
+        or type(publication.target_timeframes) is not tuple
+        or len(publication.target_timeframes) > len(_TARGET_TIMEFRAMES)
+        or any(type(item) is not str for item in publication.target_timeframes)
+        or type(publication.parent_partition_bindings) is not tuple
+        or len(publication.parent_partition_bindings)
+        > _HARD_BUDGET_CEILINGS["max_parent_partitions"]
+        or any(
+            type(item) is not tuple
+            or len(item) != 6
+            or any(type(part) not in (str, int) for part in item)
+            for item in publication.parent_partition_bindings
+        )
+        or type(publication.members) is not tuple
+        or len(publication.members) > _HARD_BUDGET_CEILINGS["max_members"]
+        or any(type(member) is not AggregateMemberV2 for member in publication.members)
+        or any(
+            type(member.partitions) is not tuple
+            or type(member.source_partition_paths) is not tuple
+            or len(member.source_partition_paths)
+            > _HARD_BUDGET_CEILINGS["max_parent_partitions"]
+            or any(type(path) is not str for path in member.source_partition_paths)
+            or len(member.partitions) > _HARD_BUDGET_CEILINGS["max_output_files"]
+            or any(type(item) is not AggregatePartitionV2 for item in member.partitions)
+            for member in publication.members
+        )
+    ):
+        raise TypeError("aggregate publication contains non-exact nested metadata")
+    _validate_registered_publication(publication, reopen_original=False)
+    return publication
+
+
 def load_validation_aggregate_publication_v2(
     *,
     publication_root: Path,
@@ -2400,5 +2454,6 @@ __all__ = [
     "publish_validation_aggregates_v2",
     "verify_original_aggregate_series_v2",
     "verify_verified_aggregate_series_v2",
+    "verify_validation_aggregate_publication_metadata_v2",
     "verify_validation_aggregate_publication_v2",
 ]
