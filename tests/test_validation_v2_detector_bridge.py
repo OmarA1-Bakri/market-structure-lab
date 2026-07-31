@@ -394,24 +394,7 @@ def test_v1_and_v2_identical_bar_clocks_emit_identical_vs_0001_signal_clocks(
     api = _bridge_api()
     bridged = api["bridge_verified_aggregate_series_v2"](_open_series(aggregate_publication))
     v2_definition = api["candidate_definition_for_verified_series"](_vs_0001(), bridged)
-    v1_bars = tuple(
-        v1_candidate_tests._bar(
-            index,
-            timeframe=bridged.target_timeframe,
-            symbol=bridged.symbol,
-            segment=bridged.segment_id,
-            open_=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-            volume=bar.volume,
-        )
-        for index, bar in enumerate(bridged.bars)
-    )
-    assert tuple(bar.timestamp for bar in v1_bars) == tuple(
-        bar.timestamp for bar in bridged.bars
-    )
-    v1_series = v1_candidate_tests._series(v1_bars)
+    v1_series = v1_candidate_tests._series(bridged.bars)
     v1_definition = model_module.candidate_definition_for_slot(_vs_0001(), v1_series)
 
     v2_signals = detect_candidate_signals(v2_definition, bridged)

@@ -19,6 +19,7 @@ import polars as pl
 from market_structure_lab.core.artifact_io import read_bounded_regular
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import (
+    CONTINUITY_ID,
     CanonicalAggregateBar,
     canonical_source_row_identity,
 )
@@ -58,15 +59,59 @@ _AGGREGATE_SCHEMA_V2 = "phase5-validation-development-aggregates-v2"
 
 @dataclass(frozen=True, slots=True)
 class _CausalAggregateBarV2:
-    """The causal aggregate fields consumed by the canonical detectors."""
+    """Causal V2 fields with an explicitly unavailable V1 provenance adapter."""
 
     timestamp: datetime
     bar_close: datetime
+    symbol: str
+    target_timeframe: str
+    segment_id: int
+    source_row_count: int
     open: float
     high: float
     low: float
     close: float
     volume: float
+    schema_version: int = 1
+    source_timeframe: str = "1m"
+    continuity: str = CONTINUITY_ID
+    source_row_ids: tuple[str, ...] = ()
+    source_sha256: str | None = None
+    parent_snapshot_sha256: str | None = None
+    row_sha256: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize only after a caller supplies complete, valid V1 identities."""
+
+        if (
+            len(self.source_row_ids) != self.source_row_count
+            or self.source_sha256 is None
+            or self.parent_snapshot_sha256 is None
+            or self.row_sha256 is None
+        ):
+            raise ValueError(
+                "V1 serialization requires independently supplied complete source identities"
+            )
+        return CanonicalAggregateBar(
+            schema_version=self.schema_version,
+            timestamp=self.timestamp,
+            bar_close=self.bar_close,
+            symbol=self.symbol,
+            source_timeframe=self.source_timeframe,
+            target_timeframe=self.target_timeframe,
+            segment_id=self.segment_id,
+            continuity=self.continuity,
+            open=self.open,
+            high=self.high,
+            low=self.low,
+            close=self.close,
+            volume=self.volume,
+            source_row_count=self.source_row_count,
+            source_row_ids=self.source_row_ids,
+            source_sha256=self.source_sha256,
+            parent_snapshot_sha256=self.parent_snapshot_sha256,
+            row_sha256=self.row_sha256,
+        ).to_dict()
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -851,6 +896,10 @@ def bridge_verified_aggregate_series_v2(
         _CausalAggregateBarV2(
             timestamp=row.timestamp,
             bar_close=row.timestamp + timedelta(hours=timeframe_hours),
+            symbol=row.symbol,
+            target_timeframe=row.target_timeframe,
+            segment_id=row.segment_id,
+            source_row_count=row.source_row_count,
             open=float(row.open),
             high=float(row.high),
             low=float(row.low),
@@ -931,11 +980,22 @@ def _candidate_series_v2_snapshot(series: VerifiedCandidateSeriesV2) -> tuple[ob
             (
                 bar.timestamp,
                 bar.bar_close,
+                bar.symbol,
+                bar.target_timeframe,
+                bar.segment_id,
+                bar.source_row_count,
                 bar.open,
                 bar.high,
                 bar.low,
                 bar.close,
                 bar.volume,
+                bar.schema_version,
+                bar.source_timeframe,
+                bar.continuity,
+                bar.source_row_ids,
+                bar.source_sha256,
+                bar.parent_snapshot_sha256,
+                bar.row_sha256,
             )
             for bar in series.bars
         ),
