@@ -849,7 +849,7 @@ def _require_verified_spot_manifest(manifest: BinanceArchiveRequestManifestV2) -
         raise ValueError("cost authority requires verified official spot archive identity")
     if any(
         request.archive_kind not in {"trades", "aggTrades"}
-        or not request.object_path.startswith("data/spot/")
+        or not request.object_path.startswith("/data/spot/")
         or request.checksum_path != f"{request.object_path}.CHECKSUM"
         for request in manifest.requests
     ):

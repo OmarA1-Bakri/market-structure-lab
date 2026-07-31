@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, replace
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,11 +9,73 @@ from typing import Callable, cast
 
 import pytest
 
-from market_structure_lab.data.validation_source_v2 import ValidationSourcePublicationV2
+from market_structure_lab.data.binance_archive_v2 import (
+    ArchiveBudgetsV2,
+    BinanceArchiveRequestManifestV2,
+    freeze_binance_archive_requests_v2,
+)
+from market_structure_lab.data.validation_source_v2 import (
+    ValidationSourcePublicationV2,
+    discover_scoped_source_v2,
+)
 from market_structure_lab.research import validation_v2_costs as costs
+from market_structure_lab.research.validation_v2_models import (
+    RawDumpIdentityV2,
+    ReconciliationAuthorityV2,
+    SourceCoverageEntryV2,
+    SourceCoveragePublicationV2,
+)
+from market_structure_lab.research.validation_v2_splits import (
+    SplitPolicyV2,
+    freeze_development_split_v2,
+    issue_development_read_boundary_v2,
+)
 
 
 SHA = "a" * 64
+
+
+def _freeze_real_archive_manifest(tmp_path: Path) -> BinanceArchiveRequestManifestV2:
+    coverage = SourceCoveragePublicationV2.freeze(
+        raw_dump=RawDumpIdentityV2("a" * 64, 1, "b" * 64, "public.candles:42", "v1"),
+        reconciliation=ReconciliationAuthorityV2(
+            "c" * 64, ("d" * 64,), ("e" * 64,), "rr-000008-promoted-only"
+        ),
+        compatibility_metadata_sha256="f" * 64,
+        entries=tuple(
+            SourceCoverageEntryV2(
+                symbol,
+                datetime(2024, 1, 1, tzinfo=UTC),
+                datetime(2025, 1, 1, tzinfo=UTC),
+                ("1m", "1h", "4h"),
+                False,
+                True,
+                str(index) * 64,
+            )
+            for index, symbol in enumerate(
+                ("ADAUSDT", "BNBUSDT", "DOGEUSDT", "SOLUSDT", "XRPUSDT"), 1
+            )
+        ),
+    )
+    split = freeze_development_split_v2(
+        coverage=coverage,
+        policy=SplitPolicyV2(6, 180, 1, 5, "public-salt", 24, 24, ("1m", "1h", "4h")),
+    )
+    boundary = issue_development_read_boundary_v2(coverage, split)
+    candidate_root = tmp_path / "empty-candidates"
+    candidate_root.mkdir()
+    availability = discover_scoped_source_v2(
+        boundary=boundary,
+        candidate_root=candidate_root,
+        audit_ledger_root=tmp_path / "source-audit",
+        output_root=tmp_path / "source-publication",
+    )
+    return freeze_binance_archive_requests_v2(
+        boundary=boundary,
+        source_availability=availability,
+        budgets=ArchiveBudgetsV2.testing(),
+        output=tmp_path / "archive-manifest.json",
+    )
 
 
 def _counting_verifier(calls: dict[str, int], key: str) -> Callable[..., object]:
@@ -47,8 +110,8 @@ def _parents(
     requests = (
         SimpleNamespace(
             archive_kind="trades",
-            object_path="data/spot/daily/trades/BTCUSDT/BTCUSDT-trades-2024-01-01.zip",
-            checksum_path="data/spot/daily/trades/BTCUSDT/BTCUSDT-trades-2024-01-01.zip.CHECKSUM",
+            object_path="/data/spot/daily/trades/BTCUSDT/BTCUSDT-trades-2024-01-01.zip",
+            checksum_path="/data/spot/daily/trades/BTCUSDT/BTCUSDT-trades-2024-01-01.zip.CHECKSUM",
             request_sha256="6" * 64,
         ),
     )
@@ -196,7 +259,7 @@ def test_spot_funding_not_applicable_requires_verified_spot_archive_identity(
 ) -> None:
     _patch_parent_verifiers(monkeypatch)
     parents = _parents(tmp_path)
-    parents.manifest.requests[0].object_path = "data/futures/daily/trades/BTCUSDT/x.zip"
+    parents.manifest.requests[0].object_path = "/data/futures/daily/trades/BTCUSDT/x.zip"
     with pytest.raises(ValueError, match="spot"):
         costs.publish_validation_cost_authority_v2(
             source_publication=parents.minute,
@@ -210,6 +273,14 @@ def test_spot_funding_not_applicable_requires_verified_spot_archive_identity(
             archive_acquisition=parents.acquisition,
             output_root=tmp_path / "cost-authority",
         )
+
+
+def test_spot_manifest_accepts_canonical_path_from_registered_archive_freezer(
+    tmp_path: Path,
+) -> None:
+    manifest = _freeze_real_archive_manifest(tmp_path)
+
+    costs._require_verified_spot_manifest(manifest)  # noqa: SLF001
 
 
 def test_direct_construction_copy_and_unregistered_reconstruction_are_rejected(
