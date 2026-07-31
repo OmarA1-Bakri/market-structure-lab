@@ -518,3 +518,30 @@ def test_chunking_and_fixed_hard_ceilings_are_enforced() -> None:
     assert consumed == 3
     with pytest.raises(ValueError, match="hard ceiling"):
         _budget(max_source_rows=50_000_001)
+
+
+def test_reader_budget_rejects_before_parent_rederivation_or_output_iteration(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+
+    minute = _publish_minute(v2_chain, tmp_path)
+    publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+    monkeypatch.setattr(
+        module,
+        "_verify_rederived_members",
+        lambda *_args, **_kwargs: pytest.fail("reader rederived minute parents"),
+    )
+    monkeypatch.setattr(
+        module,
+        "iter_bounded_regular_lines",
+        lambda *_args, **_kwargs: pytest.fail("reader traversed output rows"),
+    )
+
+    with pytest.raises(ValueError, match="row budget"):
+        tuple(
+            iter_verified_aggregate_rows_v2(
+                publication,
+                budget=_budget(max_aggregate_rows=1),
+            )
+        )

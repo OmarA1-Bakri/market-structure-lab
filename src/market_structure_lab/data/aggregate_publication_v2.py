@@ -754,7 +754,22 @@ def iter_verified_aggregate_rows_v2(
 ) -> Iterator[AggregateRowV2]:
     """Iterate bounded original aggregate bytes from a verifier-issued capability."""
 
-    registered = _validate_registered_publication(publication)
+    registered = _validate_registered_publication(
+        publication,
+        reopen_original=False,
+    )
+    if publication.row_count > budget.max_aggregate_rows:
+        raise ValueError("aggregate read exceeds row budget")
+    if publication.byte_count > budget.max_output_bytes:
+        raise ValueError("aggregate read exceeds byte budget")
+    if sum(len(member.partitions) for member in publication.members) > budget.max_output_files:
+        raise ValueError("aggregate read exceeds file budget")
+    if any(
+        partition.row_count > budget.max_rows_per_partition
+        for member in publication.members
+        for partition in member.partitions
+    ):
+        raise ValueError("aggregate partition exceeds row buffer budget")
     verify_validation_aggregate_publication_v2(
         publication,
         minute_publication=registered.minute,
@@ -763,12 +778,6 @@ def iter_verified_aggregate_rows_v2(
         boundary=registered.boundary,
         availability=registered.availability,
     )
-    if publication.row_count > budget.max_aggregate_rows:
-        raise ValueError("aggregate read exceeds row budget")
-    if publication.byte_count > budget.max_output_bytes:
-        raise ValueError("aggregate read exceeds byte budget")
-    if sum(len(member.partitions) for member in publication.members) > budget.max_output_files:
-        raise ValueError("aggregate read exceeds file budget")
     if (
         read_bounded_regular(publication.publication_root / "publication.json", _MAX_CONTROL_BYTES)
         != publication.canonical_bytes
@@ -1713,6 +1722,8 @@ def _register(
 
 def _validate_registered_publication(
     publication: AggregatePublicationV2,
+    *,
+    reopen_original: bool = True,
 ) -> _AggregateRegistration:
     if not isinstance(publication, AggregatePublicationV2):
         raise TypeError("aggregate publication must be verifier-issued")
@@ -1730,15 +1741,19 @@ def _validate_registered_publication(
         )
     except Exception as error:
         raise ValueError("aggregate publication current serialization is invalid") from error
-    if (
-        current_bytes != registered.publication_bytes
-        or publication.canonical_bytes != registered.publication_bytes
-        or publication.aggregate_identity != current_identity
-        or read_bounded_regular(
+    original_changed = (
+        reopen_original
+        and read_bounded_regular(
             registered.publication_root / "publication.json",
             _MAX_CONTROL_BYTES,
         )
         != registered.publication_bytes
+    )
+    if (
+        current_bytes != registered.publication_bytes
+        or publication.canonical_bytes != registered.publication_bytes
+        or publication.aggregate_identity != current_identity
+        or original_changed
     ):
         raise ValueError("aggregate publication serialization or identity differs from original")
     return registered
