@@ -18,7 +18,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 from typing import Any, ClassVar
 import weakref
@@ -1171,6 +1170,7 @@ def _publish(publication: ValidationPrecisionAuthorityV2) -> None:
     if path_exists_no_follow(root):
         raise FileExistsError(f"refusing existing precision publication: {root}")
     stage = Path(tempfile.mkdtemp(prefix=f".{root.name}.", suffix=".tmp", dir=root.parent))
+    renamed = False
     try:
         _write_no_clobber(stage / "publication.json", publication.canonical_bytes)
         _write_no_clobber(
@@ -1179,9 +1179,18 @@ def _publish(publication: ValidationPrecisionAuthorityV2) -> None:
         )
         _fsync_tree(stage)
         _rename_no_replace(stage, root)
+        renamed = True
         _fsync_directory(root.parent)
-    except Exception:
-        shutil.rmtree(stage, ignore_errors=True)
+    except Exception as error:
+        phase = "after" if renamed else "before"
+        error.add_note(
+            f"precision publication failed {phase} atomic rename; "
+            "no unanchored pathname cleanup was attempted"
+        )
+        # The stage name may already have been vacated and recreated, and a
+        # pre-rename failure also does not prove that the pathname still names
+        # our inode.  Retaining it is safer than recursively deleting another
+        # actor's directory.
         raise
 
 

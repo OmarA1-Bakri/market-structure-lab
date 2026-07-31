@@ -361,3 +361,53 @@ def test_post_commit_drift_never_deletes_concurrent_replacement_sentinel(
             output_root=output,
         )
     assert (output / "sentinel.txt").read_text(encoding="utf-8") == "concurrent replacement"
+
+
+def test_post_rename_fsync_failure_preserves_recreated_stage_sentinel(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from market_structure_lab.data import validation_precision_authority_v2 as module
+
+    parents = _parents(v2_chain, tmp_path)
+    boundary = parents[2]
+    source, verifier = _historical_evidence(tmp_path, boundary, monkeypatch)
+    output = tmp_path / "precision-post-rename-race"
+    original_rename = module._rename_no_replace
+    original_fsync_directory = module._fsync_directory
+    recreated: dict[str, Path] = {}
+
+    def rename_then_recreate(stage: Path, destination: Path) -> None:
+        original_rename(stage, destination)
+        stage.mkdir()
+        sentinel = stage / "sentinel.txt"
+        sentinel.write_text("post-rename replacement", encoding="utf-8")
+        recreated["sentinel"] = sentinel
+
+    def fail_parent_fsync(path: Path) -> None:
+        if path == output.parent:
+            raise OSError("simulated post-rename parent fsync failure")
+        original_fsync_directory(path)
+
+    monkeypatch.setattr(module, "_rename_no_replace", rename_then_recreate)
+    monkeypatch.setattr(module, "_fsync_directory", fail_parent_fsync)
+
+    with pytest.raises(OSError, match="post-rename parent fsync failure"):
+        publish_validation_precision_authority_v2(
+            request=_request(
+                boundary,
+                PrecisionSourceKindV2.PUBLISHER_HISTORICAL_SCHEDULE,
+                limitation=None,
+            ),
+            coverage=parents[0],
+            split=parents[1],
+            boundary=boundary,
+            availability=parents[3],
+            minute_publication=parents[4],
+            aggregate_publication=parents[5],
+            authority_source_path=source,
+            verifier_evidence_path=verifier,
+            output_root=output,
+        )
+
+    assert output.is_dir()
+    assert recreated["sentinel"].read_text(encoding="utf-8") == "post-rename replacement"
