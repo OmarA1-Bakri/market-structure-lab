@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -8,6 +9,68 @@ from market_structure_lab.research.validation_v2_receipts import (
     select_terminal_attempts_v2,
     verify_validation_v2_receipts,
 )
+
+
+class _PathReceiptClaim:
+    def __init__(self, path: Path, move_hook=None) -> None:  # type: ignore[no-untyped-def]
+        self.path = path
+        self.identity = path.stat().st_ino
+        self.move_hook = move_hook
+        self.published_member: Path | None = None
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def move_to(self, destination: Path) -> None:
+        if self.move_hook is not None:
+            self.move_hook(self, destination, True)
+        owned = self._locate_owned()
+        if owned is None:
+            raise RuntimeError("owned receipt stage was replaced")
+        owned.rename(destination)
+        self.path = destination
+
+    def move_member_to(
+        self,
+        relative: str,
+        destination: Path,
+        *,
+        destination_directory_handle: object | None = None,
+    ) -> None:
+        del destination_directory_handle
+        if self.move_hook is not None:
+            self.move_hook(self, destination, False)
+        owned = self._locate_owned()
+        if owned is None:
+            raise RuntimeError("owned receipt stage was replaced")
+        source = owned / relative
+        source.rename(destination)
+        self.path = owned
+        self.published_member = destination
+
+    def delete_exact(self) -> None:
+        owned = self._locate_owned()
+        if owned is not None:
+            shutil.rmtree(owned)
+
+    def _locate_owned(self) -> Path | None:
+        for candidate in self.path.parent.iterdir():
+            if candidate.is_dir() and candidate.stat().st_ino == self.identity:
+                return candidate
+        return None
+
+
+class _PathReceiptFilesystem:
+    def pin_rename_directory(self, path: Path):  # type: ignore[no-untyped-def]
+        from contextlib import nullcontext
+
+        return nullcontext(path)
+
+    def regular_exists_relative(self, directory: Path, name: str) -> bool:
+        return (directory / name).is_file()
 
 
 def _payload(slot: str, attempt: int) -> dict[str, object]:
@@ -82,3 +145,230 @@ def test_receipt_rejects_retry_gaps_and_unsafe_slot_paths(tmp_path: Path) -> Non
         publish_validation_v2_receipt(tmp_path, _payload("../escape", 1))
     with pytest.raises(ValueError, match="attempt"):
         publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+
+
+def test_receipt_publication_failure_leaves_no_receipt_or_temporary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    def fail_move(_source: Path, _destination: Path) -> None:
+        raise OSError("durable publication failed")
+
+    monkeypatch.setattr(module, "durable_move_no_replace", fail_move)
+
+    with pytest.raises(OSError, match="durable publication failed"):
+        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert not (tmp_path / "VS-0001").exists()
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_receipt_commits_new_slot_directory_before_durable_file_move(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    calls: list[tuple[str, Path]] = []
+
+    def move(source: Path, destination: Path) -> None:
+        calls.append(("move", destination))
+        source.rename(destination)
+
+    monkeypatch.setattr(
+        module,
+        "fsync_directory_posix",
+        lambda path: calls.append(("fsync", path)),
+    )
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert receipt.path.is_file()
+    assert calls == [
+        ("fsync", tmp_path),
+        ("move", receipt.path),
+    ]
+
+
+def test_windows_receipt_uses_write_through_move_without_directory_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    moves: list[tuple[Path, Path, bool, tuple[str, ...]]] = []
+
+    def move(claim: _PathReceiptClaim, destination: Path, is_directory: bool) -> None:
+        assert not destination.exists()
+        moves.append(
+            (
+                claim.path,
+                destination,
+                is_directory,
+                tuple(sorted(path.name for path in claim.path.iterdir())),
+            )
+        )
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "fsync_directory_posix",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("Windows receipt publication must not fsync a directory descriptor")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathReceiptClaim(path, move),
+    )
+
+    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert len(moves) == 1
+    source, destination, source_was_directory, members = moves[0]
+    assert destination == receipt.path.parent
+    assert source.parent == tmp_path
+    assert source_was_directory is True
+    assert members == (receipt.path.name,)
+    assert not source.exists()
+
+
+def test_windows_first_receipt_move_failure_leaves_no_slot_or_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    def fail_move(claim: _PathReceiptClaim, destination: Path, is_directory: bool) -> None:
+        assert claim.path.is_dir()
+        assert is_directory
+        assert not destination.exists()
+        raise OSError("Windows write-through move failed")
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_windows_handle_filesystem",
+        _PathReceiptFilesystem,
+    )
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathReceiptClaim(path, fail_move),
+    )
+
+    with pytest.raises(OSError, match="write-through"):
+        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_windows_receipt_first_slot_directory_and_retry_file_are_additive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    moves: list[tuple[Path, Path, bool]] = []
+
+    def move(claim: _PathReceiptClaim, destination: Path, is_directory: bool) -> None:
+        moves.append((claim.path, destination, is_directory))
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_windows_handle_filesystem",
+        _PathReceiptFilesystem,
+    )
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathReceiptClaim(path, move),
+    )
+
+    first = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+    second = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+
+    assert first.path.is_file()
+    assert second.path.is_file()
+    assert [(destination, was_directory) for _, destination, was_directory in moves] == [
+        (tmp_path / "VS-0001", True),
+        (second.path, False),
+    ]
+
+
+def test_windows_first_receipt_stage_swap_preserves_foreign_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    foreign_stage: Path | None = None
+
+    def swap(claim: _PathReceiptClaim, _destination: Path, is_directory: bool) -> None:
+        nonlocal foreign_stage
+        assert is_directory
+        owned_away = claim.path.with_name(claim.path.name + ".owned")
+        claim.path.rename(owned_away)
+        claim.path.mkdir()
+        (claim.path / "foreign-sentinel").write_text("preserve", encoding="utf-8")
+        foreign_stage = claim.path
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathReceiptClaim(path, swap),
+    )
+
+    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert receipt.path.is_file()
+    assert foreign_stage is not None
+    assert (foreign_stage / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"
+
+
+def test_windows_retry_receipt_stage_swap_preserves_foreign_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_windows_handle_filesystem",
+        _PathReceiptFilesystem,
+    )
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathReceiptClaim(path),
+    )
+    publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+    foreign_stage: Path | None = None
+
+    def swap(claim: _PathReceiptClaim, _destination: Path, is_directory: bool) -> None:
+        nonlocal foreign_stage
+        assert not is_directory
+        owned_away = claim.path.with_name(claim.path.name + ".owned")
+        claim.path.rename(owned_away)
+        claim.path.mkdir()
+        (claim.path / "foreign-sentinel").write_text("preserve", encoding="utf-8")
+        foreign_stage = claim.path
+
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathReceiptClaim(path, swap),
+    )
+
+    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+
+    assert receipt.path.is_file()
+    assert foreign_stage is not None
+    assert (foreign_stage / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"

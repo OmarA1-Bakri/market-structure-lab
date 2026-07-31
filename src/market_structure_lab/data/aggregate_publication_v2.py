@@ -12,8 +12,6 @@ from collections.abc import Iterator
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-import ctypes
-import errno
 import hashlib
 import json
 import os
@@ -32,6 +30,10 @@ from market_structure_lab.core.artifact_io import (
     path_exists_no_follow,
     read_bounded_regular,
     require_regular_directory,
+)
+from market_structure_lab.core.fs_durability import (
+    durable_move_no_replace,
+    fsync_directory_posix,
 )
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.validation_source_v2 import (
@@ -2254,12 +2256,6 @@ def _aggregate_row_bytes(row: AggregateRowV2) -> bytes:
 def _publish_stage_no_clobber(stage: Path, destination: Path) -> None:
     _fsync_staged_tree(stage)
     _rename_no_replace(stage, destination)
-    try:
-        _fsync_directory(destination.parent)
-    except Exception:
-        shutil.rmtree(destination, ignore_errors=False)
-        _fsync_directory(destination.parent)
-        raise
 
 
 def _fsync_staged_tree(stage: Path) -> None:
@@ -2283,45 +2279,21 @@ def _fsync_staged_tree(stage: Path) -> None:
         finally:
             os.close(descriptor)
         directories.update(path.parents)
-    for directory in sorted(
-        (item for item in directories if item == stage or stage in item.parents),
-        key=lambda item: len(item.parts),
-        reverse=True,
-    ):
-        _fsync_directory(directory)
+    if not _is_windows_platform():
+        for directory in sorted(
+            (item for item in directories if item == stage or stage in item.parents),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            fsync_directory_posix(directory)
 
 
 def _rename_no_replace(stage: Path, destination: Path) -> None:
-    if os.name == "nt":
-        os.rename(stage, destination)
-        return
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise RuntimeError("atomic no-replace directory publication is unsupported")
-    renameat2.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_uint,
-    ]
-    renameat2.restype = ctypes.c_int
-    result = renameat2(-100, os.fsencode(stage), -100, os.fsencode(destination), 1)
-    if result == 0:
-        return
-    error_number = ctypes.get_errno()
-    if error_number == errno.EEXIST:
-        raise FileExistsError(f"refusing existing aggregate publication: {destination}")
-    raise OSError(error_number, os.strerror(error_number), destination)
+    durable_move_no_replace(stage, destination)
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+def _is_windows_platform() -> bool:
+    return os.name == "nt"
 
 
 def _write_no_clobber(path: Path, content: bytes) -> None:

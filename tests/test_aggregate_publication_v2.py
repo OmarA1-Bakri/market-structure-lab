@@ -571,6 +571,30 @@ def test_atomic_commit_never_replaces_concurrent_destination(
     assert (output / "winner").read_text(encoding="ascii") == "preserve"
 
 
+def test_windows_atomic_commit_uses_write_through_move_without_directory_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    destination = tmp_path / "published"
+    moved: list[tuple[Path, Path]] = []
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(module, "_fsync_staged_tree", lambda _stage: None)
+    monkeypatch.setattr(
+        module,
+        "durable_move_no_replace",
+        lambda source, target: moved.append((source, target)),
+    )
+
+    module._publish_stage_no_clobber(stage, destination)  # noqa: SLF001
+
+    assert moved == [(stage, destination)]
+
+
 def test_chunking_and_fixed_hard_ceilings_are_enforced() -> None:
     import market_structure_lab.data.aggregate_publication_v2 as module
 
