@@ -33,7 +33,14 @@ class _PathReceiptClaim:
         owned.rename(destination)
         self.path = destination
 
-    def move_member_to(self, relative: str, destination: Path) -> None:
+    def move_member_to(
+        self,
+        relative: str,
+        destination: Path,
+        *,
+        destination_directory_handle: object | None = None,
+    ) -> None:
+        del destination_directory_handle
         if self.move_hook is not None:
             self.move_hook(self, destination, False)
         owned = self._locate_owned()
@@ -54,6 +61,16 @@ class _PathReceiptClaim:
             if candidate.is_dir() and candidate.stat().st_ino == self.identity:
                 return candidate
         return None
+
+
+class _PathReceiptFilesystem:
+    def pin_rename_directory(self, path: Path):  # type: ignore[no-untyped-def]
+        from contextlib import nullcontext
+
+        return nullcontext(path)
+
+    def regular_exists_relative(self, directory: Path, name: str) -> bool:
+        return (directory / name).is_file()
 
 
 def _payload(slot: str, attempt: int) -> dict[str, object]:
@@ -235,6 +252,11 @@ def test_windows_first_receipt_move_failure_leaves_no_slot_or_stage(
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(
         module,
+        "_windows_handle_filesystem",
+        _PathReceiptFilesystem,
+    )
+    monkeypatch.setattr(
+        module,
         "_claim_windows_owned_tree",
         lambda path: _PathReceiptClaim(path, fail_move),
     )
@@ -257,6 +279,11 @@ def test_windows_receipt_first_slot_directory_and_retry_file_are_additive(
         moves.append((claim.path, destination, is_directory))
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_windows_handle_filesystem",
+        _PathReceiptFilesystem,
+    )
     monkeypatch.setattr(
         module,
         "_claim_windows_owned_tree",
@@ -312,6 +339,11 @@ def test_windows_retry_receipt_stage_swap_preserves_foreign_tree(
     from market_structure_lab.research import validation_v2_receipts as module
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_windows_handle_filesystem",
+        _PathReceiptFilesystem,
+    )
     monkeypatch.setattr(
         module,
         "_claim_windows_owned_tree",

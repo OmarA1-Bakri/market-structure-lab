@@ -9,6 +9,7 @@ development boundary.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -18,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 from typing import Any, ClassVar, Self
 import weakref
@@ -58,6 +60,8 @@ from market_structure_lab.research.validation_v2_splits import (
 
 _MAX_DESCRIPTOR_BYTES = 1024 * 1024
 _MAX_CANDIDATES = 1_000
+_MAX_WINDOWS_PAIR_PARENT_ENTRIES = 10_000
+_MAX_WINDOWS_PAIR_COMMIT_CANDIDATES = 100
 _AVAILABILITY_FACTORY = object()
 _AVAILABILITY_DOMAIN = "phase5-validation-scoped-source-availability-v2"
 _AUDIT_RECORD_DOMAIN = "phase5-validation-source-access-audit-record-v2"
@@ -1008,6 +1012,7 @@ def verify_scoped_source_availability_v2(
         or registered[2] != publication_path
     ):
         raise ValueError("availability is not an exact verified original publication")
+    _require_windows_pair_commit(publication_path.parent, registered[4].parent)
     if (
         read_bounded_regular(publication_path, _MAX_DESCRIPTOR_BYTES)
         != availability.canonical_bytes
@@ -1108,6 +1113,7 @@ def load_scoped_source_availability_v2(
     """Reopen a discovery publication and its candidate originals."""
 
     root = Path(publication_root)
+    _require_windows_pair_commit_for_first(root)
     payload = _read_json(root / "publication.json")
     availability = _availability_from_dict(payload)
     candidate_bindings = tuple(
@@ -1496,6 +1502,10 @@ def verify_validation_source_publication_v2(
         or registered[5] != expected_parents
     ):
         raise ValueError("validation source is not an exact verified original publication")
+    _require_windows_pair_commit(
+        publication.publication_root,
+        publication.audit_ledger_root,
+    )
     if (
         read_bounded_regular(
             publication.publication_root / "publication.json",
@@ -1550,6 +1560,7 @@ def load_validation_source_publication_v2(
     )
     publication_root = Path(publication_root)
     audit_ledger_root = Path(audit_ledger_root)
+    _require_windows_pair_commit(publication_root, audit_ledger_root)
     canonical_bytes = read_bounded_regular(
         publication_root / "publication.json",
         _MAX_MINUTE_PUBLICATION_BYTES,
@@ -3489,15 +3500,37 @@ def _commit_paired_directories_windows(
     ):
         first_moved = False
         try:
-            for destination in (first_destination, second_destination):
-                if path_exists_no_follow(destination):
-                    raise FileExistsError(
-                        f"refusing stale or concurrent publication: {destination}"
-                    )
-                require_regular_directory(destination.parent)
+            commit_path = _windows_pair_commit_path(first_destination, second_destination)
+            if path_exists_no_follow(commit_path):
+                raise FileExistsError(f"refusing existing paired commit: {commit_path}")
+            with ExitStack() as incomplete_stack:
+                incomplete_claims: list[WindowsOwnedTreeClaim] = []
+                for destination, staged_claim in (
+                    (first_destination, first_claim),
+                    (second_destination, second_claim),
+                ):
+                    if path_exists_no_follow(destination):
+                        incomplete = incomplete_stack.enter_context(
+                            _claim_windows_owned_tree(destination)
+                        )
+                        if incomplete.manifest != staged_claim.manifest:
+                            raise FileExistsError(
+                                f"refusing foreign incomplete publication: {destination}"
+                            )
+                        incomplete_claims.append(incomplete)
+                    require_regular_directory(destination.parent)
+                for incomplete in incomplete_claims:
+                    incomplete.delete_exact()
             first_claim.move_to(first_destination)
             first_moved = True
             second_claim.move_to(second_destination)
+            _publish_windows_pair_commit(
+                commit_path,
+                first_destination=first_destination,
+                first_manifest=first_claim.manifest,
+                second_destination=second_destination,
+                second_manifest=second_claim.manifest,
+            )
         except Exception as error:
             rollback_error: Exception | None = None
             if first_moved:
@@ -3518,6 +3551,182 @@ def _commit_paired_directories_windows(
                     + "; ".join(str(item) for item in failures)
                 ) from error
             raise error
+
+
+def _windows_pair_commit_path(first: Path, second: Path) -> Path:
+    identity = hashlib.sha256(
+        f"{first.absolute()}\0{second.absolute()}".encode("utf-8")
+    ).hexdigest()[:24]
+    return first.parent / f".windows-pair-{identity}.commit.json"
+
+
+def _publish_windows_pair_commit(
+    path: Path,
+    *,
+    first_destination: Path,
+    first_manifest: tuple[tuple[str, str | None], ...],
+    second_destination: Path,
+    second_manifest: tuple[tuple[str, str | None], ...],
+) -> None:
+    payload: dict[str, object] = {
+        "schema_version": "windows-paired-publication-commit-v1",
+        "first_destination": str(first_destination.absolute()),
+        "first_manifest": [list(item) for item in first_manifest],
+        "second_destination": str(second_destination.absolute()),
+        "second_manifest": [list(item) for item in second_manifest],
+    }
+    payload["commit_sha256"] = hash_json("windows-paired-publication-commit-v1", payload)
+    content = publication_json_bytes(payload)
+    stage = Path(tempfile.mkdtemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent))
+    staged_commit = stage / path.name
+    descriptor = os.open(
+        staged_commit,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        with _claim_windows_owned_tree(stage) as claim:
+            try:
+                claim.move_member_to(staged_commit.name, path)
+            finally:
+                claim.delete_exact()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _require_windows_pair_commit(first: Path, second: Path) -> None:
+    if not _is_windows_platform():
+        return
+    path = _windows_pair_commit_path(first, second)
+    values = _exact_mapping(
+        _decode_canonical_object(
+            read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES),
+            "Windows paired publication commit",
+        ),
+        {
+            "schema_version",
+            "first_destination",
+            "first_manifest",
+            "second_destination",
+            "second_manifest",
+            "commit_sha256",
+        },
+        "Windows paired publication commit",
+    )
+    commit_sha256 = values["commit_sha256"]
+    payload = {key: value for key, value in values.items() if key != "commit_sha256"}
+    first_manifest = _decode_windows_pair_manifest(values["first_manifest"])
+    second_manifest = _decode_windows_pair_manifest(values["second_manifest"])
+    if (
+        values["schema_version"] != "windows-paired-publication-commit-v1"
+        or values["first_destination"] != str(first.absolute())
+        or values["second_destination"] != str(second.absolute())
+        or commit_sha256 != hash_json("windows-paired-publication-commit-v1", payload)
+    ):
+        raise ValueError("Windows paired publication commit is invalid")
+    with (
+        _claim_windows_owned_tree(first) as first_claim,
+        _claim_windows_owned_tree(second) as second_claim,
+    ):
+        if first_claim.manifest != first_manifest or second_claim.manifest != second_manifest:
+            raise ValueError("Windows paired publication trees differ from their commit")
+
+
+def _decode_windows_pair_manifest(value: object) -> tuple[tuple[str, str | None], ...]:
+    if not isinstance(value, list) or len(value) > 100_000:
+        raise ValueError("Windows paired publication manifest exceeds its bound")
+    decoded: list[tuple[str, str | None]] = []
+    for item in value:
+        if (
+            not isinstance(item, list)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or (item[1] is not None and not isinstance(item[1], str))
+        ):
+            raise ValueError("Windows paired publication manifest entry is invalid")
+        decoded.append((item[0], item[1]))
+    result = tuple(decoded)
+    paths = tuple(path for path, _ in result)
+    if paths != tuple(sorted(paths)) or len(paths) != len(set(paths)):
+        raise ValueError("Windows paired publication manifest paths are not canonical")
+    for path, digest in result:
+        relative = Path(path)
+        if (
+            not path
+            or relative.is_absolute()
+            or relative.as_posix() != path
+            or ".." in relative.parts
+            or digest is not None
+            and _SHA256.fullmatch(digest) is None
+        ):
+            raise ValueError("Windows paired publication manifest entry is invalid")
+    return result
+
+
+def _require_windows_pair_commit_for_first(first: Path) -> None:
+    if not _is_windows_platform():
+        return
+    candidates = _bounded_windows_pair_commit_candidates(first.parent)
+    matches: list[Path] = []
+    for candidate in candidates:
+        values = _exact_mapping(
+            _decode_canonical_object(
+                read_bounded_regular(candidate, _MAX_DESCRIPTOR_BYTES),
+                "Windows paired publication commit",
+            ),
+            {
+                "schema_version",
+                "first_destination",
+                "first_manifest",
+                "second_destination",
+                "second_manifest",
+                "commit_sha256",
+            },
+            "Windows paired publication commit",
+        )
+        if values.get("first_destination") == str(first.absolute()):
+            second = values.get("second_destination")
+            if not isinstance(second, str):
+                raise ValueError("Windows paired publication commit destination is invalid")
+            _require_windows_pair_commit(first, Path(second))
+            matches.append(candidate)
+    if len(matches) != 1:
+        raise ValueError("Windows paired publication commit is missing or ambiguous")
+
+
+def _bounded_windows_pair_commit_candidates(parent: Path) -> tuple[Path, ...]:
+    require_regular_directory(parent)
+    candidates: list[Path] = []
+    entry_count = 0
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                entry_count += 1
+                if entry_count > _MAX_WINDOWS_PAIR_PARENT_ENTRIES:
+                    raise RuntimeError("Windows paired publication parent scan exceeds its bound")
+                if not (
+                    entry.name.startswith(".windows-pair-") and entry.name.endswith(".commit.json")
+                ):
+                    continue
+                metadata = entry.stat(follow_symlinks=False)
+                file_attributes = int(getattr(metadata, "st_file_attributes", 0))
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or file_attributes & 0x400  # FILE_ATTRIBUTE_REPARSE_POINT
+                ):
+                    raise RuntimeError("Windows paired publication commit must be a regular file")
+                candidates.append(Path(entry.path))
+                if len(candidates) > _MAX_WINDOWS_PAIR_COMMIT_CANDIDATES:
+                    raise RuntimeError("Windows paired publication commit scan exceeds its bound")
+    except OSError as error:
+        raise RuntimeError("Windows paired publication parent scan failed") from error
+    return tuple(sorted(candidates, key=lambda item: item.name))
 
 
 def _claim_windows_owned_tree(path: Path) -> WindowsOwnedTreeClaim:

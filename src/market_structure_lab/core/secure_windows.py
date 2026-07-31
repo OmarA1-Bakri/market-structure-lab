@@ -38,10 +38,17 @@ _FILE_RENAME_FLAG_POSIX_SEMANTICS: Final = 0x00000002
 _ERROR_FILE_EXISTS: Final = 80
 _ERROR_ALREADY_EXISTS: Final = 183
 _FILE_CREATE: Final = 2
+_FILE_OPEN: Final = 1
 _FILE_DIRECTORY_FILE: Final = 0x00000001
+_FILE_NON_DIRECTORY_FILE: Final = 0x00000040
+_FILE_OPEN_REPARSE_POINT: Final = 0x00200000
 _FILE_SYNCHRONOUS_IO_NONALERT: Final = 0x00000020
 _OBJ_CASE_INSENSITIVE: Final = 0x00000040
 _DIRECTORY_CLAIM_ACCESS: Final = 0x00110081
+_REGULAR_PROBE_ACCESS: Final = 0x00100080
+_ERROR_FILE_NOT_FOUND: Final = 2
+_ERROR_PATH_NOT_FOUND: Final = 3
+WINDOWS_NAMESPACE_COMMIT_PROTOCOL: Final = "flush-tree-root-rename-flush-root-v1"
 
 
 class WindowsApi(Protocol):
@@ -66,6 +73,8 @@ class WindowsApi(Protocol):
     def create_directory(self, path: str) -> None: ...
 
     def create_directory_relative(self, parent_handle: int, name: str) -> int: ...
+
+    def regular_exists_relative(self, parent_handle: int, name: str) -> bool: ...
 
     def fd_from_handle(self, handle: int, flags: int) -> int: ...
 
@@ -286,6 +295,44 @@ class CtypesWindowsApi:
             raise RuntimeError("Win32 created an invalid directory handle")
         return int(handle.value)
 
+    def regular_exists_relative(self, parent_handle: int, name: str) -> bool:
+        _require_safe_component(name)
+        name_buffer, unicode_name, attributes = _relative_object_attributes(parent_handle, name)
+        handle = wintypes.HANDLE()
+        io_status = _IoStatusBlock()
+        status = int(
+            self._nt_create_file(
+                ctypes.byref(handle),
+                _REGULAR_PROBE_ACCESS,
+                ctypes.byref(attributes),
+                ctypes.byref(io_status),
+                None,
+                0,
+                FILE_SHARE_READ,
+                _FILE_OPEN,
+                (
+                    _FILE_NON_DIRECTORY_FILE
+                    | _FILE_OPEN_REPARSE_POINT
+                    | _FILE_SYNCHRONOUS_IO_NONALERT
+                ),
+                None,
+                0,
+            )
+        )
+        if status < 0:
+            error = int(self._rtl_ntstatus_to_dos_error(status))
+            if error in {_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND}:
+                return False
+            _raise_windows_error_code(error, name)
+        if handle.value is None:
+            raise RuntimeError("Win32 opened an invalid relative regular handle")
+        opened = int(handle.value)
+        try:
+            _require_regular_attributes(self.attributes(opened))
+        finally:
+            self.close(opened)
+        return True
+
     def fd_from_handle(self, handle: int, flags: int) -> int:
         import msvcrt
 
@@ -430,6 +477,16 @@ class WindowsHandleFilesystem:
             maximum_entries=maximum_entries,
             maximum_file_bytes=maximum_file_bytes,
         )
+
+    @contextmanager
+    def pin_rename_directory(self, path: str | Path) -> Iterator[int]:
+        """Pin the exact directory used as a relative rename authority."""
+
+        with _pin_rename_directory_chain(self._api, path) as handles:
+            yield handles[-1]
+
+    def regular_exists_relative(self, directory_handle: int, name: str) -> bool:
+        return self._api.regular_exists_relative(directory_handle, name)
 
     @contextmanager
     def pin_directory_chain(self, path: str | Path) -> Iterator[tuple[int, ...]]:
@@ -812,8 +869,8 @@ class WindowsOwnedTreeClaim:
         root = root.absolute()
         root_handle = api.open_path(
             os.fspath(root),
-            access=GENERIC_READ | DELETE,
-            share=FILE_SHARE_READ | FILE_SHARE_DELETE,
+            access=GENERIC_READ | GENERIC_WRITE | DELETE,
+            share=FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             creation=OPEN_EXISTING,
             flags=(
                 FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_WRITE_THROUGH
@@ -898,108 +955,94 @@ class WindowsOwnedTreeClaim:
         return self._api.identity(self._root_handle)
 
     def move_to(self, destination: str | Path) -> None:
+        """Commit a tree under ``flush-tree-root-rename-flush-root-v1``.
+
+        Windows cannot flush directory namespaces through ``FlushFileBuffers`` on a
+        parent directory handle. The supported protocol therefore flushes every file
+        and the write-through root handle, closes descendant handles, performs one
+        handle-relative no-replace root rename, flushes that same root handle again,
+        then reopens and authenticates the complete committed tree.
+        """
+
         self._require_open()
         self._verify_contents()
         destination_path = Path(destination).absolute()
         destination_name = _validated_final_component(destination_path)
-        with _pin_rename_directory_chain(self._api, destination_path.parent) as directory_handles:
-            destination_root = self._api.create_directory_relative(
-                directory_handles[-1],
-                destination_name,
-            )
-            if ntpath.normcase(self._api.final_path(destination_root)) != ntpath.normcase(
-                os.fspath(destination_path)
-            ):
-                self._api.delete_handle(destination_root)
-                self._api.close(destination_root)
-                raise RuntimeError("owned publication destination directory was substituted")
-            self._transfer_tree(destination_path, destination_root)
-            _require_current_directory_identity(
+        expected_manifest = self.manifest
+        expected_identity = self.root_identity
+        for _, handle, is_directory, _ in self._members:
+            if not is_directory:
+                self._api.flush(handle)
+        self._api.flush(self._root_handle)
+        for _, handle, _, _ in self._members:
+            self._api.close(handle)
+            self._closed_member_handles.add(handle)
+        try:
+            with _pin_rename_directory_chain(
+                self._api, destination_path.parent
+            ) as directory_handles:
+                self._api.rename_handle(
+                    self._root_handle,
+                    directory_handles[-1],
+                    destination_name,
+                )
+                _require_current_directory_identity(
+                    self._api,
+                    destination_path.parent,
+                    directory_handles[-1],
+                )
+                if ntpath.normcase(self._api.final_path(self._root_handle)) != ntpath.normcase(
+                    os.fspath(destination_path)
+                ):
+                    raise RuntimeError("owned publication destination directory was substituted")
+                self._api.flush(self._root_handle)
+            replacement = WindowsOwnedTreeClaim.acquire(
                 self._api,
                 destination_path,
-                destination_root,
+                maximum_entries=max(len(self._members), 1),
+                maximum_file_bytes=self._maximum_file_bytes,
             )
-        self._root = destination_path
-
-    def _transfer_tree(self, destination_path: Path, destination_root: int) -> None:
-        source_directories = {
-            relative: handle for relative, handle, is_directory, _ in self._members if is_directory
-        }
-        destination_directories: dict[str, int] = {"": destination_root}
-        moved_files: list[tuple[str, int]] = []
-        try:
-            for relative, _, is_directory, _ in sorted(
-                self._members,
-                key=lambda item: (item[0].count("/"), item[0]),
-            ):
-                if not is_directory:
-                    continue
-                parent, name = _split_relative_member(relative)
-                destination_directories[relative] = self._api.create_directory_relative(
-                    destination_directories[parent],
-                    name,
-                )
-            for relative, handle, is_directory, _ in self._members:
-                if is_directory:
-                    continue
-                parent, name = _split_relative_member(relative)
-                self._api.rename_handle(handle, destination_directories[parent], name)
-                moved_files.append((relative, handle))
-                expected = destination_path.joinpath(*relative.split("/"))
-                if ntpath.normcase(self._api.final_path(handle)) != ntpath.normcase(
-                    os.fspath(expected)
-                ):
-                    raise RuntimeError("owned publication member destination was substituted")
-                self._api.flush(handle)
-        except Exception as error:
-            rollback_errors: list[Exception] = []
-            for relative, handle in reversed(moved_files):
-                parent, name = _split_relative_member(relative)
-                source_parent = self._root_handle if not parent else source_directories[parent]
-                try:
-                    self._api.rename_handle(handle, source_parent, name)
-                except Exception as failure:
-                    rollback_errors.append(failure)
-            for relative, handle in sorted(
-                destination_directories.items(),
-                key=lambda item: item[0].count("/"),
-                reverse=True,
-            ):
-                del relative
-                try:
-                    self._api.delete_handle(handle)
-                    self._api.close(handle)
-                except Exception as failure:
-                    rollback_errors.append(failure)
-            if rollback_errors:
-                raise RuntimeError(
-                    "Windows exact-handle tree transfer rollback failed: "
-                    + "; ".join(str(item) for item in rollback_errors)
-                ) from error
+            if replacement.manifest != expected_manifest:
+                replacement.close()
+                raise RuntimeError("owned publication changed during atomic tree commit")
+            if replacement.root_identity != expected_identity:
+                replacement.close()
+                raise RuntimeError("owned publication root identity changed during commit")
+        except Exception:
+            self._reacquire_after_tree_commit(expected_identity)
             raise
-
-        for _, handle, _, _ in sorted(
-            (item for item in self._members if item[2]),
-            key=lambda item: item[0].count("/"),
-            reverse=True,
-        ):
-            self._api.delete_handle(handle)
-            self._api.close(handle)
-        replacement_members = [
-            (
-                relative,
-                destination_directories[relative] if is_directory else handle,
-                is_directory,
-                digest,
-            )
-            for relative, handle, is_directory, digest in self._members
-        ]
-        self._api.delete_handle(self._root_handle)
         self._api.close(self._root_handle)
-        self._root_handle = destination_root
-        self._members = tuple(replacement_members)
+        self._adopt(replacement)
 
-    def move_member_to(self, relative_path: str | Path, destination: str | Path) -> None:
+    def _reacquire_after_tree_commit(self, expected_identity: tuple[int, int]) -> None:
+        current = Path(self._api.final_path(self._root_handle))
+        replacement = WindowsOwnedTreeClaim.acquire(
+            self._api,
+            current,
+            maximum_entries=max(len(self._members), 1),
+            maximum_file_bytes=self._maximum_file_bytes,
+        )
+        if replacement.root_identity != expected_identity:
+            replacement.close()
+            raise RuntimeError("owned publication could not reacquire its tree after failure")
+        self._api.close(self._root_handle)
+        self._adopt(replacement)
+
+    def _adopt(self, replacement: WindowsOwnedTreeClaim) -> None:
+        self._root = replacement._root
+        self._root_handle = replacement._root_handle
+        self._members = replacement._members
+        self._closed_member_handles.clear()
+        self._root_handle_closed = False
+        replacement._closed = True
+
+    def move_member_to(
+        self,
+        relative_path: str | Path,
+        destination: str | Path,
+        *,
+        destination_directory_handle: int | None = None,
+    ) -> None:
         """Move one exact claimed regular-file handle to an additive destination."""
 
         self._require_open()
@@ -1010,23 +1053,40 @@ class WindowsOwnedTreeClaim:
             raise ValueError("owned publication member is not a claimed regular file")
         destination_path = Path(destination).absolute()
         destination_name = _validated_final_component(destination_path)
-        with _pin_rename_directory_chain(self._api, destination_path.parent) as directory_handles:
-            self._api.rename_handle(
+        if destination_directory_handle is None:
+            with _pin_rename_directory_chain(
+                self._api, destination_path.parent
+            ) as directory_handles:
+                self._move_member_to_pinned(
+                    member[1], destination_path, destination_name, directory_handles[-1]
+                )
+        else:
+            self._move_member_to_pinned(
                 member[1],
-                directory_handles[-1],
+                destination_path,
                 destination_name,
+                destination_directory_handle,
             )
-            _require_current_directory_identity(
-                self._api,
-                destination_path.parent,
-                directory_handles[-1],
-            )
-        if ntpath.normcase(self._api.final_path(member[1])) != ntpath.normcase(
+        self._api.flush(member[1])
+        self._published_handles.add(member[1])
+
+    def _move_member_to_pinned(
+        self,
+        handle: int,
+        destination_path: Path,
+        destination_name: str,
+        directory_handle: int,
+    ) -> None:
+        self._api.rename_handle(handle, directory_handle, destination_name)
+        _require_current_directory_identity(
+            self._api,
+            destination_path.parent,
+            directory_handle,
+        )
+        if ntpath.normcase(self._api.final_path(handle)) != ntpath.normcase(
             os.fspath(destination_path)
         ):
             raise RuntimeError("owned publication member did not reach its destination")
-        self._api.flush(member[1])
-        self._published_handles.add(member[1])
 
     def delete_exact(self) -> None:
         self._require_open()
@@ -1182,6 +1242,28 @@ def _require_safe_component(component: str) -> None:
         raise ValueError("secure publication path component is invalid")
 
 
+def _relative_object_attributes(
+    parent_handle: int,
+    name: str,
+) -> tuple[ctypes.Array[Any], _UnicodeString, _ObjectAttributes]:
+    encoded = name.encode("utf-16-le")
+    name_buffer = ctypes.create_unicode_buffer(name)
+    unicode_name = _UnicodeString(
+        len(encoded),
+        len(encoded) + ctypes.sizeof(wintypes.WCHAR),
+        ctypes.cast(name_buffer, wintypes.LPWSTR),
+    )
+    attributes = _ObjectAttributes(
+        ctypes.sizeof(_ObjectAttributes),
+        parent_handle,
+        ctypes.pointer(unicode_name),
+        _OBJ_CASE_INSENSITIVE,
+        None,
+        None,
+    )
+    return name_buffer, unicode_name, attributes
+
+
 def _raise_windows_error(path: str) -> None:
     error = cast(Any, getattr(ctypes, "get_last_error"))()
     _raise_windows_error_code(error, path)
@@ -1275,6 +1357,7 @@ __all__ = [
     "MOVEFILE_REPLACE_EXISTING",
     "MOVEFILE_WRITE_THROUGH",
     "OPEN_EXISTING",
+    "WINDOWS_NAMESPACE_COMMIT_PROTOCOL",
     "WindowsDirectoryClaim",
     "WindowsHandleFilesystem",
     "WindowsOwnedTreeClaim",

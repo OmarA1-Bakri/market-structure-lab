@@ -224,11 +224,18 @@ def publish_validation_v2_receipt(
         raise ValueError("receipt result identity differs")
     slot_root = root / slot
     destination = slot_root / f"attempt-{attempt:04d}.json"
-    if attempt > 1 and not path_exists_no_follow(root / slot / f"attempt-{attempt - 1:04d}.json"):
-        raise ValueError("receipt attempts must be gap-free and start at one")
-    if path_exists_no_follow(destination):
-        raise FileExistsError(f"refusing existing validation V2 receipt: {destination}")
-    if not path_exists_no_follow(slot_root) and _is_windows_platform():
+    if _is_windows_platform():
+        if path_exists_no_follow(slot_root):
+            _publish_windows_retry_receipt(
+                root=root,
+                slot_root=slot_root,
+                destination=destination,
+                attempt=attempt,
+                content=content,
+            )
+            return _receipt_from_payload(destination, receipt_payload, content)
+        if attempt > 1:
+            raise ValueError("receipt attempts must be gap-free and start at one")
         _publish_first_windows_slot_directory(
             root=root,
             slot_root=slot_root,
@@ -236,14 +243,10 @@ def publish_validation_v2_receipt(
             content=content,
         )
         return _receipt_from_payload(destination, receipt_payload, content)
-    if _is_windows_platform():
-        _publish_windows_retry_receipt(
-            root=root,
-            slot_root=slot_root,
-            destination=destination,
-            content=content,
-        )
-        return _receipt_from_payload(destination, receipt_payload, content)
+    if attempt > 1 and not path_exists_no_follow(root / slot / f"attempt-{attempt - 1:04d}.json"):
+        raise ValueError("receipt attempts must be gap-free and start at one")
+    if path_exists_no_follow(destination):
+        raise FileExistsError(f"refusing existing validation V2 receipt: {destination}")
     slot_root_created = False
     if path_exists_no_follow(slot_root):
         require_regular_directory(slot_root)
@@ -316,30 +319,42 @@ def _publish_windows_retry_receipt(
     root: Path,
     slot_root: Path,
     destination: Path,
+    attempt: int,
     content: bytes,
 ) -> None:
-    require_regular_directory(slot_root)
-    stage = Path(tempfile.mkdtemp(prefix=f".{slot_root.name}.", suffix=".tmp", dir=root))
-    staged_receipt = stage / destination.name
-    descriptor = os.open(
-        staged_receipt,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            descriptor = -1
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        with _claim_windows_owned_tree(stage) as claim:
-            try:
-                claim.move_member_to(staged_receipt.name, destination)
-            finally:
-                claim.delete_exact()
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+    filesystem = _windows_handle_filesystem()
+    with filesystem.pin_rename_directory(slot_root) as slot_handle:
+        if attempt > 1 and not filesystem.regular_exists_relative(
+            slot_handle, f"attempt-{attempt - 1:04d}.json"
+        ):
+            raise ValueError("receipt attempts must be gap-free and start at one")
+        if filesystem.regular_exists_relative(slot_handle, destination.name):
+            raise FileExistsError(f"refusing existing validation V2 receipt: {destination}")
+        stage = Path(tempfile.mkdtemp(prefix=f".{slot_root.name}.", suffix=".tmp", dir=root))
+        staged_receipt = stage / destination.name
+        descriptor = os.open(
+            staged_receipt,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = -1
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            with _claim_windows_owned_tree(stage) as claim:
+                try:
+                    claim.move_member_to(
+                        staged_receipt.name,
+                        destination,
+                        destination_directory_handle=slot_handle,
+                    )
+                finally:
+                    claim.delete_exact()
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
 
 def _is_windows_platform() -> bool:
@@ -348,6 +363,10 @@ def _is_windows_platform() -> bool:
 
 def _claim_windows_owned_tree(path: Path) -> WindowsOwnedTreeClaim:
     return WindowsHandleFilesystem().claim_owned_tree(path)
+
+
+def _windows_handle_filesystem() -> WindowsHandleFilesystem:
+    return WindowsHandleFilesystem()
 
 
 def publish_validation_v2_receipts(

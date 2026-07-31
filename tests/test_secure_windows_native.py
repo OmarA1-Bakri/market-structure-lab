@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from contextlib import contextmanager
 
 import pytest
 
@@ -55,20 +56,47 @@ def _payload(slot: str, attempt: int) -> dict[str, object]:
     return payload
 
 
-def test_native_windows_moves_and_deletes_nonempty_owned_tree(tmp_path: Path) -> None:
-    from market_structure_lab.core.secure_windows import WindowsHandleFilesystem
+def test_native_windows_moves_and_deletes_nonempty_owned_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.core.secure_windows import (
+        CtypesWindowsApi,
+        WINDOWS_NAMESPACE_COMMIT_PROTOCOL,
+        WindowsHandleFilesystem,
+    )
 
     stage = tmp_path / "stage"
     (stage / "nested").mkdir(parents=True)
     (stage / "root.json").write_bytes(b"root")
     (stage / "nested" / "child.json").write_bytes(b"child")
     destination = tmp_path / "published"
+    assert WINDOWS_NAMESPACE_COMMIT_PROTOCOL == "flush-tree-root-rename-flush-root-v1"
+    original_rename = CtypesWindowsApi.rename_handle
+    root_commit_observations: list[tuple[bool, bool]] = []
+
+    def observe_atomic_root_commit(
+        self: CtypesWindowsApi,
+        handle: int,
+        destination_directory: int,
+        destination_name: str,
+    ) -> None:
+        before = destination.exists()
+        original_rename(self, handle, destination_directory, destination_name)
+        if destination_name == destination.name:
+            complete = (destination / "root.json").is_file() and (
+                destination / "nested" / "child.json"
+            ).is_file()
+            root_commit_observations.append((before, complete))
+
+    monkeypatch.setattr(CtypesWindowsApi, "rename_handle", observe_atomic_root_commit)
 
     with WindowsHandleFilesystem().claim_owned_tree(stage) as claim:
         claim.move_to(destination)
 
     assert (destination / "root.json").read_bytes() == b"root"
     assert (destination / "nested" / "child.json").read_bytes() == b"child"
+    assert root_commit_observations == [(False, True)]
     competing_stage = tmp_path / "competing-stage"
     competing_stage.mkdir()
     (competing_stage / "candidate.json").write_bytes(b"candidate")
@@ -115,6 +143,71 @@ def test_native_windows_publishes_paired_source_and_audit_trees(tmp_path: Path) 
     )
 
     assert (tmp_path / "source" / "nested" / "source.json").read_bytes() == b"source"
+    assert (tmp_path / "audit" / "audit.json").read_bytes() == b"audit"
+
+
+def test_native_windows_recovers_authenticated_incomplete_pair(tmp_path: Path) -> None:
+    from market_structure_lab.core.secure_windows import WindowsHandleFilesystem
+    from market_structure_lab.data.validation_source_v2 import (
+        _commit_paired_directories_windows,
+        _require_windows_pair_commit,
+    )
+
+    incomplete = tmp_path / "incomplete"
+    incomplete.mkdir()
+    (incomplete / "source.json").write_bytes(b"source")
+    with WindowsHandleFilesystem().claim_owned_tree(incomplete) as claim:
+        claim.move_to(tmp_path / "source")
+
+    source_stage = tmp_path / "source-stage"
+    audit_stage = tmp_path / "audit-stage"
+    source_stage.mkdir()
+    audit_stage.mkdir()
+    (source_stage / "source.json").write_bytes(b"source")
+    (audit_stage / "audit.json").write_bytes(b"audit")
+
+    _commit_paired_directories_windows(
+        first_stage=source_stage,
+        first_destination=tmp_path / "source",
+        second_stage=audit_stage,
+        second_destination=tmp_path / "audit",
+    )
+
+    _require_windows_pair_commit(tmp_path / "source", tmp_path / "audit")
+    assert (tmp_path / "source" / "source.json").read_bytes() == b"source"
+    assert (tmp_path / "audit" / "audit.json").read_bytes() == b"audit"
+
+
+def test_native_windows_recovers_both_roots_before_commit_marker(tmp_path: Path) -> None:
+    from market_structure_lab.core.secure_windows import WindowsHandleFilesystem
+    from market_structure_lab.data.validation_source_v2 import (
+        _commit_paired_directories_windows,
+        _require_windows_pair_commit,
+    )
+
+    for name, content in (("source", b"source"), ("audit", b"audit")):
+        incomplete = tmp_path / f"{name}-incomplete"
+        incomplete.mkdir()
+        (incomplete / f"{name}.json").write_bytes(content)
+        with WindowsHandleFilesystem().claim_owned_tree(incomplete) as claim:
+            claim.move_to(tmp_path / name)
+
+    source_stage = tmp_path / "source-stage"
+    audit_stage = tmp_path / "audit-stage"
+    source_stage.mkdir()
+    audit_stage.mkdir()
+    (source_stage / "source.json").write_bytes(b"source")
+    (audit_stage / "audit.json").write_bytes(b"audit")
+
+    _commit_paired_directories_windows(
+        first_stage=source_stage,
+        first_destination=tmp_path / "source",
+        second_stage=audit_stage,
+        second_destination=tmp_path / "audit",
+    )
+
+    _require_windows_pair_commit(tmp_path / "source", tmp_path / "audit")
+    assert (tmp_path / "source" / "source.json").read_bytes() == b"source"
     assert (tmp_path / "audit" / "audit.json").read_bytes() == b"audit"
 
 
@@ -180,4 +273,45 @@ def test_native_windows_retry_rejects_destination_directory_substitution(
     assert substituted is True
     assert (slot_root / "foreign-sentinel").read_bytes() == b"preserve"
     assert tuple(path.name for path in displaced.iterdir()) == (first.path.name,)
+    assert not any(path.name.startswith(".VS-0001.") for path in tmp_path.iterdir())
+
+
+def test_native_windows_retry_pins_before_predecessor_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.core.secure_windows import WindowsHandleFilesystem
+    from market_structure_lab.research.validation_v2_receipts import (
+        publish_validation_v2_receipt,
+    )
+
+    first = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+    slot_root = first.path.parent
+    displaced = tmp_path / "displaced-before-pin"
+    original_pin = WindowsHandleFilesystem.pin_rename_directory
+    substituted = False
+
+    @contextmanager
+    def substitute_before_pin(self: WindowsHandleFilesystem, path: Path):
+        nonlocal substituted
+        if not substituted:
+            slot_root.rename(displaced)
+            slot_root.mkdir()
+            (slot_root / "foreign-sentinel").write_bytes(b"preserve")
+            substituted = True
+        with original_pin(self, path) as handle:
+            yield handle
+
+    monkeypatch.setattr(
+        WindowsHandleFilesystem,
+        "pin_rename_directory",
+        substitute_before_pin,
+    )
+
+    with pytest.raises(ValueError, match="gap-free"):
+        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+
+    assert substituted is True
+    assert (slot_root / "foreign-sentinel").read_bytes() == b"preserve"
+    assert (displaced / first.path.name).is_file()
     assert not any(path.name.startswith(".VS-0001.") for path in tmp_path.iterdir())

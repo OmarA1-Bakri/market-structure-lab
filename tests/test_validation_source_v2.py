@@ -45,6 +45,19 @@ class _PathOwnedTreeClaim:
     def __exit__(self, *_exc: object) -> None:
         return None
 
+    @property
+    def manifest(self) -> tuple[tuple[str, str | None], ...]:
+        owned = self._locate_owned()
+        if owned is None:
+            return ()
+        return tuple(
+            (
+                path.relative_to(owned).as_posix(),
+                None if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            for path in sorted(owned.rglob("*"))
+        )
+
     def move_to(self, destination: Path) -> None:
         if self.move_hook is not None:
             self.move_hook(self, destination)
@@ -53,6 +66,12 @@ class _PathOwnedTreeClaim:
             raise RuntimeError("owned handle path was replaced")
         owned.rename(destination)
         self.path = destination
+
+    def move_member_to(self, relative_path: str | Path, destination: Path) -> None:
+        owned = self._locate_owned()
+        if owned is None:
+            raise RuntimeError("owned handle path was replaced")
+        (owned / relative_path).rename(destination)
 
     def delete_exact(self) -> None:
         owned = self._locate_owned()
@@ -586,6 +605,97 @@ def test_windows_paired_source_publication_commits_both_staged_trees(
     assert (second_destination / "publication.json").read_text(encoding="utf-8") == "second\n"
 
 
+def test_windows_availability_loader_rejects_uncommitted_root_before_read(
+    issued_v2_publications,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    publication = tmp_path / "publication"
+    publication.mkdir()
+    (publication / "publication.json").write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_read_json",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("uncommitted publication payload must not be read")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="commit is missing or ambiguous"):
+        module.load_scoped_source_availability_v2(
+            publication_root=publication,
+            boundary=boundary,
+        )
+
+
+def test_windows_validation_source_loader_checks_commit_before_tree_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    publication = tmp_path / "publication"
+    audit = tmp_path / "audit"
+    publication.mkdir()
+    audit.mkdir()
+    (publication / "publication.json").write_text("{}\n", encoding="utf-8")
+    (audit / "publication.json").write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(module, "verify_development_read_boundary_v2", lambda *_args: None)
+    monkeypatch.setattr(module, "verified_source_coverage_bytes", lambda *_args: b"coverage")
+    monkeypatch.setattr(
+        module,
+        "verified_scoped_source_availability_bytes_v2",
+        lambda *_args, **_kwargs: b"availability",
+    )
+    monkeypatch.setattr(
+        module,
+        "_derive_verified_minute_source_origin",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        module,
+        "_require_windows_pair_commit",
+        lambda _first, _second: (_ for _ in ()).throw(ValueError("paired commit is absent")),
+    )
+    monkeypatch.setattr(
+        module,
+        "read_bounded_regular",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("uncommitted publication tree must not be read")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="paired commit is absent"):
+        module.load_validation_source_publication_v2(
+            publication_root=publication,
+            audit_ledger_root=audit,
+            coverage=object(),  # type: ignore[arg-type]
+            split=object(),  # type: ignore[arg-type]
+            boundary=object(),  # type: ignore[arg-type]
+            availability=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_windows_pair_commit_scan_is_bounded_before_accumulation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    for index in range(3):
+        (tmp_path / f"entry-{index}").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(module, "_MAX_WINDOWS_PAIR_PARENT_ENTRIES", 2)
+
+    with pytest.raises(RuntimeError, match="parent scan exceeds its bound"):
+        module._bounded_windows_pair_commit_candidates(tmp_path)  # noqa: SLF001
+
+
 def test_windows_paired_source_refuses_existing_destination_without_path_deletion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -620,6 +730,44 @@ def test_windows_paired_source_refuses_existing_destination_without_path_deletio
     assert (first_destination / "winner").read_text(encoding="utf-8") == "preserve"
     assert not first_stage.exists()
     assert not second_stage.exists()
+
+
+def test_windows_paired_source_validates_all_incomplete_roots_before_deletion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    first_stage = tmp_path / "first-stage"
+    second_stage = tmp_path / "second-stage"
+    first_stage.mkdir()
+    second_stage.mkdir()
+    (first_stage / "publication.json").write_text("first\n", encoding="utf-8")
+    (second_stage / "publication.json").write_text("second\n", encoding="utf-8")
+    first_destination = tmp_path / "first"
+    second_destination = tmp_path / "second"
+    first_destination.mkdir()
+    second_destination.mkdir()
+    (first_destination / "publication.json").write_text("first\n", encoding="utf-8")
+    (second_destination / "foreign").write_text("preserve\n", encoding="utf-8")
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathOwnedTreeClaim(path),
+    )
+
+    with pytest.raises(FileExistsError, match="foreign incomplete publication"):
+        module._commit_paired_directories(  # noqa: SLF001
+            first_stage=first_stage,
+            first_destination=first_destination,
+            second_stage=second_stage,
+            second_destination=second_destination,
+        )
+
+    assert (first_destination / "publication.json").read_text(encoding="utf-8") == "first\n"
+    assert (second_destination / "foreign").read_text(encoding="utf-8") == "preserve\n"
 
 
 def test_windows_public_discovery_stage_swap_preserves_foreign_tree(
