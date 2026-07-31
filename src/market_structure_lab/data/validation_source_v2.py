@@ -40,6 +40,7 @@ from market_structure_lab.research.validation_v2_models import (
 from market_structure_lab.research.validation_v2_splits import (
     AccessOperationKindV2,
     BoundaryRequestV2,
+    DevelopmentAccessAuditBindingV2,
     DevelopmentAccessAttemptLedgerV2,
     DevelopmentReadBoundaryV2,
     DevelopmentSplitPublicationV2,
@@ -109,13 +110,16 @@ _VERIFIED_MINUTE_PATHS: dict[
     int,
     tuple[
         weakref.ReferenceType[VerifiedMinutePathV2],
-        weakref.ReferenceType[ValidationSourcePublicationV2],
+        ValidationSourcePublicationV2,
         SourceCoveragePublicationV2,
         DevelopmentSplitPublicationV2,
         DevelopmentReadBoundaryV2,
         ScopedSourceAvailabilityV2,
+        DevelopmentAccessAttemptLedgerV2,
+        DevelopmentAccessAuditBindingV2,
         BoundaryRequestV2,
         int,
+        MinutePathReadBudgetV2,
         tuple[object, ...],
     ],
 ] = {}
@@ -458,6 +462,7 @@ class VerifiedMinutePathV2:
     row_count: int
     byte_count: int
     ordered_row_sha256: str
+    audit_binding: DevelopmentAccessAuditBindingV2
     path_identity: str
     _factory_token: InitVar[object | None] = None
 
@@ -474,8 +479,19 @@ class VerifiedMinutePathV2:
             sorted(set(self.partition_paths))
         ):
             raise ValueError("verified minute path partitions must be uniquely ordered")
+        if (
+            not isinstance(self.audit_binding, DevelopmentAccessAuditBindingV2)
+            or self.audit_binding.terminal_record is None
+            or self.audit_binding.terminal_record.phase != "completion"
+        ):
+            raise ValueError("verified minute path requires a completed audit binding")
         _require_sha256(self.ordered_row_sha256, "ordered_row_sha256")
         _require_sha256(self.path_identity, "path_identity")
+
+    def verify_original(self) -> VerifiedMinutePathV2:
+        """Reopen and verify the exact parents and audit registered at issuance."""
+
+        return verify_original_minute_path_v2(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1626,6 +1642,7 @@ def read_verified_minute_path_v2(
         raise TypeError("minute path budget must be MinutePathReadBudgetV2")
     if not isinstance(audit, DevelopmentAccessAttemptLedgerV2):
         raise TypeError("minute path audit must be DevelopmentAccessAttemptLedgerV2")
+    audit.verify_binding(boundary=boundary)
     audit.start(request)
     audit.adjudicate(request)
     partitions = _select_minute_path_partitions(publication, request)
@@ -1650,6 +1667,11 @@ def read_verified_minute_path_v2(
         "phase5-validation-minute-path-row-order-v2",
         [item.line_sha256 for item in rows],
     )
+    audit.complete(request, row_count=len(rows), byte_count=byte_count)
+    audit_binding = audit.verify_binding(
+        boundary=boundary,
+        completed_request=request,
+    )
     identity = _minute_path_identity(
         publication,
         request,
@@ -1657,6 +1679,7 @@ def read_verified_minute_path_v2(
         rows,
         byte_count,
         ordered,
+        audit_binding,
     )
     result = VerifiedMinutePathV2(
         request=request,
@@ -1665,10 +1688,10 @@ def read_verified_minute_path_v2(
         row_count=len(rows),
         byte_count=byte_count,
         ordered_row_sha256=ordered,
+        audit_binding=audit_binding,
         path_identity=identity,
         _factory_token=_MINUTE_PATH_FACTORY,
     )
-    audit.complete(request, row_count=result.row_count, byte_count=result.byte_count)
     _register_verified_minute_path(
         result,
         publication=publication,
@@ -1676,7 +1699,10 @@ def read_verified_minute_path_v2(
         split=split,
         boundary=boundary,
         availability=availability,
+        audit=audit,
+        audit_binding=audit_binding,
         expected_row_count=expected_row_count,
+        budget=budget,
     )
     return result
 
@@ -1692,6 +1718,7 @@ def verify_verified_minute_path_v2(
     request: BoundaryRequestV2,
     expected_row_count: int,
     budget: MinutePathReadBudgetV2,
+    audit: DevelopmentAccessAttemptLedgerV2,
 ) -> VerifiedMinutePathV2:
     """Reopen and rederive a registered minute path without adding audit records."""
 
@@ -1702,9 +1729,17 @@ def verify_verified_minute_path_v2(
         split=split,
         boundary=boundary,
         availability=availability,
+        audit=audit,
         request=request,
         expected_row_count=expected_row_count,
+        budget=budget,
     )
+    audit_binding = audit.verify_binding(
+        boundary=boundary,
+        completed_request=request,
+    )
+    if audit_binding != path.audit_binding:
+        raise ValueError("verified minute path audit binding differs from original")
     partitions = _select_minute_path_partitions(publication, request)
     _preflight_minute_path(
         publication,
@@ -1732,6 +1767,7 @@ def verify_verified_minute_path_v2(
         rows,
         byte_count,
         ordered,
+        audit_binding,
     )
     current = (
         path.request,
@@ -1740,6 +1776,7 @@ def verify_verified_minute_path_v2(
         path.row_count,
         path.byte_count,
         path.ordered_row_sha256,
+        path.audit_binding,
         path.path_identity,
     )
     expected = (
@@ -1749,11 +1786,36 @@ def verify_verified_minute_path_v2(
         len(rows),
         byte_count,
         ordered,
+        audit_binding,
         identity,
     )
     if current != snapshot or current != expected or len(rows) != expected_row_count:
         raise ValueError("verified minute path serialization or identity differs from original")
     return path
+
+
+def verify_original_minute_path_v2(
+    path: VerifiedMinutePathV2,
+) -> VerifiedMinutePathV2:
+    """Resolve and reverify every exact parent registered with ``path``."""
+
+    if not isinstance(path, VerifiedMinutePathV2):
+        raise TypeError("verified minute path must be factory-issued")
+    registered = _VERIFIED_MINUTE_PATHS.get(id(path))
+    if registered is None or registered[0]() is not path:
+        raise ValueError("verified minute path is not the registered original")
+    return verify_verified_minute_path_v2(
+        path,
+        publication=registered[1],
+        coverage=registered[2],
+        split=registered[3],
+        boundary=registered[4],
+        availability=registered[5],
+        audit=registered[6],
+        request=registered[8],
+        expected_row_count=registered[9],
+        budget=registered[10],
+    )
 
 
 def _select_minute_path_partitions(
@@ -1917,6 +1979,7 @@ def _minute_path_identity(
     rows: tuple[VerifiedMinuteRowV2, ...],
     byte_count: int,
     ordered_row_sha256: str,
+    audit_binding: DevelopmentAccessAuditBindingV2,
 ) -> str:
     return hash_json(
         "phase5-validation-verified-minute-path-v2",
@@ -1934,6 +1997,18 @@ def _minute_path_identity(
             "row_count": len(rows),
             "byte_count": byte_count,
             "ordered_row_sha256": ordered_row_sha256,
+            "audit": {
+                "programme_id": audit_binding.programme_id,
+                "attempt_id": audit_binding.attempt_id,
+                "boundary_sha256": audit_binding.boundary_sha256,
+                "record_count": audit_binding.record_count,
+                "terminal_record_sha256": (
+                    audit_binding.terminal_record.record_sha256
+                    if audit_binding.terminal_record is not None
+                    else None
+                ),
+                "audit_identity": audit_binding.audit_identity,
+            },
         },
     )
 
@@ -1946,7 +2021,10 @@ def _register_verified_minute_path(
     split: DevelopmentSplitPublicationV2,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
+    audit: DevelopmentAccessAttemptLedgerV2,
+    audit_binding: DevelopmentAccessAuditBindingV2,
     expected_row_count: int,
+    budget: MinutePathReadBudgetV2,
 ) -> None:
     identifier = id(path)
     snapshot = (
@@ -1956,6 +2034,7 @@ def _register_verified_minute_path(
         path.row_count,
         path.byte_count,
         path.ordered_row_sha256,
+        path.audit_binding,
         path.path_identity,
     )
 
@@ -1966,13 +2045,16 @@ def _register_verified_minute_path(
 
     _VERIFIED_MINUTE_PATHS[identifier] = (
         weakref.ref(path, cleanup),
-        weakref.ref(publication),
+        publication,
         coverage,
         split,
         boundary,
         availability,
+        audit,
+        audit_binding,
         path.request,
         expected_row_count,
+        budget,
         snapshot,
     )
 
@@ -1985,8 +2067,10 @@ def _validate_registered_minute_path(
     split: DevelopmentSplitPublicationV2,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
+    audit: DevelopmentAccessAttemptLedgerV2,
     request: BoundaryRequestV2,
     expected_row_count: int,
+    budget: MinutePathReadBudgetV2,
 ) -> tuple[object, ...]:
     if not isinstance(path, VerifiedMinutePathV2):
         raise TypeError("verified minute path must be factory-issued")
@@ -1994,16 +2078,31 @@ def _validate_registered_minute_path(
     if (
         registered is None
         or registered[0]() is not path
-        or registered[1]() is not publication
+        or registered[1] is not publication
         or registered[2] is not coverage
         or registered[3] is not split
         or registered[4] is not boundary
         or registered[5] is not availability
-        or registered[6] != request
-        or registered[7] != expected_row_count
+        or registered[6] is not audit
+        or registered[7] != path.audit_binding
+        or registered[8] != request
+        or registered[9] != expected_row_count
+        or registered[10] != budget
     ):
         raise ValueError("verified minute path is not the registered original")
-    return registered[8]
+    current = (
+        path.request,
+        path.rows,
+        path.partition_paths,
+        path.row_count,
+        path.byte_count,
+        path.ordered_row_sha256,
+        path.audit_binding,
+        path.path_identity,
+    )
+    if current != registered[11]:
+        raise ValueError("verified minute path serialization differs from original")
+    return registered[11]
 
 
 def _derive_verified_minute_source_origin(
@@ -3629,6 +3728,7 @@ __all__ = [
     "reject_pg_restore_row_source_v2",
     "verify_dump_toc_metadata_v2",
     "verify_scoped_source_availability_v2",
+    "verify_original_minute_path_v2",
     "verify_validation_source_publication_v2",
     "verify_verified_minute_path_v2",
     "verified_scoped_source_availability_bytes_v2",

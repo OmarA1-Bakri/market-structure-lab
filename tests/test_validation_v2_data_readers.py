@@ -17,6 +17,7 @@ from market_structure_lab.research.validation_v2_splits import (
     AccessOperationKindV2,
     BoundaryRequestV2,
     DevelopmentAccessAttemptLedgerV2,
+    issue_development_read_boundary_v2,
 )
 
 pytest_plugins = ("test_aggregate_publication_v2",)
@@ -90,6 +91,12 @@ def test_minute_path_reads_exact_original_lines_and_completes_audit(
     assert all(row.symbol == request.symbol and row.timeframe == "1m" for row in path.rows)
     assert audit.records[-1].phase == "completion"
     assert audit.counters.rows_admitted == 60
+    assert path.audit_binding.programme_id == "VPV2-" + "1" * 64
+    assert path.audit_binding.attempt_id == "VA-" + "2" * 64
+    assert path.audit_binding.boundary_sha256 == boundary.boundary_sha256
+    assert path.audit_binding.terminal_record == audit.records[-1]
+    assert path.audit_binding.audit_identity
+    assert path.verify_original() is path
     assert (
         verify_verified_minute_path_v2(
             path,
@@ -101,9 +108,124 @@ def test_minute_path_reads_exact_original_lines_and_completes_audit(
             request=request,
             expected_row_count=60,
             budget=_budget(),
+            audit=audit,
         )
         is path
     )
+
+
+def test_minute_path_rejects_ledger_for_different_registered_boundary_before_open(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import test_aggregate_publication_v2 as fixtures
+
+    coverage, split, boundary, availability = v2_chain
+    publication = fixtures._publish_minute(v2_chain, tmp_path)
+    request = _request(publication, boundary)
+    overlapping_boundary = issue_development_read_boundary_v2(coverage, split)
+    assert overlapping_boundary == boundary
+    assert overlapping_boundary is not boundary
+    wrong_audit = _audit(overlapping_boundary)
+    monkeypatch.setattr(
+        "market_structure_lab.data.validation_source_v2.read_bounded_regular",
+        lambda *_args, **_kwargs: pytest.fail("mismatched audit opened a path"),
+    )
+
+    with pytest.raises(ValueError, match="audit.*boundary|registered original"):
+        read_verified_minute_path_v2(
+            publication,
+            coverage,
+            split,
+            boundary,
+            availability,
+            request,
+            60,
+            _budget(),
+            wrong_audit,
+        )
+    assert wrong_audit.records == ()
+
+
+def test_minute_path_reverification_rejects_audit_substitution_and_mutation_before_open(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import test_aggregate_publication_v2 as fixtures
+
+    coverage, split, boundary, availability = v2_chain
+    publication = fixtures._publish_minute(v2_chain, tmp_path)
+    request = _request(publication, boundary)
+    audit = _audit(boundary)
+    path = read_verified_minute_path_v2(
+        publication,
+        coverage,
+        split,
+        boundary,
+        availability,
+        request,
+        60,
+        _budget(),
+        audit,
+    )
+    monkeypatch.setattr(
+        "market_structure_lab.data.validation_source_v2.read_bounded_regular",
+        lambda *_args, **_kwargs: pytest.fail("invalid audit reopened a path"),
+    )
+
+    with pytest.raises(ValueError, match="registered original"):
+        verify_verified_minute_path_v2(
+            path,
+            publication=publication,
+            coverage=coverage,
+            split=split,
+            boundary=boundary,
+            availability=availability,
+            request=request,
+            expected_row_count=60,
+            budget=_budget(),
+            audit=_audit(boundary),
+        )
+
+    object.__setattr__(audit._records[-1], "byte_count", 61)  # noqa: SLF001
+    with pytest.raises(ValueError, match="chain verification"):
+        path.verify_original()
+
+
+def test_minute_path_no_argument_verifier_rejects_copy_and_mutation_before_open(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import test_aggregate_publication_v2 as fixtures
+
+    coverage, split, boundary, availability = v2_chain
+    publication = fixtures._publish_minute(v2_chain, tmp_path)
+    request = _request(publication, boundary)
+    path = read_verified_minute_path_v2(
+        publication,
+        coverage,
+        split,
+        boundary,
+        availability,
+        request,
+        60,
+        _budget(),
+        _audit(boundary),
+    )
+    monkeypatch.setattr(
+        "market_structure_lab.data.validation_source_v2.read_bounded_regular",
+        lambda *_args, **_kwargs: pytest.fail("invalid path reopened original bytes"),
+    )
+
+    with pytest.raises(ValueError, match="registered original"):
+        copy.copy(path).verify_original()
+
+    object.__setattr__(path, "path_identity", "0" * 64)
+    with pytest.raises(ValueError, match="serialization|identity"):
+        path.verify_original()
 
 
 def test_minute_path_rejects_final_scope_before_any_publication_open(
@@ -226,4 +348,5 @@ def test_minute_path_requires_exact_count_origin_and_nominal_registered_objects(
             request=request,
             expected_row_count=60,
             budget=_budget(),
+            audit=_audit(boundary),
         )

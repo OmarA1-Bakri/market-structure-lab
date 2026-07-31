@@ -21,6 +21,7 @@ from market_structure_lab.research.validation_v2_models import (
 
 _SPLIT_FACTORY = object()
 _BOUNDARY_FACTORY = object()
+_AUDIT_BINDING_FACTORY = object()
 _SPLIT_HOLDOUT_DOMAIN = "phase5-validation-asset-holdout-order-v2"
 _SPLIT_IDENTITY_DOMAIN = "phase5-validation-development-split-v2"
 _BOUNDARY_IDENTITY_DOMAIN = "phase5-validation-development-read-boundary-v2"
@@ -668,6 +669,38 @@ class AccessAuditRecordV2:
     record_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class DevelopmentAccessAuditBindingV2:
+    """Immutable identity of one exact registered audit-ledger state."""
+
+    programme_id: str
+    attempt_id: str
+    boundary_sha256: str
+    record_count: int
+    terminal_record: AccessAuditRecordV2 | None
+    audit_identity: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _AUDIT_BINDING_FACTORY:
+            raise TypeError("DevelopmentAccessAuditBindingV2 requires its factory")
+        if self.record_count < 0:
+            raise ValueError("audit binding record count must be non-negative")
+        if (self.terminal_record is None) != (self.record_count == 0):
+            raise ValueError("audit binding terminal record differs from record count")
+
+
+_REGISTERED_ACCESS_LEDGERS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[object],
+        weakref.ReferenceType[DevelopmentReadBoundaryV2],
+        str,
+        str,
+    ],
+] = {}
+
+
 class DevelopmentAccessAttemptLedgerV2:
     """Append-only attempt observations kept separate from boundary authority."""
 
@@ -687,6 +720,19 @@ class DevelopmentAccessAttemptLedgerV2:
         self._attempt_id = attempt_id
         self._boundary = boundary
         self._records: list[AccessAuditRecordV2] = []
+        identifier = id(self)
+
+        def cleanup(reference: weakref.ReferenceType[object]) -> None:
+            current = _REGISTERED_ACCESS_LEDGERS.get(identifier)
+            if current is not None and current[0] is reference:
+                _REGISTERED_ACCESS_LEDGERS.pop(identifier, None)
+
+        _REGISTERED_ACCESS_LEDGERS[identifier] = (
+            weakref.ref(self, cleanup),
+            weakref.ref(boundary),
+            programme_id,
+            attempt_id,
+        )
 
     @property
     def records(self) -> tuple[AccessAuditRecordV2, ...]:
@@ -719,6 +765,60 @@ class DevelopmentAccessAttemptLedgerV2:
             ),
             final_rows=0,
             final_access_records=0,
+        )
+
+    def verify_binding(
+        self,
+        *,
+        boundary: DevelopmentReadBoundaryV2,
+        completed_request: BoundaryRequestV2 | None = None,
+    ) -> DevelopmentAccessAuditBindingV2:
+        """Verify nominal authority and freeze the exact current chain identity."""
+
+        _verify_registered_boundary(boundary)
+        registered = _REGISTERED_ACCESS_LEDGERS.get(id(self))
+        if (
+            registered is None
+            or registered[0]() is not self
+            or registered[1]() is not boundary
+            or registered[2] != self._programme_id
+            or registered[3] != self._attempt_id
+            or self._boundary is not boundary
+        ):
+            raise ValueError(
+                "access audit is not the registered original for this boundary"
+            )
+        records = self._verified_records()
+        terminal = records[-1] if records else None
+        if completed_request is not None and (
+            terminal is None
+            or terminal.phase != "completion"
+            or not terminal.allowed
+            or terminal.request != completed_request
+        ):
+            raise ValueError(
+                "access audit terminal record is not the requested completion"
+            )
+        payload = {
+            "programme_id": self._programme_id,
+            "attempt_id": self._attempt_id,
+            "boundary_sha256": boundary.boundary_sha256,
+            "record_count": len(records),
+            "terminal_record_sha256": (
+                terminal.record_sha256 if terminal is not None else None
+            ),
+        }
+        return DevelopmentAccessAuditBindingV2(
+            programme_id=self._programme_id,
+            attempt_id=self._attempt_id,
+            boundary_sha256=boundary.boundary_sha256,
+            record_count=len(records),
+            terminal_record=terminal,
+            audit_identity=hash_json(
+                "phase5-validation-access-attempt-ledger-v2",
+                payload,
+            ),
+            _factory_token=_AUDIT_BINDING_FACTORY,
         )
 
     def start(self, request: BoundaryRequestV2) -> AccessAuditRecordV2:
@@ -935,6 +1035,7 @@ __all__ = [
     "AccessAuditCountersV2",
     "AccessOperationKindV2",
     "BoundaryRequestV2",
+    "DevelopmentAccessAuditBindingV2",
     "DevelopmentAccessAttemptLedgerV2",
     "DevelopmentReadBoundaryV2",
     "DevelopmentSplitPublicationV2",

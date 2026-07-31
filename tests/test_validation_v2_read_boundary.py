@@ -310,6 +310,30 @@ def test_audit_ledger_is_separate_and_does_not_mutate_boundary() -> None:
     assert ledger.counters.final_scope_attempts == 0
 
 
+def test_audit_binding_requires_exact_registered_ledger_and_boundary() -> None:
+    coverage, split, boundary = _issued()
+    ledger = DevelopmentAccessAttemptLedgerV2(
+        programme_id="VPV2-" + "1" * 64,
+        attempt_id="VA-" + "2" * 64,
+        boundary=boundary,
+    )
+    request = _allowed_request(boundary)
+    ledger.start(request)
+    ledger.adjudicate(request)
+    terminal = ledger.complete(request, row_count=2, byte_count=100)
+
+    binding = ledger.verify_binding(boundary=boundary, completed_request=request)
+    assert binding.boundary_sha256 == boundary.boundary_sha256
+    assert binding.terminal_record == terminal
+    assert binding.record_count == 3
+
+    overlapping_boundary = issue_development_read_boundary_v2(coverage, split)
+    with pytest.raises(ValueError, match="registered original"):
+        ledger.verify_binding(boundary=overlapping_boundary)
+    with pytest.raises(ValueError, match="registered original"):
+        copy.copy(ledger).verify_binding(boundary=boundary)
+
+
 def test_ledger_internally_denies_and_counts_final_scope() -> None:
     _, _, boundary = _issued()
     ledger = DevelopmentAccessAttemptLedgerV2(
