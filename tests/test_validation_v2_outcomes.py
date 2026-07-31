@@ -406,12 +406,54 @@ def test_assignment_rejects_asset_or_temporal_holdout_before_minute_read(
     )
     object.__setattr__(forbidden, "legal_entry", forbidden.information_cutoff)
 
-    with pytest.raises((TypeError, ValueError, PermissionError), match="identity|holdout|final"):
+    with pytest.raises(
+        (TypeError, ValueError, PermissionError),
+        match="identity|holdout|final|registered|original",
+    ):
         assign_development_event_v2(
             folds=pipeline.folds,
             signal=forbidden,
             minute_rows=ExplodingMinuteRows(),
         )
+
+
+def test_assignment_and_outcome_reject_copied_and_coherently_rehashed_signals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    authority = _cost_authority(pipeline, tmp_path, monkeypatch)
+    copied = copy.copy(pipeline.signal)
+    coherent = copy.copy(pipeline.signal)
+    object.__setattr__(
+        coherent,
+        "feature_start",
+        coherent.feature_start + timedelta(hours=1),
+    )
+    object.__setattr__(
+        coherent,
+        "signal_id",
+        "CS-" + hash_json("candidate-signal-v1", coherent.to_dict()),
+    )
+
+    for forged in (copied, coherent):
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="detector-issued|registered|original",
+        ):
+            assign_development_event_v2(folds=pipeline.folds, signal=forged)
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="detector-issued|registered|original",
+        ):
+            attach_development_outcome_v2(
+                forged,
+                aggregate_series=pipeline.aggregate_series,
+                minute_path=pipeline.minute_path,
+                assignment=pipeline.assignment,
+                cost_authority=authority,
+                horizon_hours=24,
+            )
 
 
 def test_attaches_exact_next_bar_half_open_path_and_gross_excursions(
@@ -537,6 +579,24 @@ def test_direct_replace_and_lookalike_outcome_objects_are_rejected(
             aggregate_series=pipeline.aggregate_series,
             minute_path=pipeline.minute_path,
             assignment=copy.copy(pipeline.assignment),
+            cost_authority=authority,
+            horizon_hours=24,
+        )
+    with pytest.raises(TypeError, match="exact factory-issued aggregate series"):
+        attach_development_outcome_v2(
+            pipeline.signal,
+            aggregate_series=object(),  # type: ignore[arg-type]
+            minute_path=pipeline.minute_path,
+            assignment=pipeline.assignment,
+            cost_authority=authority,
+            horizon_hours=24,
+        )
+    with pytest.raises((TypeError, ValueError), match="registered|original"):
+        attach_development_outcome_v2(
+            pipeline.signal,
+            aggregate_series=copy.copy(pipeline.aggregate_series),
+            minute_path=pipeline.minute_path,
+            assignment=pipeline.assignment,
             cost_authority=authority,
             horizon_hours=24,
         )

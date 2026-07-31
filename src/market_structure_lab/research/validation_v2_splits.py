@@ -698,14 +698,15 @@ def assign_development_event_v2(
     _verify_original_fold_set_v2(folds)
     if partition_role != "outer_diagnostic":
         raise ValueError("only the frozen outer_diagnostic assignment role is supported")
-    from market_structure_lab.research.candidates import CandidateSignal
+    from market_structure_lab.research.candidates import (
+        CandidateSignal,
+        verify_candidate_signal,
+    )
     from market_structure_lab.research.models import VALIDATION_SLOT_ROSTER
 
     if type(signal) is not CandidateSignal:
         raise TypeError("development assignment requires an exact CandidateSignal")
-    expected_signal_id = "CS-" + hash_json("candidate-signal-v1", signal.to_dict())
-    if signal.signal_id != expected_signal_id:
-        raise ValueError("candidate signal identity differs from its frozen fields")
+    verify_candidate_signal(signal)
     slot = next(
         (item for item in VALIDATION_SLOT_ROSTER if item.slot_id == signal.candidate_slot_id),
         None,

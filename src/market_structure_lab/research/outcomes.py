@@ -21,12 +21,10 @@ from market_structure_lab.data.aggregate_bars import (
 from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
 from market_structure_lab.data.aggregate_publication_v2 import (
     AggregateRowV2,
-    AggregatePublicationBudgetV2,
     VerifiedAggregateSeriesV2,
-    verify_verified_aggregate_series_v2,
 )
 from market_structure_lab.data.validation_source_v2 import VerifiedMinutePathV2
-from market_structure_lab.research.candidates import CandidateSignal
+from market_structure_lab.research.candidates import CandidateSignal, verify_candidate_signal
 from market_structure_lab.research.models import (
     EXPECTED_FAMILIES,
     VALIDATION_SLOT_ROSTER,
@@ -651,13 +649,14 @@ def attach_development_outcome_v2(
 
     if type(signal) is not CandidateSignal:
         raise TypeError("V2 outcome requires an exact detector-issued CandidateSignal")
-    if signal.signal_id != "CS-" + hash_json("candidate-signal-v1", signal.to_dict()):
-        raise ValueError("candidate signal identity differs from its frozen fields")
+    verify_candidate_signal(signal)
     if isinstance(horizon_hours, bool) or not isinstance(horizon_hours, int) or horizon_hours < 1:
         raise ValueError("V2 outcome horizon must be a positive integer")
     assignment = DevelopmentEventAssignmentV2.verify_original(assignment)
     _verify_signal_assignment(signal, assignment, horizon_hours)
-    _verify_aggregate_series_original(aggregate_series)
+    if type(aggregate_series) is not VerifiedAggregateSeriesV2:
+        raise TypeError("V2 outcome requires an exact factory-issued aggregate series")
+    aggregate_series.verify_original()
     minute_path.verify_original()
     verified_cost_authority_bytes_v2(cost_authority)
     _verify_v2_parent_bindings(
@@ -918,31 +917,6 @@ def _verify_minute_and_aggregate_paths(
             )
         ):
             raise ValueError("aggregate row source hashes differ from the exact minute path")
-
-
-def _aggregate_verification_budget(
-    series: VerifiedAggregateSeriesV2,
-) -> AggregatePublicationBudgetV2:
-    return AggregatePublicationBudgetV2(
-        max_source_rows=1,
-        max_source_bytes=1,
-        max_parent_partitions=1,
-        max_source_rows_per_chunk=240,
-        max_members=1,
-        max_aggregate_rows=series.row_count,
-        max_rows_per_partition=series.row_count,
-        max_output_bytes=series.byte_count,
-        max_output_files=series.row_count,
-    )
-
-
-def _verify_aggregate_series_original(series: VerifiedAggregateSeriesV2) -> None:
-    if type(series) is not VerifiedAggregateSeriesV2:
-        raise TypeError("V2 outcome requires a factory-issued aggregate series")
-    verify_verified_aggregate_series_v2(
-        series,
-        budget=_aggregate_verification_budget(series),
-    )
 
 
 def _development_outcome_snapshot(outcome: DevelopmentOutcomeRowV2) -> tuple[object, ...]:
