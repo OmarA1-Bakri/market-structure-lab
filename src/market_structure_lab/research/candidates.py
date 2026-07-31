@@ -475,7 +475,6 @@ class VerifiedProfileStream:
         expected = _profile_stream_identity(self)
         if self.stream_sha256 != expected:
             raise ValueError("verified profile stream identity mismatch")
-        _register_verified_profile_stream(self)
 
     def bin_index(self, price: float) -> int:
         """Map a price through the exact pinned precision without retaining profile maps."""
@@ -491,6 +490,10 @@ class VerifiedProfileStream:
 class _VerifiedProfileStreamRegistration:
     stream: weakref.ReferenceType[VerifiedProfileStream]
     snapshot: tuple[object, ...]
+    series: VerifiedAggregateSeries
+    programme: ValidationProgrammeConfig
+    programme_sha256: str
+    profile_config_bytes: bytes
 
 
 _VERIFIED_PROFILE_STREAMS: dict[int, _VerifiedProfileStreamRegistration] = {}
@@ -508,10 +511,36 @@ def verify_profile_stream(stream: VerifiedProfileStream) -> VerifiedProfileStrea
         raise ValueError("registered profile stream differs from its original frozen snapshot")
     if stream.stream_sha256 != _profile_stream_identity(stream):
         raise ValueError("registered profile stream identity differs from its original content")
+    series = registration.series.verify_original()
+    programme = registration.programme
+    if programme.sha256 != registration.programme_sha256:
+        raise ValueError("registered profile programme differs from its original content")
+    if hashlib.sha256(registration.profile_config_bytes).hexdigest() != stream.profile_config_sha256:
+        raise ValueError("registered profile config differs from its original bytes")
+    precision = read_source_price_precision_manifest(series)
+    if (
+        stream.aggregate_series_sha256 != series.series_sha256
+        or stream.validation_programme_id != programme.programme_id
+        or stream.work_budget_sha256 != programme.work_budget.sha256
+        or stream.source_minute_publication_sha256 != series.manifest.parent_snapshot_sha256
+        or stream.source_row_count != series.manifest.source_row_count
+        or stream.source_sha256 != series.manifest.source_sha256
+        or stream.bin_metadata_sha256 != precision.artifact_sha256
+        or stream.bin_step != precision.step
+        or stream.bin_origin != precision.origin
+        or stream.source_price_precision_manifest_sha256 != precision.manifest_sha256
+    ):
+        raise ValueError("registered profile stream differs from its retained causal parents")
     return stream
 
 
-def _register_verified_profile_stream(stream: VerifiedProfileStream) -> None:
+def _register_verified_profile_stream(
+    stream: VerifiedProfileStream,
+    *,
+    series: VerifiedAggregateSeries,
+    programme: ValidationProgrammeConfig,
+    profile_config_bytes: bytes,
+) -> None:
     identifier = id(stream)
 
     def cleanup(reference: weakref.ReferenceType[VerifiedProfileStream]) -> None:
@@ -522,6 +551,10 @@ def _register_verified_profile_stream(stream: VerifiedProfileStream) -> None:
     _VERIFIED_PROFILE_STREAMS[identifier] = _VerifiedProfileStreamRegistration(
         stream=weakref.ref(stream, cleanup),
         snapshot=_profile_stream_snapshot(stream),
+        series=series,
+        programme=programme,
+        programme_sha256=programme.sha256,
+        profile_config_bytes=profile_config_bytes,
     )
 
 
@@ -733,6 +766,7 @@ def build_verified_profile_stream(
         raise TypeError("profile builder requires a VerifiedAggregateSeries capability")
     if not isinstance(programme, ValidationProgrammeConfig):
         raise TypeError("profile builder requires its frozen ValidationProgrammeConfig")
+    series.verify_original()
     if programme.dataset_sha256 != series.parent_snapshot_manifest.snapshot_sha256:
         raise ValueError("validation programme dataset does not match the profile source snapshot")
     price_precision_manifest = read_source_price_precision_manifest(series)
@@ -993,7 +1027,7 @@ def build_verified_profile_stream(
             "ordered_profile_ids": ordered,
         },
     )
-    return VerifiedProfileStream(
+    stream = VerifiedProfileStream(
         aggregate_series_sha256=series.series_sha256,
         validation_programme_id=programme.programme_id,
         work_budget_sha256=budget.sha256,
@@ -1016,6 +1050,13 @@ def build_verified_profile_stream(
         stream_sha256=stream_sha256,
         seal=_VERIFIED_PROFILE_STREAM_SEAL,
     )
+    _register_verified_profile_stream(
+        stream,
+        series=series,
+        programme=programme,
+        profile_config_bytes=profile_config_bytes,
+    )
+    return stream
 
 
 def target_bars(hours: int, timeframe: str) -> int:
@@ -1698,7 +1739,9 @@ def _validate_series(definition: CandidateDefinition, series: DetectorSeries) ->
             raise ValueError(
                 "candidate definition does not own this aggregate schema/config identity"
             )
-    elif type(series) is not VerifiedAggregateSeries:
+    elif type(series) is VerifiedAggregateSeries:
+        series.verify_original()
+    else:
         raise TypeError(
             "candidate detection requires an exact VerifiedAggregateSeries or "
             "VerifiedCandidateSeriesV2 capability"

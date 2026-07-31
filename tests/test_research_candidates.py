@@ -71,17 +71,38 @@ IMPLEMENTATION_DOCUMENT = "d3520669352f0d85a27569edeefcfe84ff785e1f928ae0cc41edf
 
 
 class _CausalBarInput(Protocol):
-    timestamp: datetime
-    bar_close: datetime
-    symbol: str
-    target_timeframe: str
-    segment_id: int
-    source_row_count: int
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
+    @property
+    def timestamp(self) -> datetime: ...
+
+    @property
+    def bar_close(self) -> datetime: ...
+
+    @property
+    def symbol(self) -> str: ...
+
+    @property
+    def target_timeframe(self) -> str: ...
+
+    @property
+    def segment_id(self) -> int: ...
+
+    @property
+    def source_row_count(self) -> int: ...
+
+    @property
+    def open(self) -> float: ...
+
+    @property
+    def high(self) -> float: ...
+
+    @property
+    def low(self) -> float: ...
+
+    @property
+    def close(self) -> float: ...
+
+    @property
+    def volume(self) -> float: ...
 
 
 def _slot(
@@ -264,7 +285,7 @@ def _independent_canonical_bar(bar: _CausalBarInput) -> CanonicalAggregateBar:
 def _series(bars: tuple[_CausalBarInput, ...]) -> VerifiedAggregateSeries:
     if not bars:
         raise ValueError("test publication requires bars")
-    bars = tuple(_independent_canonical_bar(bar) for bar in bars)
+    normalized_inputs = tuple(_independent_canonical_bar(bar) for bar in bars)
     temporary = TemporaryDirectory(prefix="candidate-series-test-")
     _SERIES_TEMPORARIES.append(temporary)
     base = Path(temporary.name)
@@ -272,7 +293,7 @@ def _series(bars: tuple[_CausalBarInput, ...]) -> VerifiedAggregateSeries:
     parent_root.mkdir()
     minute_rows = [
         row
-        for bar in bars
+        for bar in normalized_inputs
         for row in _minute_rows(
             timestamp=bar.timestamp,
             minutes=bar.source_row_count,
@@ -370,7 +391,7 @@ def _series(bars: tuple[_CausalBarInput, ...]) -> VerifiedAggregateSeries:
             parent_snapshot_sha256=parent_sha,
             row_sha256="",
         )
-        for index, bar in enumerate(bars)
+        for index, bar in enumerate(normalized_inputs)
     )
     rows = [bar.to_dict() for bar in normalized_bars]
     frame = pl.DataFrame(rows)
@@ -569,10 +590,9 @@ def test_series_helper_rebuilds_independent_v1_identities_from_causal_inputs() -
 def _detect(
     slot: ValidationSlot,
     bars: tuple[CanonicalAggregateBar, ...],
-    **kwargs: object,
 ) -> tuple[CandidateSignal, ...]:
     series = _series(bars)
-    return detect_candidate_signals(_definition(slot, series), series, **kwargs)
+    return detect_candidate_signals(_definition(slot, series), series)
 
 
 def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin() -> None:
@@ -596,7 +616,7 @@ def test_contract_is_immutable_outcome_free_content_addressed_and_human_origin()
     )
     assert not hasattr(definition, "behaviour_id")
     with pytest.raises((TypeError, ValueError), match="issuance|token"):
-        replace(signal, direction=-1)
+        replace(signal, direction=-1)  # type: ignore[call-arg]
     with pytest.raises(Exception):
         signal.direction = -1  # type: ignore[misc]
 
@@ -625,6 +645,22 @@ def test_candidate_signal_verifier_rejects_copy_lookalike_and_coherent_rehash() 
     for forged in (copied, coherent, Lookalike()):
         with pytest.raises((TypeError, ValueError), match="signal.*registered|original|factory"):
             verifier(forged)
+
+
+def test_candidate_signal_verifier_reopens_original_v1_parent_bytes() -> None:
+    series = _series(_bars([100.0] * 24 + [102.1]))
+    definition = _definition(_slot("A", "donchian_breakout", lookback=24), series)
+    [signal] = detect_candidate_signals(definition, series)
+    partition = series.parent_snapshot_directory / series.parent_snapshot_manifest.partitions[0].path
+    original = partition.read_bytes()
+    partition.write_bytes(original + b"tamper")
+    try:
+        with pytest.raises(ValueError, match="checksum|snapshot|partition|bytes"):
+            research_candidates.verify_candidate_signal(signal)
+    finally:
+        partition.write_bytes(original)
+
+    assert research_candidates.verify_candidate_signal(signal) is signal
 
 
 def test_subordinate_detection_rejects_copied_parent_opportunity() -> None:
@@ -1268,4 +1304,4 @@ def test_wrong_series_or_arbitrary_rows_are_rejected_before_signal_emission() ->
     with pytest.raises(ValueError, match="does not own"):
         detect_candidate_signals(definition, changed_series)
     with pytest.raises((TypeError, ValueError), match="seal"):
-        replace(series, bars=changed)
+        replace(series, bars=changed)  # type: ignore[call-arg]

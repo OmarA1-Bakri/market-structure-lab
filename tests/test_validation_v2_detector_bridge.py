@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-import copy
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -320,14 +319,6 @@ def _profile_stream(bridged):
     )
 
 
-def _unregistered_profile_clone(profile, clone_type=None):
-    target_type = clone_type or type(profile)
-    clone = object.__new__(target_type)
-    for item in fields(profile):
-        object.__setattr__(clone, item.name, getattr(profile, item.name))
-    return clone
-
-
 def _family_b_definition(bridged, profile):
     parent = model_module.candidate_definition_for_verified_series(_vs_0001(), bridged)
     return model_module.candidate_definition_for_verified_series(
@@ -390,54 +381,34 @@ def test_bridge_capability_rejects_direct_replace_and_lookalike_objects(
         api["candidate_definition_for_verified_series"](_vs_0001(), Lookalike())
     definition = api["candidate_definition_for_verified_series"](_vs_0001(), bridged)
     with pytest.raises(TypeError, match="VerifiedCandidateSeriesV2|verified.*series|capability"):
-        detect_candidate_signals(definition, Lookalike())
+        detect_candidate_signals(definition, Lookalike())  # type: ignore[arg-type]
 
 
-def test_family_b_definition_rejects_subclass_copy_and_mutated_profile_streams(
+def test_direct_private_seal_profile_stream_remains_unregistered(
     aggregate_publication: AggregatePublicationV2,
 ) -> None:
     bridged = candidate_module.bridge_verified_aggregate_series_v2(
         _open_series(aggregate_publication)
     )
-    original = _profile_stream(bridged)
+    direct = _profile_stream(bridged)
 
-    class ProfileSubclass(type(original)):
-        pass
-
-    subclass = _unregistered_profile_clone(original, ProfileSubclass)
-    copied = copy.copy(original)
-    mutated = copy.copy(original)
-    object.__setattr__(mutated, "bin_step", 2.0)
-
-    for forged in (subclass, copied, mutated):
-        with pytest.raises((TypeError, ValueError), match="profile.*factory|registered|original"):
-            _family_b_definition(bridged, forged)
+    with pytest.raises((TypeError, ValueError), match="profile.*registered|original"):
+        candidate_module.verify_profile_stream(direct)
+    with pytest.raises((TypeError, ValueError), match="profile.*registered|original"):
+        _family_b_definition(bridged, direct)
 
 
-def test_family_b_detection_revalidates_exact_registered_profile_stream(
+def test_v2_family_b_fails_closed_without_production_profile_factory(
     aggregate_publication: AggregatePublicationV2,
 ) -> None:
     bridged = candidate_module.bridge_verified_aggregate_series_v2(
         _open_series(aggregate_publication)
     )
-    original = _profile_stream(bridged)
-    definition = _family_b_definition(bridged, original)
-
-    class ProfileSubclass(type(original)):
-        pass
-
-    subclass = _unregistered_profile_clone(original, ProfileSubclass)
-    copied = copy.copy(original)
-    mutated = copy.copy(original)
-    object.__setattr__(mutated, "bin_step", 2.0)
-
-    class Lookalike:
-        def __getattr__(self, name: str):
-            return getattr(original, name)
-
-    for forged in (subclass, copied, mutated, Lookalike()):
-        with pytest.raises((TypeError, ValueError), match="profile.*factory|registered|original"):
-            detect_candidate_signals(definition, bridged, profile_stream=forged)
+    with pytest.raises(
+        TypeError,
+        match="family B requires an exact factory-issued registered profile stream",
+    ):
+        _family_b_definition(bridged, None)
 
 
 def test_original_aggregate_byte_mutation_rejects_before_detection(

@@ -16,6 +16,7 @@ import shutil
 import stat
 from tempfile import TemporaryDirectory
 from typing import Any, Final, cast
+import weakref
 
 import polars as pl
 
@@ -428,7 +429,7 @@ class AggregatePublicationManifest:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class VerifiedAggregateSeries:
     """Exact ordered aggregate rows read from verified immutable publication bytes."""
 
@@ -485,6 +486,88 @@ class VerifiedAggregateSeries:
     @property
     def segment_id(self) -> int:
         return self.manifest.segment_id
+
+    def verify_original(self) -> VerifiedAggregateSeries:
+        """Revalidate this exact series using its registered opener inputs."""
+
+        return verify_original_aggregate_series(self)
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedAggregateSeriesRegistration:
+    series: weakref.ReferenceType[VerifiedAggregateSeries]
+    publication_directory: Path
+    parent_snapshot_directory: Path
+    expected_publication_sha256: str
+    expected_parent_snapshot_sha256: str
+    budget: ValidationWorkBudget
+    snapshot: tuple[object, ...]
+
+
+_VERIFIED_AGGREGATE_SERIES: dict[int, _VerifiedAggregateSeriesRegistration] = {}
+
+
+def _verified_aggregate_series_snapshot(
+    series: VerifiedAggregateSeries,
+) -> tuple[object, ...]:
+    return (
+        series.manifest,
+        series.bars,
+        series.ordered_row_sha256,
+        series.artifact_bindings,
+        series.series_sha256,
+        series.parent_snapshot_directory,
+        series.parent_snapshot_manifest,
+    )
+
+
+def _register_verified_aggregate_series(
+    series: VerifiedAggregateSeries,
+    *,
+    publication_directory: Path,
+    parent_snapshot_directory: Path,
+    budget: ValidationWorkBudget,
+) -> None:
+    identifier = id(series)
+
+    def cleanup(reference: weakref.ReferenceType[VerifiedAggregateSeries]) -> None:
+        current = _VERIFIED_AGGREGATE_SERIES.get(identifier)
+        if current is not None and current.series is reference:
+            _VERIFIED_AGGREGATE_SERIES.pop(identifier, None)
+
+    _VERIFIED_AGGREGATE_SERIES[identifier] = _VerifiedAggregateSeriesRegistration(
+        series=weakref.ref(series, cleanup),
+        publication_directory=publication_directory,
+        parent_snapshot_directory=parent_snapshot_directory,
+        expected_publication_sha256=series.publication_sha256,
+        expected_parent_snapshot_sha256=series.parent_snapshot_manifest.snapshot_sha256,
+        budget=budget,
+        snapshot=_verified_aggregate_series_snapshot(series),
+    )
+
+
+def verify_original_aggregate_series(
+    series: VerifiedAggregateSeries,
+) -> VerifiedAggregateSeries:
+    """Reopen the original publication and parent snapshot for one registered series."""
+
+    if type(series) is not VerifiedAggregateSeries:
+        raise TypeError("verified aggregate series must be the exact registered original")
+    registration = _VERIFIED_AGGREGATE_SERIES.get(id(series))
+    if registration is None or registration.series() is not series:
+        raise ValueError("verified aggregate series is not the registered original")
+    if _verified_aggregate_series_snapshot(series) != registration.snapshot:
+        raise ValueError("verified aggregate series differs from its registered original")
+    reopened = read_verified_aggregate_series(
+        registration.publication_directory,
+        expected_publication_sha256=registration.expected_publication_sha256,
+        parent_snapshot_directory=registration.parent_snapshot_directory,
+        expected_parent_snapshot_sha256=registration.expected_parent_snapshot_sha256,
+        budget=registration.budget,
+    )
+    if _verified_aggregate_series_snapshot(reopened) != registration.snapshot:
+        raise ValueError("verified aggregate series differs from original publication bytes")
+    return series
 
 
 def publish_aggregate_bars(
@@ -898,7 +981,7 @@ def read_verified_aggregate_series(
 ) -> VerifiedAggregateSeries:
     """Read exact rows only against caller-pinned lineage and a hard programme budget."""
 
-    root = Path(directory)
+    root = Path(directory).absolute()
     active = read_aggregate_publication_manifest(root / AGGREGATE_MANIFEST_NAME)
     _require_sha256(expected_publication_sha256, "expected publication sha256")
     _require_sha256(expected_parent_snapshot_sha256, "expected parent snapshot sha256")
@@ -931,7 +1014,7 @@ def read_verified_aggregate_series(
     if active.work_budget_sha256 != budget.sha256:
         raise ValueError("aggregate publication work budget differs from the expected programme")
 
-    parent_root = Path(parent_snapshot_directory)
+    parent_root = Path(parent_snapshot_directory).absolute()
     parent_manifest = read_snapshot_manifest(parent_root / "manifest.json")
     if parent_manifest.snapshot_sha256 != expected_parent_snapshot_sha256:
         raise ValueError("recorded parent snapshot differs from the expected parent lineage")
@@ -1003,7 +1086,7 @@ def read_verified_aggregate_series(
             "ordered_row_sha256": ordered,
         },
     )
-    return VerifiedAggregateSeries(
+    series = VerifiedAggregateSeries(
         manifest=active,
         bars=frozen,
         ordered_row_sha256=ordered,
@@ -1013,6 +1096,13 @@ def read_verified_aggregate_series(
         parent_snapshot_manifest=parent_manifest,
         seal=_VERIFIED_AGGREGATE_SERIES_SEAL,
     )
+    _register_verified_aggregate_series(
+        series,
+        publication_directory=root,
+        parent_snapshot_directory=parent_root,
+        budget=budget,
+    )
+    return series
 
 
 def verify_failed_aggregate_publication(directory: str | Path) -> AggregatePublicationFailure:
@@ -1731,6 +1821,7 @@ __all__ = [
     "publish_aggregate_bars",
     "read_aggregate_publication_manifest",
     "read_verified_aggregate_series",
+    "verify_original_aggregate_series",
     "verify_aggregate_publication",
     "verify_failed_aggregate_publication",
 ]

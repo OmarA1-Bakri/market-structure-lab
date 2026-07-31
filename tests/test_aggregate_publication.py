@@ -185,12 +185,15 @@ def test_verified_aggregate_series_is_read_only_from_exact_publication_bytes(
     assert len(series.bars) == 2
     assert series.ordered_row_sha256 == tuple(bar.row_sha256 for bar in series.bars)
     assert series.publication_sha256 == manifest.publication_sha256
+    assert series.verify_original() is series
     changed = replace(series.bars[0], high=series.bars[0].high + 1.0, row_sha256="")
     with pytest.raises((TypeError, ValueError), match="verified|capability|seal"):
-        replace(series, bars=(changed, *series.bars[1:]))
+        replace(series, bars=(changed, *series.bars[1:]))  # type: ignore[call-arg]
 
     partition = directory / manifest.partitions[0].path
     partition.write_bytes(partition.read_bytes() + b"tamper")
+    with pytest.raises(ValueError, match="checksum|bytes"):
+        series.verify_original()
     with pytest.raises(ValueError, match="checksum|bytes"):
         read_verified_aggregate_series(
             directory,
@@ -925,25 +928,33 @@ def _publish_injected_failed_claim(
     if os.name == "nt":
         original = aggregate_publication_module._write_exclusive_windows
 
-        def fail_second(claim, name: str, content: bytes) -> None:
+        def fail_second_windows(claim, name: str, content: bytes) -> None:
             nonlocal writes
             if writes == 1:
                 raise OSError("injected publication copy failure")
             original(claim, name, content)
             writes += 1
 
-        monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_windows", fail_second)
+        monkeypatch.setattr(
+            aggregate_publication_module,
+            "_write_exclusive_windows",
+            fail_second_windows,
+        )
     else:
         original_posix = aggregate_publication_module._write_exclusive_at
 
-        def fail_second(parent_fd: int, name: str, content: bytes) -> None:
+        def fail_second_posix(parent_fd: int, name: str, content: bytes) -> None:
             nonlocal writes
             if writes == 1:
                 raise OSError("injected publication copy failure")
             original_posix(parent_fd, name, content)
             writes += 1
 
-        monkeypatch.setattr(aggregate_publication_module, "_write_exclusive_at", fail_second)
+        monkeypatch.setattr(
+            aggregate_publication_module,
+            "_write_exclusive_at",
+            fail_second_posix,
+        )
     with pytest.raises(OSError, match="injected"):
         publish(
             [frame],
