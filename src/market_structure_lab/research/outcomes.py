@@ -23,7 +23,10 @@ from market_structure_lab.data.aggregate_publication_v2 import (
     AggregateRowV2,
     VerifiedAggregateSeriesV2,
 )
-from market_structure_lab.data.validation_source_v2 import VerifiedMinutePathV2
+from market_structure_lab.data.validation_source_v2 import (
+    VerifiedMinutePathV2,
+    verify_original_minute_path_v2,
+)
 from market_structure_lab.research.candidates import CandidateSignal, verify_candidate_signal
 from market_structure_lab.research.models import (
     EXPECTED_FAMILIES,
@@ -657,7 +660,9 @@ def attach_development_outcome_v2(
     if type(aggregate_series) is not VerifiedAggregateSeriesV2:
         raise TypeError("V2 outcome requires an exact factory-issued aggregate series")
     aggregate_series.verify_original()
-    minute_path.verify_original()
+    if type(minute_path) is not VerifiedMinutePathV2:
+        raise TypeError("V2 outcome requires an exact factory-issued minute path")
+    verify_original_minute_path_v2(minute_path)
     verified_cost_authority_bytes_v2(cost_authority)
     _verify_v2_parent_bindings(
         signal,
@@ -690,7 +695,7 @@ def attach_development_outcome_v2(
         raise ValueError("legal entry is not the next contiguous aggregate-bar open")
     for previous, current in zip(
         aggregate_series.rows[entry_index - 1 : exit_index],
-        aggregate_series.rows[entry_index: exit_index + 1],
+        aggregate_series.rows[entry_index : exit_index + 1],
         strict=True,
     ):
         if (
@@ -751,9 +756,7 @@ def attach_development_outcome_v2(
         "mfe": mfe,
         "mae": mae,
         "net_return": None,
-        "incomplete_cost_dimensions": list(
-            cost_authority.incomplete_promotion_grade_dimensions
-        ),
+        "incomplete_cost_dimensions": list(cost_authority.incomplete_promotion_grade_dimensions),
         "cost_authority_identity": cost_authority.cost_identity.value,
         "aggregate_publication_sha256": aggregate_series.aggregate_publication_sha256,
         "aggregate_identity": aggregate_series.aggregate_identity.value,
@@ -770,8 +773,7 @@ def attach_development_outcome_v2(
         "final_access_records": 0,
     }
     outcome = DevelopmentOutcomeRowV2(
-        outcome_id="DOV2-"
-        + hash_json("phase5-validation-development-outcome-v2", payload),
+        outcome_id="DOV2-" + hash_json("phase5-validation-development-outcome-v2", payload),
         assignment_id=assignment.assignment_id,
         signal_id=signal.signal_id,
         candidate_id=signal.candidate_id,

@@ -494,10 +494,7 @@ def test_attaches_exact_next_bar_half_open_path_and_gross_excursions(
     assert outcome.aggregate_interval_index == pipeline.aggregate_series.key.interval_index
     assert outcome.minute_path_identity == pipeline.minute_path.path_identity
     assert outcome.minute_path_audit_identity == pipeline.minute_path.audit_binding.audit_identity
-    assert (
-        outcome.minute_path_target_identity
-        == pipeline.minute_path.request.target_identity
-    )
+    assert outcome.minute_path_target_identity == pipeline.minute_path.request.target_identity
     assert DevelopmentOutcomeRowV2.verify_original(outcome) is outcome
 
 
@@ -603,6 +600,67 @@ def test_direct_replace_and_lookalike_outcome_objects_are_rejected(
     object.__setattr__(outcome, "fold_id", "outer-2")
     with pytest.raises(ValueError, match="snapshot|original"):
         DevelopmentOutcomeRowV2.verify_original(outcome)
+
+
+def test_attach_rejects_non_original_minute_paths_before_outcome_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import outcomes as outcomes_module
+
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    authority = _cost_authority(pipeline, tmp_path, monkeypatch)
+
+    class MinutePathLookalike:
+        def verify_original(self) -> MinutePathLookalike:
+            return self
+
+    class MutatedMinutePath(VerifiedMinutePathV2):
+        def verify_original(self) -> MutatedMinutePath:
+            return self
+
+    lookalike = MinutePathLookalike()
+    for definition in fields(VerifiedMinutePathV2):
+        object.__setattr__(
+            lookalike,
+            definition.name,
+            getattr(pipeline.minute_path, definition.name),
+        )
+
+    mutated = object.__new__(MutatedMinutePath)
+    for definition in fields(VerifiedMinutePathV2):
+        object.__setattr__(
+            mutated,
+            definition.name,
+            getattr(pipeline.minute_path, definition.name),
+        )
+    forged_row = copy.copy(mutated.rows[1])
+    object.__setattr__(forged_row, "high", Decimal("999"))
+    object.__setattr__(mutated, "rows", (mutated.rows[0], forged_row, *mutated.rows[2:]))
+
+    def unexpected_outcome_creation(*args: object, **kwargs: object) -> None:
+        raise AssertionError("outcome construction preceded minute-path authority rejection")
+
+    monkeypatch.setattr(
+        outcomes_module,
+        "DevelopmentOutcomeRowV2",
+        unexpected_outcome_creation,
+    )
+    cases = (
+        (lookalike, TypeError, "exact factory-issued minute path"),
+        (copy.copy(pipeline.minute_path), ValueError, "registered original"),
+        (mutated, TypeError, "exact factory-issued minute path"),
+    )
+    for minute_path, error, message in cases:
+        with pytest.raises(error, match=message):
+            attach_development_outcome_v2(
+                pipeline.signal,
+                aggregate_series=pipeline.aggregate_series,
+                minute_path=minute_path,  # type: ignore[arg-type]
+                assignment=pipeline.assignment,
+                cost_authority=authority,
+                horizon_hours=24,
+            )
 
 
 @pytest.mark.parametrize("target", ("aggregate", "minute"))
