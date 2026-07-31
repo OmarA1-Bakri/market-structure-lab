@@ -58,7 +58,9 @@ def _request(boundary, kind: PrecisionSourceKindV2, *, limitation: str | None):
     )
 
 
-def _historical_evidence(tmp_path: Path, boundary, monkeypatch, *, omit_last=False):
+def _historical_evidence(
+    tmp_path: Path, boundary, monkeypatch, *, omit_last=False, bounds_mode: str | None = None
+):
     from market_structure_lab.data import validation_precision_authority_v2 as module
 
     symbols = boundary.allowed_symbols[:-1] if omit_last else boundary.allowed_symbols
@@ -73,6 +75,33 @@ def _historical_evidence(tmp_path: Path, boundary, monkeypatch, *, omit_last=Fal
         for symbol in symbols
         for interval in boundary.allowed_intervals
     ]
+    if bounds_mode == "before_start":
+        entries[0]["effective_start"] = (
+            (boundary.allowed_intervals[0].start - __import__("datetime").timedelta(minutes=1))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+    elif bounds_mode == "after_end":
+        entries[0]["effective_end"] = (
+            (boundary.allowed_intervals[0].end + __import__("datetime").timedelta(minutes=1))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+    elif bounds_mode == "at_end":
+        entries.append(
+            {
+                **entries[0],
+                "effective_start": boundary.allowed_intervals[-1]
+                .end.isoformat(timespec="seconds")
+                .replace("+00:00", "Z"),
+                "effective_end": (
+                    boundary.allowed_intervals[-1].end + __import__("datetime").timedelta(minutes=1)
+                )
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z"),
+            }
+        )
+        entries.sort(key=lambda item: (item["symbol"], item["effective_start"]))
     payload = {
         "schema_version": "phase5-publisher-historical-price-precision-schedule-v2",
         "venue": "binance",
@@ -235,3 +264,100 @@ def test_trusted_but_undercovered_schedule_is_incomplete_not_available(
     assert (
         precision_requirement_status_v2(publication) is PrecisionRequirementStatusV2.NOT_EVALUATED
     )
+
+
+@pytest.mark.parametrize("bounds_mode", ("before_start", "after_end", "at_end"))
+def test_historical_entries_outside_exact_development_intervals_are_rejected(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bounds_mode: str
+) -> None:
+    parents = _parents(v2_chain, tmp_path)
+    boundary = parents[2]
+    source, verifier = _historical_evidence(
+        tmp_path, boundary, monkeypatch, bounds_mode=bounds_mode
+    )
+    with pytest.raises(ValueError, match="outside exact requested development intervals"):
+        publish_validation_precision_authority_v2(
+            request=_request(
+                boundary,
+                PrecisionSourceKindV2.PUBLISHER_HISTORICAL_SCHEDULE,
+                limitation=None,
+            ),
+            coverage=parents[0],
+            split=parents[1],
+            boundary=boundary,
+            availability=parents[3],
+            minute_publication=parents[4],
+            aggregate_publication=parents[5],
+            authority_source_path=source,
+            verifier_evidence_path=verifier,
+            output_root=tmp_path / f"precision-{bounds_mode}",
+        )
+
+
+def test_precision_lookup_rejects_half_open_interval_end(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parents = _parents(v2_chain, tmp_path)
+    boundary = parents[2]
+    source, verifier = _historical_evidence(tmp_path, boundary, monkeypatch)
+    publication = publish_validation_precision_authority_v2(
+        request=_request(
+            boundary,
+            PrecisionSourceKindV2.PUBLISHER_HISTORICAL_SCHEDULE,
+            limitation=None,
+        ),
+        coverage=parents[0],
+        split=parents[1],
+        boundary=boundary,
+        availability=parents[3],
+        minute_publication=parents[4],
+        aggregate_publication=parents[5],
+        authority_source_path=source,
+        verifier_evidence_path=verifier,
+        output_root=tmp_path / "precision-lookup-end",
+    )
+    with pytest.raises(ValueError, match="outside requested development intervals"):
+        verified_effective_precision_v2(
+            publication,
+            symbol=boundary.allowed_symbols[0],
+            at=boundary.allowed_intervals[-1].end,
+        )
+
+
+def test_post_commit_drift_never_deletes_concurrent_replacement_sentinel(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from market_structure_lab.data import validation_precision_authority_v2 as module
+
+    parents = _parents(v2_chain, tmp_path)
+    boundary = parents[2]
+    source, verifier = _historical_evidence(tmp_path, boundary, monkeypatch)
+    output = tmp_path / "precision-race"
+    original_publish = module._publish
+
+    def replace_after_publish(publication) -> None:
+        original_publish(publication)
+        source.write_bytes(b"{}")
+        __import__("shutil").rmtree(output)
+        output.mkdir()
+        (output / "sentinel.txt").write_text("concurrent replacement", encoding="utf-8")
+
+    monkeypatch.setattr(module, "_publish", replace_after_publish)
+    with pytest.raises(ValueError, match="source bytes changed"):
+        publish_validation_precision_authority_v2(
+            request=_request(
+                boundary,
+                PrecisionSourceKindV2.PUBLISHER_HISTORICAL_SCHEDULE,
+                limitation=None,
+            ),
+            coverage=parents[0],
+            split=parents[1],
+            boundary=boundary,
+            availability=parents[3],
+            minute_publication=parents[4],
+            aggregate_publication=parents[5],
+            authority_source_path=source,
+            verifier_evidence_path=verifier,
+            output_root=output,
+        )
+    assert (output / "sentinel.txt").read_text(encoding="utf-8") == "concurrent replacement"

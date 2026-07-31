@@ -453,26 +453,33 @@ def publish_validation_precision_authority_v2(
         verifier_path=verifier_path,
         failure=failure,
     )
+    _revalidate_precommit_inputs(
+        source_bytes=source_bytes,
+        source_path=source_path,
+        verifier_bytes=verifier_bytes,
+        verifier_path=verifier_path,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        minute_publication=minute_publication,
+        aggregate_publication=aggregate_publication,
+    )
     _publish(publication)
-    try:
-        if (
-            source_bytes is not None
-            and source_path is not None
-            and read_bounded_regular(source_path, _MAX_SOURCE_BYTES) != source_bytes
-        ):
-            raise ValueError("precision source bytes changed during publication")
-        if (
-            verifier_bytes is not None
-            and verifier_path is not None
-            and read_bounded_regular(verifier_path, _MAX_CONTROL_BYTES) != verifier_bytes
-        ):
-            raise ValueError("precision verifier bytes changed during publication")
-        _verify_parents(
-            coverage, split, boundary, availability, minute_publication, aggregate_publication
-        )
-    except Exception:
-        _remove_publication(publication.publication_root)
-        raise
+    # Publication is already atomically visible.  A later drift failure must never
+    # recursively delete this path because another actor may have replaced it.
+    _revalidate_precommit_inputs(
+        source_bytes=source_bytes,
+        source_path=source_path,
+        verifier_bytes=verifier_bytes,
+        verifier_path=verifier_path,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        minute_publication=minute_publication,
+        aggregate_publication=aggregate_publication,
+    )
     _register(
         publication,
         source_bytes=source_bytes,
@@ -669,6 +676,14 @@ def verified_effective_precision_v2(
         raise ValueError("required precision authority is not_evaluated")
     if at.tzinfo is None or at.utcoffset() != timedelta(0):
         raise ValueError("precision lookup time must be UTC-aware")
+    if symbol not in publication.request.requested_symbols or not any(
+        _parse_utc(start, "requested interval start")
+        <= at
+        < _parse_utc(end, "requested interval end")
+        for start, end in publication.request.requested_intervals
+    ):
+        raise ValueError("precision lookup is outside requested development intervals")
+    _require_entries_in_requested_scope(publication.entries, publication.request)
     matches = tuple(
         item
         for item in publication.entries
@@ -801,8 +816,7 @@ def _verify_historical_source(
     entries = tuple(EffectivePrecisionV2.from_dict(item) for item in raw_entries)
     if entries != tuple(sorted(entries, key=lambda item: (item.symbol, item.effective_start))):
         raise ValueError("historical precision entries are not ordered")
-    if any(item.symbol not in request.requested_symbols for item in entries):
-        raise ValueError("historical precision source contains out-of-scope symbols")
+    _require_entries_in_requested_scope(entries, request)
     _validate_schedule(entries)
     payload = {key: value for key, value in source.items() if key != "source_identity_sha256"}
     expected_source_identity = hash_json(_SOURCE_ID_DOMAIN, payload)
@@ -855,6 +869,7 @@ def _verify_historical_source(
 def _uncovered_intervals(
     request: PrecisionAuthorityRequestV2, entries: tuple[EffectivePrecisionV2, ...]
 ) -> tuple[tuple[str, str, str], ...]:
+    _require_entries_in_requested_scope(entries, request)
     uncovered: list[tuple[str, str, str]] = []
     by_symbol = {
         symbol: tuple(item for item in entries if item.symbol == symbol)
@@ -886,6 +901,28 @@ def _full_uncovered(request: PrecisionAuthorityRequestV2) -> tuple[tuple[str, st
         for symbol in request.requested_symbols
         for start, end in request.requested_intervals
     )
+
+
+def _require_entries_in_requested_scope(
+    entries: tuple[EffectivePrecisionV2, ...], request: PrecisionAuthorityRequestV2
+) -> None:
+    requested = tuple(
+        (
+            _parse_utc(start, "requested interval start"),
+            _parse_utc(end, "requested interval end"),
+        )
+        for start, end in request.requested_intervals
+    )
+    for entry in entries:
+        entry_start = _parse_utc(entry.effective_start, "effective_start")
+        entry_end = _parse_utc(entry.effective_end, "effective_end")
+        if entry.symbol not in request.requested_symbols or not any(
+            interval_start <= entry_start and entry_end <= interval_end
+            for interval_start, interval_end in requested
+        ):
+            raise ValueError(
+                "historical precision entry is outside exact requested development intervals"
+            )
 
 
 def _validate_schedule(entries: tuple[EffectivePrecisionV2, ...]) -> None:
@@ -1148,10 +1185,39 @@ def _publish(publication: ValidationPrecisionAuthorityV2) -> None:
         raise
 
 
-def _remove_publication(root: Path) -> None:
-    if path_exists_no_follow(root):
-        shutil.rmtree(root, ignore_errors=False)
-        _fsync_directory(root.parent)
+def _revalidate_precommit_inputs(
+    *,
+    source_bytes: bytes | None,
+    source_path: Path | None,
+    verifier_bytes: bytes | None,
+    verifier_path: Path | None,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    minute_publication: ValidationSourcePublicationV2,
+    aggregate_publication: AggregatePublicationV2,
+) -> None:
+    if source_bytes is not None:
+        if (
+            source_path is None
+            or read_bounded_regular(source_path, _MAX_SOURCE_BYTES) != source_bytes
+        ):
+            raise ValueError("precision source bytes changed during publication")
+    if verifier_bytes is not None:
+        if (
+            verifier_path is None
+            or read_bounded_regular(verifier_path, _MAX_CONTROL_BYTES) != verifier_bytes
+        ):
+            raise ValueError("precision verifier bytes changed during publication")
+    _verify_parents(
+        coverage,
+        split,
+        boundary,
+        availability,
+        minute_publication,
+        aggregate_publication,
+    )
 
 
 def _write_no_clobber(path: Path, content: bytes) -> None:

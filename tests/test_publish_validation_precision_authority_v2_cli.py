@@ -8,6 +8,7 @@ import pytest
 
 from market_structure_lab.cli import publish_validation_precision_authority_v2 as cli
 from market_structure_lab.data.validation_precision_authority_v2 import (
+    PrecisionAuthorityRequestV2,
     PrecisionAuthorityStatusV2,
     PrecisionSourceKindV2,
 )
@@ -90,6 +91,7 @@ def test_cli_loads_exact_parents_and_publishes_zero_access_status(
 
     assert cli.run(_args(tmp_path)) == 0
     request = captured["request"]
+    assert isinstance(request, PrecisionAuthorityRequestV2)
     assert request.source_kind is PrecisionSourceKindV2.CURRENT_ONLY_EXCHANGE_INFO
     assert request.requested_symbols == ("ADAUSDT",)
     assert captured["minute_publication"] is minute
