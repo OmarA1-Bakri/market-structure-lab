@@ -454,6 +454,9 @@ class VerifiedAggregateSeriesV2:
     byte_count: int
     ordered_row_sha256: str
     series_identity: str
+    aggregate_publication_sha256: str
+    aggregate_identity: AggregatePublicationIdentityV2
+    budget_sha256: str
     _factory_token: InitVar[object | None] = None
 
     def __post_init__(self, _factory_token: object | None) -> None:
@@ -467,6 +470,13 @@ class VerifiedAggregateSeriesV2:
             raise ValueError("verified aggregate series row count differs")
         _require_sha256(self.ordered_row_sha256, "ordered_row_sha256")
         _require_sha256(self.series_identity, "series_identity")
+        _require_sha256(
+            self.aggregate_publication_sha256,
+            "aggregate_publication_sha256",
+        )
+        if not isinstance(self.aggregate_identity, AggregatePublicationIdentityV2):
+            raise TypeError("verified aggregate series aggregate identity must be nominal")
+        _require_sha256(self.budget_sha256, "budget_sha256")
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -934,6 +944,9 @@ def open_verified_aggregate_series_v2(
         "phase5-validation-aggregate-series-row-order-v2",
         [row.row_sha256 for row in rows],
     )
+    aggregate_publication_sha256 = hashlib.sha256(
+        registered.publication_bytes
+    ).hexdigest()
     identity = _aggregate_series_identity(publication, key, partitions, rows, ordered)
     series = VerifiedAggregateSeriesV2(
         key=key,
@@ -942,6 +955,9 @@ def open_verified_aggregate_series_v2(
         byte_count=sum(item.byte_count for item in partitions),
         ordered_row_sha256=ordered,
         series_identity=identity,
+        aggregate_publication_sha256=aggregate_publication_sha256,
+        aggregate_identity=publication.aggregate_identity,
+        budget_sha256=publication.budget_sha256,
         _factory_token=_SERIES_FACTORY,
     )
     _register_verified_series(series, publication)
@@ -972,6 +988,9 @@ def verify_verified_aggregate_series_v2(
         "phase5-validation-aggregate-series-row-order-v2",
         [row.row_sha256 for row in rows],
     )
+    aggregate_publication_sha256 = hashlib.sha256(
+        registered.publication_bytes
+    ).hexdigest()
     identity = _aggregate_series_identity(publication, key, partitions, rows, ordered)
     current = (
         series.key,
@@ -980,6 +999,9 @@ def verify_verified_aggregate_series_v2(
         series.byte_count,
         series.ordered_row_sha256,
         series.series_identity,
+        series.aggregate_publication_sha256,
+        series.aggregate_identity,
+        series.budget_sha256,
     )
     expected = (
         key,
@@ -988,6 +1010,9 @@ def verify_verified_aggregate_series_v2(
         sum(item.byte_count for item in partitions),
         ordered,
         identity,
+        aggregate_publication_sha256,
+        publication.aggregate_identity,
+        publication.budget_sha256,
     )
     if current != snapshot or current != expected:
         raise ValueError(
@@ -1125,7 +1150,11 @@ def _aggregate_series_identity(
     return hash_json(
         "phase5-validation-verified-aggregate-series-v2",
         {
+            "aggregate_publication_sha256": hashlib.sha256(
+                publication.canonical_bytes
+            ).hexdigest(),
             "aggregate_identity": publication.aggregate_identity.value,
+            "budget_sha256": publication.budget_sha256,
             "key": key._payload(),
             "partitions": [item.to_dict() for item in partitions],
             "row_count": len(rows),
@@ -1147,6 +1176,9 @@ def _register_verified_series(
         series.byte_count,
         series.ordered_row_sha256,
         series.series_identity,
+        series.aggregate_publication_sha256,
+        series.aggregate_identity,
+        series.budget_sha256,
     )
 
     def cleanup(reference: weakref.ReferenceType[VerifiedAggregateSeriesV2]) -> None:

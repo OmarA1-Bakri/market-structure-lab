@@ -585,6 +585,36 @@ def test_sealed_series_reader_returns_one_contiguous_original_segment(
     assert verify_verified_aggregate_series_v2(series, budget=_budget()) is series
 
 
+def test_sealed_series_exposes_exact_original_publication_provenance(
+    v2_chain, tmp_path: Path
+) -> None:
+    minute = _publish_minute(v2_chain, tmp_path)
+    publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+    member = publication.members[0]
+    key = issue_aggregate_series_key_v2(
+        publication,
+        symbol=member.symbol,
+        interval_index=member.interval_index,
+        target_timeframe=member.target_timeframe,
+        segment_id=0,
+    )
+    series = open_verified_aggregate_series_v2(publication, key, _budget())
+
+    assert series.aggregate_publication_sha256 == hashlib.sha256(
+        publication.canonical_bytes
+    ).hexdigest()
+    assert series.aggregate_publication_sha256 != series.series_identity
+    assert series.aggregate_identity == publication.aggregate_identity
+    assert series.aggregate_identity.value == publication.aggregate_identity.value
+    assert series.budget_sha256 == publication.budget_sha256
+
+    with pytest.raises((TypeError, ValueError), match="registered|original|factory"):
+        verify_verified_aggregate_series_v2(copy.copy(series), budget=_budget())
+    object.__setattr__(series, "aggregate_publication_sha256", "0" * 64)
+    with pytest.raises(ValueError, match="identity|original|serialization"):
+        verify_verified_aggregate_series_v2(series, budget=_budget())
+
+
 def test_series_key_and_series_are_nominal_registered_originals(v2_chain, tmp_path: Path) -> None:
     minute = _publish_minute(v2_chain, tmp_path)
     publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
