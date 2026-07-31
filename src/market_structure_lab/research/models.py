@@ -979,6 +979,95 @@ def candidate_definition_for_slot(
     )
 
 
+def candidate_definition_for_verified_series(
+    slot: ValidationSlot,
+    series: object,
+    *,
+    parent_a_candidate: CandidateDefinition | None = None,
+    profile_stream: object | None = None,
+    a_selector_grid: tuple[str, ...] = FROZEN_A_SELECTOR_GRID,
+) -> CandidateDefinition:
+    """Issue a definition bound to one registered V2 detector-series capability."""
+
+    from market_structure_lab.research.candidates import (
+        VerifiedCandidateSeriesV2,
+        VerifiedProfileStream,
+    )
+
+    if type(series) is not VerifiedCandidateSeriesV2:
+        raise TypeError(
+            "candidate definition requires a factory-issued "
+            "VerifiedCandidateSeriesV2 capability"
+        )
+    series.verify()
+    if slot not in VALIDATION_SLOT_ROSTER:
+        raise ValueError("candidate slot must belong to the frozen validation roster")
+    if slot.kind not in (ValidationSlotKind.CORE, ValidationSlotKind.PERTURBATION):
+        raise ValueError("candidate definitions require a CORE or PERTURBATION detector slot")
+    if slot.timeframe != series.target_timeframe:
+        raise ValueError("candidate slot timeframe does not match the verified series")
+    selector_grid = () if slot.family == "A" else a_selector_grid
+    if slot.family != "A" and selector_grid != FROZEN_A_SELECTOR_GRID:
+        raise ValueError(
+            "subordinate candidate A selector grid does not match the frozen full grid"
+        )
+
+    config_version = (
+        f"{series.aggregate_schema_version}:{series.aggregate_identity}:"
+        f"{series.aggregate_budget_sha256}"
+    )
+    profile_definition_id = None
+    profile_bin_step = None
+    profile_stream_sha256 = None
+    if slot.family == "B":
+        profile_bars = _candidate_parameter_bars(slot, "profile_hours")
+        window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
+        if (
+            not isinstance(profile_stream, VerifiedProfileStream)
+            or profile_stream.aggregate_series_sha256 != series.series_sha256
+            or profile_stream.window_hours != window_hours
+        ):
+            raise ValueError("family B requires a matching verified profile stream")
+        profile_bin_step = profile_stream.bin_step
+        profile_stream_sha256 = profile_stream.stream_sha256
+        profile_definition_id = (
+            "rolling-1m:uniform-touched-v1:value-area=0.70:"
+            f"window-hours={window_hours}:fixed-step={profile_bin_step}:"
+            f"source-config={config_version}"
+        )
+    elif profile_stream is not None:
+        raise ValueError("profile stream is valid only for family B")
+
+    parent_id = None
+    parent_slot_id = None
+    if slot.family in ("B", "E"):
+        _validate_candidate_parent(
+            slot,
+            source_publication_sha256=series.publication_sha256,
+            source_series_sha256=series.series_sha256,
+            source_segment_id=series.segment_id,
+            parent=parent_a_candidate,
+        )
+        assert parent_a_candidate is not None
+        parent_id = parent_a_candidate.candidate_id
+        parent_slot_id = parent_a_candidate.slot.slot_id
+
+    return CandidateDefinition(
+        slot=slot,
+        source_publication_sha256=series.publication_sha256,
+        source_series_sha256=series.series_sha256,
+        source_segment_id=series.segment_id,
+        aggregate_config_version=config_version,
+        a_selector_grid=selector_grid,
+        profile_bin_step=profile_bin_step,
+        profile_definition_id=profile_definition_id,
+        profile_stream_sha256=profile_stream_sha256,
+        parent_a_candidate_id=parent_id,
+        parent_a_slot_id=parent_slot_id,
+        factory_token=_CANDIDATE_DEFINITION_FACTORY_TOKEN,
+    )
+
+
 def _validate_candidate_parent(
     slot: ValidationSlot,
     *,
@@ -1189,6 +1278,7 @@ __all__ = [
     "ValidationWorkBudgetViolation",
     "ValidationWorkDemand",
     "candidate_definition_for_slot",
+    "candidate_definition_for_verified_series",
     "evaluation_id_for_slot",
     "freeze_validation_slot_roster",
     "validation_roster_sha256",

@@ -9,9 +9,10 @@ from datetime import datetime, timedelta
 import hashlib
 from io import BytesIO
 import json
-from math import fsum
+from math import fsum, isfinite
 from statistics import median
-from typing import Any, cast
+from typing import Any, Self, TypeAlias, cast
+import weakref
 
 import polars as pl
 
@@ -22,6 +23,11 @@ from market_structure_lab.data.aggregate_bars import (
     canonical_source_row_identity,
 )
 from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
+from market_structure_lab.data.aggregate_publication_v2 import (
+    AggregatePublicationBudgetV2,
+    VerifiedAggregateSeriesV2,
+    verify_verified_aggregate_series_v2,
+)
 from market_structure_lab.data.canonical import CANONICAL_SCHEMA, validate_candle_frame
 from market_structure_lab.data.export import read_snapshot_manifest, verify_snapshot
 from market_structure_lab.data.price_precision import read_source_price_precision_manifest
@@ -46,6 +52,78 @@ _MAX_PROFILE_PARENT_PARTITION_ROWS = 2_000
 _FROZEN_PROFILE_SEAL = object()
 _VERIFIED_PROFILE_STREAM_SEAL = object()
 _CANDIDATE_SIGNAL_ISSUANCE_CAPABILITY = object()
+_VERIFIED_CANDIDATE_SERIES_V2_FACTORY = object()
+_AGGREGATE_SCHEMA_V2 = "phase5-validation-development-aggregates-v2"
+
+
+@dataclass(frozen=True, slots=True)
+class _CausalAggregateBarV2:
+    """The causal aggregate fields consumed by the canonical detectors."""
+
+    timestamp: datetime
+    bar_close: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class VerifiedCandidateSeriesV2:
+    """Factory-issued detector view of one still-verifiable V2 aggregate series."""
+
+    bars: tuple[_CausalAggregateBarV2, ...]
+    publication_sha256: str
+    series_sha256: str
+    symbol: str
+    target_timeframe: str
+    interval_index: int
+    segment_id: int
+    aggregate_schema_version: str
+    aggregate_identity: str
+    aggregate_budget_sha256: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _VERIFIED_CANDIDATE_SERIES_V2_FACTORY:
+            raise TypeError("VerifiedCandidateSeriesV2 requires its verifier factory")
+        if not self.bars:
+            raise ValueError("verified candidate series must contain bars")
+        _require_sha256(self.publication_sha256, "publication_sha256")
+        _require_sha256(self.series_sha256, "series_sha256")
+        if (
+            not isinstance(self.aggregate_identity, str)
+            or not self.aggregate_identity.startswith("AGGV2-")
+        ):
+            raise ValueError("verified candidate series aggregate identity is invalid")
+        _require_sha256(
+            self.aggregate_identity.removeprefix("AGGV2-"),
+            "aggregate_identity",
+        )
+        _require_sha256(self.aggregate_budget_sha256, "aggregate_budget_sha256")
+        if self.aggregate_schema_version != _AGGREGATE_SCHEMA_V2:
+            raise ValueError("verified candidate series aggregate schema is invalid")
+
+    def verify(self) -> Self:
+        """Revalidate this bridge and its original aggregate bytes."""
+
+        return cast(Self, verify_candidate_series_v2(self))
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedCandidateSeriesV2Registration:
+    candidate: weakref.ReferenceType[VerifiedCandidateSeriesV2]
+    aggregate: VerifiedAggregateSeriesV2
+    budget: AggregatePublicationBudgetV2
+    snapshot: tuple[object, ...]
+
+
+_VERIFIED_CANDIDATE_SERIES_V2: dict[int, _VerifiedCandidateSeriesV2Registration] = {}
+
+
+DetectorSeries: TypeAlias = VerifiedAggregateSeries | VerifiedCandidateSeriesV2
+DetectorBar: TypeAlias = CanonicalAggregateBar | _CausalAggregateBarV2
 
 
 @dataclass(frozen=True, slots=True)
@@ -757,9 +835,125 @@ def target_bars(hours: int, timeframe: str) -> int:
     return hours // width
 
 
+def bridge_verified_aggregate_series_v2(
+    series: VerifiedAggregateSeriesV2,
+) -> VerifiedCandidateSeriesV2:
+    """Issue an immutable detector view after revalidating original V2 bytes."""
+
+    if type(series) is not VerifiedAggregateSeriesV2:
+        raise TypeError("bridge requires a verifier-issued VerifiedAggregateSeriesV2 capability")
+    budget = _candidate_bridge_budget(series)
+    verify_verified_aggregate_series_v2(series, budget=budget)
+    timeframe_hours = _TIMEFRAME_HOURS.get(series.key.target_timeframe)
+    if timeframe_hours is None:
+        raise ValueError("candidate detector supports only 1h or 4h aggregate series")
+    bars = tuple(
+        _CausalAggregateBarV2(
+            timestamp=row.timestamp,
+            bar_close=row.timestamp + timedelta(hours=timeframe_hours),
+            open=float(row.open),
+            high=float(row.high),
+            low=float(row.low),
+            close=float(row.close),
+            volume=float(row.volume),
+        )
+        for row in series.rows
+    )
+    if any(
+        not all(isfinite(value) for value in (bar.open, bar.high, bar.low, bar.close, bar.volume))
+        for bar in bars
+    ):
+        raise ValueError("verified aggregate values exceed the detector numeric domain")
+    candidate = VerifiedCandidateSeriesV2(
+        bars=bars,
+        publication_sha256=series.aggregate_publication_sha256,
+        series_sha256=series.series_identity,
+        symbol=series.key.symbol,
+        target_timeframe=series.key.target_timeframe,
+        interval_index=series.key.interval_index,
+        segment_id=series.key.segment_id,
+        aggregate_schema_version=_AGGREGATE_SCHEMA_V2,
+        aggregate_identity=series.aggregate_identity.value,
+        aggregate_budget_sha256=series.budget_sha256,
+        _factory_token=_VERIFIED_CANDIDATE_SERIES_V2_FACTORY,
+    )
+    identifier = id(candidate)
+    snapshot = _candidate_series_v2_snapshot(candidate)
+
+    def cleanup(reference: weakref.ReferenceType[VerifiedCandidateSeriesV2]) -> None:
+        current = _VERIFIED_CANDIDATE_SERIES_V2.get(identifier)
+        if current is not None and current.candidate is reference:
+            _VERIFIED_CANDIDATE_SERIES_V2.pop(identifier, None)
+
+    _VERIFIED_CANDIDATE_SERIES_V2[identifier] = _VerifiedCandidateSeriesV2Registration(
+        candidate=weakref.ref(candidate, cleanup),
+        aggregate=series,
+        budget=budget,
+        snapshot=snapshot,
+    )
+    return candidate
+
+
+def verify_candidate_series_v2(series: VerifiedCandidateSeriesV2) -> VerifiedCandidateSeriesV2:
+    """Reject substituted, copied, mutated, or stale V2 detector capabilities."""
+
+    if type(series) is not VerifiedCandidateSeriesV2:
+        raise TypeError("expected a factory-issued VerifiedCandidateSeriesV2 capability")
+    registration = _VERIFIED_CANDIDATE_SERIES_V2.get(id(series))
+    if registration is None or registration.candidate() is not series:
+        raise ValueError("VerifiedCandidateSeriesV2 is not the registered verifier capability")
+    aggregate = registration.aggregate
+    if _candidate_series_v2_snapshot(series) != registration.snapshot:
+        raise ValueError("VerifiedCandidateSeriesV2 differs from its verifier-issued snapshot")
+    verify_verified_aggregate_series_v2(aggregate, budget=registration.budget)
+    return series
+
+
+def _candidate_bridge_budget(
+    series: VerifiedAggregateSeriesV2,
+) -> AggregatePublicationBudgetV2:
+    return AggregatePublicationBudgetV2(
+        max_source_rows=1,
+        max_source_bytes=1,
+        max_parent_partitions=1,
+        max_source_rows_per_chunk=240,
+        max_members=1,
+        max_aggregate_rows=series.row_count,
+        max_rows_per_partition=series.row_count,
+        max_output_bytes=series.byte_count,
+        max_output_files=series.row_count,
+    )
+
+
+def _candidate_series_v2_snapshot(series: VerifiedCandidateSeriesV2) -> tuple[object, ...]:
+    return (
+        tuple(
+            (
+                bar.timestamp,
+                bar.bar_close,
+                bar.open,
+                bar.high,
+                bar.low,
+                bar.close,
+                bar.volume,
+            )
+            for bar in series.bars
+        ),
+        series.publication_sha256,
+        series.series_sha256,
+        series.symbol,
+        series.target_timeframe,
+        series.interval_index,
+        series.segment_id,
+        series.aggregate_schema_version,
+        series.aggregate_identity,
+        series.aggregate_budget_sha256,
+    )
+
+
 def detect_candidate_signals(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     *,
     a_opportunities: Sequence[CandidateSignal] = (),
     profile_stream: VerifiedProfileStream | None = None,
@@ -866,7 +1060,7 @@ def detect_candidate_signals(
 
 def _detect_a(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     detector = dict(definition.parameters)["detector"]
@@ -883,7 +1077,7 @@ def _detect_a(
 
 def _detect_a_sma(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
@@ -905,7 +1099,7 @@ def _detect_a_sma(
 
 def _detect_a_donchian(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
@@ -927,7 +1121,7 @@ def _detect_a_donchian(
 
 def _detect_a_atr(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
@@ -955,7 +1149,7 @@ def _detect_a_atr(
 
 def _detect_a_momentum(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
@@ -973,7 +1167,7 @@ def _detect_a_momentum(
 
 def _detect_b(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     opportunities: Sequence[CandidateSignal],
     profile_stream: VerifiedProfileStream,
     issuer: Callable[[int, int, int], CandidateSignal],
@@ -983,7 +1177,9 @@ def _detect_b(
     selected: list[tuple[CandidateSignal, int]] = []
     window_bars = _parameter_bars(definition.slot, "profile_hours")
     window_hours = window_bars * _TIMEFRAME_HOURS[definition.timeframe]
-    by_bar_cutoff = {bar.bar_close: index for index, bar in enumerate(bars)}
+    by_bar_cutoff = {
+        bar.bar_close: index for index, bar in enumerate(cast(Sequence[DetectorBar], bars))
+    }
     for opportunity in opportunities:
         _validate_opportunity(definition, series, opportunity)
         index = by_bar_cutoff.get(opportunity.information_cutoff)
@@ -1052,13 +1248,15 @@ def _detect_b(
 
 def _detect_e(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     opportunities: Sequence[CandidateSignal],
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
     count = _parameter_bars(definition.slot, "volume_median_hours")
-    by_cutoff = {bar.bar_close: index for index, bar in enumerate(bars)}
+    by_cutoff = {
+        bar.bar_close: index for index, bar in enumerate(cast(Sequence[DetectorBar], bars))
+    }
     eligible: list[tuple[CandidateSignal, int]] = []
     selected: list[tuple[CandidateSignal, int]] = []
     for opportunity in opportunities:
@@ -1096,7 +1294,7 @@ def _detect_e(
 
 def _detect_g(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
@@ -1158,7 +1356,7 @@ def _detect_g(
 
 def _detect_d(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
     bars = series.bars
@@ -1188,7 +1386,7 @@ def _detect_d(
 
 def _signals(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     events: Sequence[tuple[int, int, int]],
     issuer: Callable[[int, int, int], CandidateSignal],
 ) -> tuple[CandidateSignal, ...]:
@@ -1207,7 +1405,7 @@ def _signals(
 
 def _signal_from_opportunity(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     opportunity: CandidateSignal,
     *,
     feature_start_index: int,
@@ -1222,7 +1420,7 @@ def _signal_from_opportunity(
     return issuer(cutoff_index, feature_start_index, cutoff_index)
 
 
-def _timestamp_index(series: VerifiedAggregateSeries, timestamp: datetime) -> int:
+def _timestamp_index(series: DetectorSeries, timestamp: datetime) -> int:
     first = series.bars[0]
     width = first.bar_close - first.timestamp
     offset = timestamp - first.timestamp
@@ -1277,7 +1475,7 @@ def _valid_profile(
 
 def _validate_opportunity(
     definition: CandidateDefinition,
-    series: VerifiedAggregateSeries,
+    series: DetectorSeries,
     signal: CandidateSignal,
 ) -> None:
     if signal.family != "A":
@@ -1294,9 +1492,22 @@ def _validate_opportunity(
         raise ValueError("A opportunity is not the exact registered parent of this candidate")
 
 
-def _validate_series(definition: CandidateDefinition, series: VerifiedAggregateSeries) -> None:
-    if not isinstance(series, VerifiedAggregateSeries):
-        raise TypeError("candidate detection requires a VerifiedAggregateSeries capability")
+def _validate_series(definition: CandidateDefinition, series: DetectorSeries) -> None:
+    if type(series) is VerifiedCandidateSeriesV2:
+        verify_candidate_series_v2(series)
+        expected_config_version = (
+            f"{series.aggregate_schema_version}:{series.aggregate_identity}:"
+            f"{series.aggregate_budget_sha256}"
+        )
+        if definition.aggregate_config_version != expected_config_version:
+            raise ValueError(
+                "candidate definition does not own this aggregate schema/config identity"
+            )
+    elif type(series) is not VerifiedAggregateSeries:
+        raise TypeError(
+            "candidate detection requires an exact VerifiedAggregateSeries or "
+            "VerifiedCandidateSeriesV2 capability"
+        )
     if (
         definition.source_series_sha256 != series.series_sha256
         or definition.source_publication_sha256 != series.publication_sha256
@@ -1440,7 +1651,7 @@ def _frozen_profile_window_hours() -> tuple[int, ...]:
     )
 
 
-def _true_ranges(bars: Sequence[CanonicalAggregateBar]) -> tuple[float | None, ...]:
+def _true_ranges(bars: Sequence[DetectorBar]) -> tuple[float | None, ...]:
     output: list[float | None] = []
     for index, bar in enumerate(bars):
         if not index:
@@ -1463,7 +1674,7 @@ def _mean_true_range(values: Sequence[float | None]) -> float | None:
 
 
 def _donchian(
-    bars: Sequence[CanonicalAggregateBar], index: int, lookback: int
+    bars: Sequence[DetectorBar], index: int, lookback: int
 ) -> tuple[float, float]:
     reference = bars[index - lookback : index]
     return max(bar.high for bar in reference), min(bar.low for bar in reference)
@@ -1487,11 +1698,14 @@ __all__ = [
     "CandidateSignal",
     "FrozenProfile",
     "ProfileValueReferences",
+    "VerifiedCandidateSeriesV2",
     "VerifiedProfileStream",
+    "bridge_verified_aggregate_series_v2",
     "build_verified_profile_stream",
     "candidate_definition_for_slot",
     "detect_candidate_signals",
     "profile_config_artifact_bytes",
     "target_bars",
     "value_migration_acceptance",
+    "verify_candidate_series_v2",
 ]

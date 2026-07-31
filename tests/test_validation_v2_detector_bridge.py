@@ -336,6 +336,8 @@ def test_original_aggregate_byte_mutation_rejects_before_detection(
 ) -> None:
     api = _bridge_api()
     verified_v2 = _open_series(aggregate_publication)
+    bridged = api["bridge_verified_aggregate_series_v2"](verified_v2)
+    definition = api["candidate_definition_for_verified_series"](_vs_0001(), bridged)
     member = next(
         item
         for item in aggregate_publication.members
@@ -349,6 +351,8 @@ def test_original_aggregate_byte_mutation_rejects_before_detection(
     try:
         with pytest.raises(ValueError, match="original|byte|checksum|changed|verified"):
             api["bridge_verified_aggregate_series_v2"](verified_v2)
+        with pytest.raises(ValueError, match="original|byte|checksum|changed|verified"):
+            detect_candidate_signals(definition, bridged)
     finally:
         partition_path.write_bytes(original)
 
@@ -361,6 +365,12 @@ def test_definition_and_signal_bind_exact_v2_publication_series_segment_and_time
     definition = api["candidate_definition_for_verified_series"](_vs_0001(), bridged)
     [signal] = detect_candidate_signals(definition, bridged)
 
+    assert bridged.publication_sha256 == hashlib.sha256(
+        aggregate_publication.canonical_bytes
+    ).hexdigest()
+    assert bridged.aggregate_identity == aggregate_publication.aggregate_identity.value
+    assert bridged.aggregate_budget_sha256 == aggregate_publication.budget_sha256
+    assert bridged.interval_index == 0
     assert definition.source_publication_sha256 == bridged.publication_sha256
     assert definition.source_series_sha256 == bridged.series_sha256
     assert definition.source_segment_id == bridged.segment_id
@@ -384,7 +394,24 @@ def test_v1_and_v2_identical_bar_clocks_emit_identical_vs_0001_signal_clocks(
     api = _bridge_api()
     bridged = api["bridge_verified_aggregate_series_v2"](_open_series(aggregate_publication))
     v2_definition = api["candidate_definition_for_verified_series"](_vs_0001(), bridged)
-    v1_series = v1_candidate_tests._series(bridged.bars)
+    v1_bars = tuple(
+        v1_candidate_tests._bar(
+            index,
+            timeframe=bridged.target_timeframe,
+            symbol=bridged.symbol,
+            segment=bridged.segment_id,
+            open_=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+        )
+        for index, bar in enumerate(bridged.bars)
+    )
+    assert tuple(bar.timestamp for bar in v1_bars) == tuple(
+        bar.timestamp for bar in bridged.bars
+    )
+    v1_series = v1_candidate_tests._series(v1_bars)
     v1_definition = model_module.candidate_definition_for_slot(_vs_0001(), v1_series)
 
     v2_signals = detect_candidate_signals(v2_definition, bridged)
