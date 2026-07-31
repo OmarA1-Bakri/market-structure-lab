@@ -22,6 +22,10 @@ from market_structure_lab.core.fs_durability import (
     fsync_directory_posix,
 )
 from market_structure_lab.core.identity import hash_json
+from market_structure_lab.core.secure_windows import (
+    WindowsHandleFilesystem,
+    WindowsOwnedTreeClaim,
+)
 from market_structure_lab.research.models import VALIDATION_SLOT_ROSTER
 
 _MAX_RECEIPT_BYTES = 256 * 1024
@@ -183,7 +187,10 @@ def publish_validation_v2_receipt(
     if len(content) > _MAX_RECEIPT_BYTES:
         raise ValueError("validation V2 receipt exceeds the byte ceiling")
     slot = str(payload["slot_id"])
-    attempt = int(payload["attempt_number"])
+    raw_attempt = payload["attempt_number"]
+    if isinstance(raw_attempt, bool) or not isinstance(raw_attempt, int):
+        raise TypeError("receipt attempt_number must be an integer")
+    attempt = raw_attempt
     if _SLOT_ID.fullmatch(slot) is None:
         raise ValueError("receipt slot_id must be a canonical frozen slot identifier")
     if attempt < 1:
@@ -223,6 +230,14 @@ def publish_validation_v2_receipt(
         raise FileExistsError(f"refusing existing validation V2 receipt: {destination}")
     if not path_exists_no_follow(slot_root) and _is_windows_platform():
         _publish_first_windows_slot_directory(
+            root=root,
+            slot_root=slot_root,
+            destination=destination,
+            content=content,
+        )
+        return _receipt_from_payload(destination, receipt_payload, content)
+    if _is_windows_platform():
+        _publish_windows_retry_receipt(
             root=root,
             slot_root=slot_root,
             destination=destination,
@@ -285,17 +300,54 @@ def _publish_first_windows_slot_directory(
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        durable_move_no_replace(stage, slot_root)
+        with _claim_windows_owned_tree(stage) as claim:
+            try:
+                claim.move_to(slot_root)
+            except Exception:
+                claim.delete_exact()
+                raise
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        if stage.exists():
-            staged_receipt.unlink(missing_ok=True)
-            stage.rmdir()
+
+
+def _publish_windows_retry_receipt(
+    *,
+    root: Path,
+    slot_root: Path,
+    destination: Path,
+    content: bytes,
+) -> None:
+    require_regular_directory(slot_root)
+    stage = Path(tempfile.mkdtemp(prefix=f".{slot_root.name}.", suffix=".tmp", dir=root))
+    staged_receipt = stage / destination.name
+    descriptor = os.open(
+        staged_receipt,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        with _claim_windows_owned_tree(stage) as claim:
+            try:
+                claim.move_member_to(staged_receipt.name, destination)
+            finally:
+                claim.delete_exact()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _is_windows_platform() -> bool:
     return os.name == "nt"
+
+
+def _claim_windows_owned_tree(path: Path) -> WindowsOwnedTreeClaim:
+    return WindowsHandleFilesystem().claim_owned_tree(path)
 
 
 def publish_validation_v2_receipts(

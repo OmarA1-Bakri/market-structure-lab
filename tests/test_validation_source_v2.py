@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from pathlib import Path
+import shutil
 
 import pytest
 import copy
@@ -15,6 +16,8 @@ from market_structure_lab.data.validation_source_v2 import (
     verify_dump_toc_metadata_v2,
     verify_scoped_source_availability_v2,
 )
+
+
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.research.validation_v2_models import (
     RawDumpIdentityV2,
@@ -28,6 +31,39 @@ from market_structure_lab.research.validation_v2_splits import (
     freeze_development_split_v2,
     issue_development_read_boundary_v2,
 )
+
+
+class _PathOwnedTreeClaim:
+    def __init__(self, path: Path, move_hook=None) -> None:  # type: ignore[no-untyped-def]
+        self.path = path
+        self.identity = path.stat().st_ino
+        self.move_hook = move_hook
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def move_to(self, destination: Path) -> None:
+        if self.move_hook is not None:
+            self.move_hook(self, destination)
+        owned = self._locate_owned()
+        if owned is None:
+            raise RuntimeError("owned handle path was replaced")
+        owned.rename(destination)
+        self.path = destination
+
+    def delete_exact(self) -> None:
+        owned = self._locate_owned()
+        if owned is not None:
+            shutil.rmtree(owned)
+
+    def _locate_owned(self) -> Path | None:
+        for candidate in self.path.parent.iterdir():
+            if candidate.is_dir() and candidate.stat().st_ino == self.identity:
+                return candidate
+        return None
 
 
 @pytest.fixture
@@ -371,15 +407,18 @@ def test_windows_paired_source_publication_uses_durable_moves_and_rolls_back(
     second_destination = tmp_path / "second"
     calls = 0
 
-    def move(source: Path, destination: Path) -> None:
+    def move(_claim: _PathOwnedTreeClaim, _destination: Path) -> None:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("second durable move failed")
-        source.rename(destination)
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(module, "durable_move_no_replace", move)
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathOwnedTreeClaim(path, move),
+    )
 
     with pytest.raises(OSError, match="second durable move failed"):
         module._commit_paired_directories(  # noqa: SLF001
@@ -409,22 +448,25 @@ def test_windows_paired_source_rollback_preserves_concurrent_foreign_replacement
     second_destination = tmp_path / "second"
     calls = 0
 
-    def move(source: Path, destination: Path) -> None:
+    def move(_claim: _PathOwnedTreeClaim, _destination: Path) -> None:
         nonlocal calls
         calls += 1
         if calls == 2:
-            (first_destination / "publication.json").unlink()
-            first_destination.rmdir()
+            first_destination.rename(tmp_path / "owned-away")
             first_destination.mkdir()
             (first_destination / "foreign-sentinel").write_text(
                 "preserve",
                 encoding="utf-8",
             )
             raise OSError("second durable move failed after concurrent replacement")
-        source.rename(destination)
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathOwnedTreeClaim(path, move),
+    )
     monkeypatch.setattr(
         module,
         "_remove_staged_tree",
@@ -433,7 +475,7 @@ def test_windows_paired_source_rollback_preserves_concurrent_foreign_replacement
         ),
     )
 
-    with pytest.raises(RuntimeError, match="ownership|rollback"):
+    with pytest.raises(OSError, match="second durable move"):
         module._commit_paired_directories(  # noqa: SLF001
             first_stage=first_stage,
             first_destination=first_destination,
@@ -443,7 +485,8 @@ def test_windows_paired_source_rollback_preserves_concurrent_foreign_replacement
 
     assert (first_destination / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"
     assert not second_destination.exists()
-    assert (second_stage / "publication.json").read_text(encoding="utf-8") == "second\n"
+    assert not first_stage.exists()
+    assert not second_stage.exists()
 
 
 def test_windows_rollback_restores_foreign_tree_swapped_after_identity_check(
@@ -462,23 +505,26 @@ def test_windows_rollback_restores_foreign_tree_swapped_after_identity_check(
     second_destination = tmp_path / "second"
     calls = 0
 
-    def move(source: Path, destination: Path) -> None:
+    def move(_claim: _PathOwnedTreeClaim, _destination: Path) -> None:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("second durable move failed")
         if calls == 3:
-            (first_destination / "publication.json").unlink()
-            first_destination.rmdir()
+            first_destination.rename(tmp_path / "owned-away")
             first_destination.mkdir()
             (first_destination / "foreign-sentinel").write_text(
                 "preserve",
                 encoding="utf-8",
             )
-        source.rename(destination)
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathOwnedTreeClaim(path, move),
+    )
     monkeypatch.setattr(
         module,
         "_remove_staged_tree",
@@ -487,7 +533,7 @@ def test_windows_rollback_restores_foreign_tree_swapped_after_identity_check(
         ),
     )
 
-    with pytest.raises(RuntimeError, match="ownership|rollback"):
+    with pytest.raises(OSError, match="second durable move"):
         module._commit_paired_directories(  # noqa: SLF001
             first_stage=first_stage,
             first_destination=first_destination,
@@ -515,12 +561,15 @@ def test_windows_paired_source_publication_commits_both_staged_trees(
     second_destination = tmp_path / "second"
     moves: list[tuple[Path, Path]] = []
 
-    def move(source: Path, destination: Path) -> None:
-        moves.append((source, destination))
-        source.rename(destination)
+    def move(claim: _PathOwnedTreeClaim, destination: Path) -> None:
+        moves.append((claim.path, destination))
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(module, "durable_move_no_replace", move)
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathOwnedTreeClaim(path, move),
+    )
 
     module._commit_paired_directories(  # noqa: SLF001
         first_stage=first_stage,
@@ -554,6 +603,11 @@ def test_windows_paired_source_refuses_existing_destination_without_path_deletio
     (first_destination / "winner").write_text("preserve", encoding="utf-8")
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathOwnedTreeClaim(path),
+    )
 
     with pytest.raises(FileExistsError):
         module._commit_paired_directories(  # noqa: SLF001
@@ -564,5 +618,48 @@ def test_windows_paired_source_refuses_existing_destination_without_path_deletio
         )
 
     assert (first_destination / "winner").read_text(encoding="utf-8") == "preserve"
-    assert (first_stage / "publication.json").read_text(encoding="utf-8") == "first\n"
-    assert (second_stage / "publication.json").read_text(encoding="utf-8") == "second\n"
+    assert not first_stage.exists()
+    assert not second_stage.exists()
+
+
+def test_windows_public_discovery_stage_swap_preserves_foreign_tree(
+    issued_v2_publications,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    _, _, boundary = issued_v2_publications
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    output = tmp_path / "publication"
+    audit = tmp_path / "audit"
+    calls = 0
+
+    def move(_claim: _PathOwnedTreeClaim, _destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            output.rename(tmp_path / "owned-away")
+            output.mkdir()
+            (output / "foreign-sentinel").write_text("preserve", encoding="utf-8")
+            raise OSError("second publication failed after stage swap")
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_claim_windows_owned_tree",
+        lambda path: _PathOwnedTreeClaim(path, move),
+    )
+
+    with pytest.raises(OSError, match="stage swap"):
+        discover_scoped_source_v2(
+            boundary=boundary,
+            candidate_root=candidates,
+            audit_ledger_root=audit,
+            output_root=output,
+        )
+
+    assert (output / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"
+    assert not audit.exists()
+    assert not tuple(tmp_path.glob(".*.tmp"))

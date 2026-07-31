@@ -16,15 +16,23 @@ from typing import Any, Final, Protocol, cast
 GENERIC_READ: Final = 0x80000000
 GENERIC_WRITE: Final = 0x40000000
 FILE_SHARE_READ: Final = 0x00000001
+FILE_SHARE_DELETE: Final = 0x00000004
+DELETE: Final = 0x00010000
 CREATE_NEW: Final = 1
 OPEN_EXISTING: Final = 3
 FILE_ATTRIBUTE_DIRECTORY: Final = 0x00000010
 FILE_ATTRIBUTE_REPARSE_POINT: Final = 0x00000400
 FILE_FLAG_OPEN_REPARSE_POINT: Final = 0x00200000
 FILE_FLAG_BACKUP_SEMANTICS: Final = 0x02000000
+FILE_FLAG_WRITE_THROUGH: Final = 0x80000000
 MOVEFILE_REPLACE_EXISTING: Final = 0x00000001
 MOVEFILE_WRITE_THROUGH: Final = 0x00000008
 _FILE_ATTRIBUTE_TAG_INFO: Final = 9
+_FILE_RENAME_INFO_EX: Final = 22
+_FILE_DISPOSITION_INFO_EX: Final = 21
+_FILE_DISPOSITION_FLAG_DELETE: Final = 0x00000001
+_FILE_DISPOSITION_FLAG_POSIX_SEMANTICS: Final = 0x00000002
+_FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE: Final = 0x00000010
 _ERROR_FILE_EXISTS: Final = 80
 _ERROR_ALREADY_EXISTS: Final = 183
 
@@ -44,6 +52,8 @@ class WindowsApi(Protocol):
 
     def attributes(self, handle: int) -> int: ...
 
+    def identity(self, handle: int) -> tuple[int, int]: ...
+
     def close(self, handle: int) -> None: ...
 
     def create_directory(self, path: str) -> None: ...
@@ -52,9 +62,31 @@ class WindowsApi(Protocol):
 
     def move_path(self, source: str, destination: str, flags: int) -> None: ...
 
+    def rename_handle(self, handle: int, destination: str) -> None: ...
+
+    def delete_handle(self, handle: int) -> None: ...
+
+    def final_path(self, handle: int) -> str: ...
+
+    def duplicate(self, handle: int) -> int: ...
+
+    def flush(self, handle: int) -> None: ...
+
 
 class CtypesWindowsApi:
     """Actual Win32 implementation, loaded only on native Windows."""
+
+    _create_file: Any
+    _create_directory: Any
+    _get_information: Any
+    _get_file_information: Any
+    _close_handle: Any
+    _move_file: Any
+    _set_information: Any
+    _get_final_path: Any
+    _duplicate_handle: Any
+    _current_process: Any
+    _flush_file: Any
 
     def __init__(self) -> None:
         if os.name != "nt":
@@ -82,12 +114,51 @@ class CtypesWindowsApi:
             wintypes.DWORD,
         )
         self._get_information.restype = wintypes.BOOL
+        self._get_file_information = kernel32.GetFileInformationByHandle
+        self._get_file_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.POINTER(_ByHandleFileInformation),
+        )
+        self._get_file_information.restype = wintypes.BOOL
         self._close_handle = kernel32.CloseHandle
         self._close_handle.argtypes = (wintypes.HANDLE,)
         self._close_handle.restype = wintypes.BOOL
         self._move_file = kernel32.MoveFileExW
         self._move_file.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
         self._move_file.restype = wintypes.BOOL
+        self._set_information = kernel32.SetFileInformationByHandle
+        self._set_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        )
+        self._set_information.restype = wintypes.BOOL
+        self._get_final_path = kernel32.GetFinalPathNameByHandleW
+        self._get_final_path.argtypes = (
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        )
+        self._get_final_path.restype = wintypes.DWORD
+        self._duplicate_handle = kernel32.DuplicateHandle
+        self._duplicate_handle.argtypes = (
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.HANDLE),
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        )
+        self._duplicate_handle.restype = wintypes.BOOL
+        self._current_process = kernel32.GetCurrentProcess
+        self._current_process.argtypes = ()
+        self._current_process.restype = wintypes.HANDLE
+        self._flush_file = kernel32.FlushFileBuffers
+        self._flush_file.argtypes = (wintypes.HANDLE,)
+        self._flush_file.restype = wintypes.BOOL
 
     def open_path(
         self,
@@ -115,6 +186,13 @@ class CtypesWindowsApi:
             _raise_windows_error("open artifact handle")
         return int(information.file_attributes)
 
+    def identity(self, handle: int) -> tuple[int, int]:
+        information = _ByHandleFileInformation()
+        if not self._get_file_information(handle, ctypes.byref(information)):
+            _raise_windows_error("owned publication handle")
+        file_index = (int(information.file_index_high) << 32) | int(information.file_index_low)
+        return int(information.volume_serial_number), file_index
+
     def close(self, handle: int) -> None:
         if not self._close_handle(handle):
             _raise_windows_error("open artifact handle")
@@ -135,6 +213,64 @@ class CtypesWindowsApi:
     def move_path(self, source: str, destination: str, flags: int) -> None:
         if not self._move_file(source, destination, flags):
             _raise_windows_error(destination)
+
+    def rename_handle(self, handle: int, destination: str) -> None:
+        encoded = destination.encode("utf-16-le")
+        name_offset = _FileRenameInfoEx.file_name.offset
+        size = name_offset + len(encoded)
+        buffer = ctypes.create_string_buffer(size)
+        information = cast(_FileRenameInfoEx, _FileRenameInfoEx.from_buffer(buffer))
+        information.flags = 0
+        information.root_directory = None
+        information.file_name_length = len(encoded)
+        ctypes.memmove(ctypes.addressof(buffer) + name_offset, encoded, len(encoded))
+        if not self._set_information(handle, _FILE_RENAME_INFO_EX, buffer, size):
+            _raise_windows_error(destination)
+
+    def delete_handle(self, handle: int) -> None:
+        information = _FileDispositionInfoEx(
+            _FILE_DISPOSITION_FLAG_DELETE
+            | _FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+            | _FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE
+        )
+        if not self._set_information(
+            handle,
+            _FILE_DISPOSITION_INFO_EX,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        ):
+            _raise_windows_error("owned publication handle")
+
+    def final_path(self, handle: int) -> str:
+        required = self._get_final_path(handle, None, 0, 0)
+        if not required:
+            _raise_windows_error("owned publication handle")
+        buffer = ctypes.create_unicode_buffer(required + 1)
+        written = self._get_final_path(handle, buffer, len(buffer), 0)
+        if not written or written >= len(buffer):
+            _raise_windows_error("owned publication handle")
+        return _normalize_final_windows_path(buffer.value)
+
+    def duplicate(self, handle: int) -> int:
+        process = self._current_process()
+        duplicate = wintypes.HANDLE()
+        if not self._duplicate_handle(
+            process,
+            handle,
+            process,
+            ctypes.byref(duplicate),
+            0,
+            False,
+            2,  # DUPLICATE_SAME_ACCESS
+        ):
+            _raise_windows_error("owned publication handle")
+        if duplicate.value is None:
+            raise RuntimeError("Win32 duplicated an invalid publication handle")
+        return int(duplicate.value)
+
+    def flush(self, handle: int) -> None:
+        if not self._flush_file(handle):
+            _raise_windows_error("owned publication handle")
 
 
 class WindowsHandleFilesystem:
@@ -174,6 +310,22 @@ class WindowsHandleFilesystem:
                     destination_value,
                     MOVEFILE_WRITE_THROUGH,
                 )
+
+    def claim_owned_tree(
+        self,
+        root: str | Path,
+        *,
+        maximum_entries: int = 100_000,
+        maximum_file_bytes: int = 256 * 1024 * 1024,
+    ) -> WindowsOwnedTreeClaim:
+        """Authenticate and pin a staged tree for exact-handle move or deletion."""
+
+        return WindowsOwnedTreeClaim.acquire(
+            self._api,
+            Path(root),
+            maximum_entries=maximum_entries,
+            maximum_file_bytes=maximum_file_bytes,
+        )
 
     @contextmanager
     def pin_directory_chain(self, path: str | Path) -> Iterator[tuple[int, ...]]:
@@ -482,6 +634,212 @@ class WindowsDirectoryClaim:
         return tuple(sorted(artifacts)), tuple(sorted(directories))
 
 
+class WindowsOwnedTreeClaim:
+    """Handle-bound ownership of one immutable staged publication tree.
+
+    Every member is opened without write sharing, so content cannot change while the
+    claim lives. Rename and cleanup target the exact root/member handles rather than a
+    pathname that another process can exchange.
+    """
+
+    def __init__(
+        self,
+        api: WindowsApi,
+        root: Path,
+        root_handle: int,
+        members: tuple[tuple[str, int, bool, str | None], ...],
+        maximum_file_bytes: int,
+    ) -> None:
+        self._api = api
+        self._root = root
+        self._root_handle = root_handle
+        self._members = members
+        self._maximum_file_bytes = maximum_file_bytes
+        self._closed = False
+        self._published_handles: set[int] = set()
+
+    @classmethod
+    def acquire(
+        cls,
+        api: WindowsApi,
+        root: Path,
+        *,
+        maximum_entries: int,
+        maximum_file_bytes: int,
+    ) -> WindowsOwnedTreeClaim:
+        root = root.absolute()
+        root_handle = api.open_path(
+            os.fspath(root),
+            access=GENERIC_READ | GENERIC_WRITE | DELETE,
+            share=FILE_SHARE_READ | FILE_SHARE_DELETE,
+            creation=OPEN_EXISTING,
+            flags=(
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_WRITE_THROUGH
+            ),
+        )
+        members: list[tuple[str, int, bool, str | None]] = []
+        try:
+            root_attributes = api.attributes(root_handle)
+            if root_attributes & FILE_ATTRIBUTE_REPARSE_POINT or not (
+                root_attributes & FILE_ATTRIBUTE_DIRECTORY
+            ):
+                raise RuntimeError("owned publication root is not a regular directory")
+            pending: list[tuple[Path, str]] = [(root, "")]
+            entries_seen = 0
+            while pending:
+                directory, prefix = pending.pop()
+                with os.scandir(directory) as entries:
+                    children = sorted(entries, key=lambda item: item.name)
+                for child in children:
+                    entries_seen += 1
+                    if entries_seen > maximum_entries:
+                        raise RuntimeError("owned publication tree exceeds its entry bound")
+                    relative = child.name if not prefix else f"{prefix}/{child.name}"
+                    path = directory / child.name
+                    metadata = child.stat(follow_symlinks=False)
+                    if stat.S_ISLNK(metadata.st_mode):
+                        raise RuntimeError("owned publication tree contains a reparse entry")
+                    is_directory = stat.S_ISDIR(metadata.st_mode)
+                    if not is_directory and not stat.S_ISREG(metadata.st_mode):
+                        raise RuntimeError("owned publication tree contains a special entry")
+                    handle = api.open_path(
+                        os.fspath(path),
+                        access=GENERIC_READ | GENERIC_WRITE | DELETE,
+                        share=FILE_SHARE_READ | FILE_SHARE_DELETE,
+                        creation=OPEN_EXISTING,
+                        flags=(
+                            FILE_FLAG_OPEN_REPARSE_POINT
+                            | (FILE_FLAG_BACKUP_SEMANTICS if is_directory else 0)
+                            | FILE_FLAG_WRITE_THROUGH
+                        ),
+                    )
+                    try:
+                        attributes = api.attributes(handle)
+                        if attributes & FILE_ATTRIBUTE_REPARSE_POINT:
+                            raise RuntimeError("owned publication tree contains a reparse entry")
+                        if bool(attributes & FILE_ATTRIBUTE_DIRECTORY) != is_directory:
+                            raise RuntimeError("owned publication member type changed")
+                        digest = None
+                        if is_directory:
+                            pending.append((path, relative))
+                        else:
+                            duplicate = api.duplicate(handle)
+                            descriptor = api.fd_from_handle(
+                                duplicate,
+                                os.O_RDONLY | getattr(os, "O_BINARY", 0),
+                            )
+                            try:
+                                digest = _sha256_bounded_descriptor(
+                                    descriptor,
+                                    maximum=maximum_file_bytes,
+                                )
+                            finally:
+                                os.close(descriptor)
+                        members.append((relative, handle, is_directory, digest))
+                        handle = -1
+                    finally:
+                        if handle != -1:
+                            api.close(handle)
+            return cls(api, root, root_handle, tuple(members), maximum_file_bytes)
+        except Exception:
+            for _, handle, _, _ in reversed(members):
+                api.close(handle)
+            api.close(root_handle)
+            raise
+
+    @property
+    def manifest(self) -> tuple[tuple[str, str | None], ...]:
+        return tuple((relative, digest) for relative, _, _, digest in self._members)
+
+    @property
+    def root_identity(self) -> tuple[int, int]:
+        return self._api.identity(self._root_handle)
+
+    def move_to(self, destination: str | Path) -> None:
+        self._require_open()
+        self._verify_contents()
+        destination_path = Path(destination).absolute()
+        self._api.rename_handle(self._root_handle, os.fspath(destination_path))
+        if ntpath.normcase(self._api.final_path(self._root_handle)) != ntpath.normcase(
+            os.fspath(destination_path)
+        ):
+            raise RuntimeError("owned publication handle did not reach its destination")
+        for _, handle, is_directory, _ in self._members:
+            if not is_directory:
+                self._api.flush(handle)
+        self._root = destination_path
+
+    def move_member_to(self, relative_path: str | Path, destination: str | Path) -> None:
+        """Move one exact claimed regular-file handle to an additive destination."""
+
+        self._require_open()
+        self._verify_contents()
+        relative = Path(*validated_relative_parts(relative_path)).as_posix()
+        member = next((item for item in self._members if item[0] == relative), None)
+        if member is None or member[2]:
+            raise ValueError("owned publication member is not a claimed regular file")
+        destination_path = Path(destination).absolute()
+        self._api.rename_handle(member[1], os.fspath(destination_path))
+        if ntpath.normcase(self._api.final_path(member[1])) != ntpath.normcase(
+            os.fspath(destination_path)
+        ):
+            raise RuntimeError("owned publication member did not reach its destination")
+        self._api.flush(member[1])
+        self._published_handles.add(member[1])
+
+    def delete_exact(self) -> None:
+        self._require_open()
+        files = [
+            item for item in self._members if not item[2] and item[1] not in self._published_handles
+        ]
+        directories = sorted(
+            (item for item in self._members if item[2]),
+            key=lambda item: item[0].count("/"),
+            reverse=True,
+        )
+        for _, handle, _, _ in (*files, *directories):
+            self._api.delete_handle(handle)
+        self._api.delete_handle(self._root_handle)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        for _, handle, _, _ in reversed(self._members):
+            self._api.close(handle)
+        self._api.close(self._root_handle)
+        self._closed = True
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("owned publication claim is closed")
+
+    def _verify_contents(self) -> None:
+        for relative, handle, is_directory, expected_digest in self._members:
+            if is_directory:
+                continue
+            duplicate = self._api.duplicate(handle)
+            descriptor = self._api.fd_from_handle(
+                duplicate,
+                os.O_RDONLY | getattr(os, "O_BINARY", 0),
+            )
+            try:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                actual_digest = _sha256_bounded_descriptor(
+                    descriptor,
+                    maximum=self._maximum_file_bytes,
+                )
+            finally:
+                os.close(descriptor)
+            if actual_digest != expected_digest:
+                raise RuntimeError(f"owned publication content changed after claim: {relative}")
+
+    def __enter__(self) -> WindowsOwnedTreeClaim:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
 def validated_relative_parts(path: str | Path) -> tuple[str, ...]:
     """Reject absolute, parent, empty, and alternate-stream relative paths."""
 
@@ -556,15 +914,57 @@ class _FileAttributeTagInfo(ctypes.Structure):
     )
 
 
+class _ByHandleFileInformation(ctypes.Structure):
+    _fields_ = (
+        ("file_attributes", wintypes.DWORD),
+        ("creation_time_low", wintypes.DWORD),
+        ("creation_time_high", wintypes.DWORD),
+        ("last_access_time_low", wintypes.DWORD),
+        ("last_access_time_high", wintypes.DWORD),
+        ("last_write_time_low", wintypes.DWORD),
+        ("last_write_time_high", wintypes.DWORD),
+        ("volume_serial_number", wintypes.DWORD),
+        ("file_size_high", wintypes.DWORD),
+        ("file_size_low", wintypes.DWORD),
+        ("number_of_links", wintypes.DWORD),
+        ("file_index_high", wintypes.DWORD),
+        ("file_index_low", wintypes.DWORD),
+    )
+
+
+class _FileDispositionInfoEx(ctypes.Structure):
+    _fields_ = (("flags", wintypes.DWORD),)
+
+
+class _FileRenameInfoEx(ctypes.Structure):
+    _fields_ = (
+        ("flags", wintypes.DWORD),
+        ("root_directory", wintypes.HANDLE),
+        ("file_name_length", wintypes.DWORD),
+        ("file_name", wintypes.WCHAR * 1),
+    )
+
+
+def _normalize_final_windows_path(path: str) -> str:
+    if path.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + path[8:]
+    if path.startswith("\\\\?\\"):
+        return path[4:]
+    return path
+
+
 __all__ = [
     "CREATE_NEW",
     "FILE_FLAG_BACKUP_SEMANTICS",
     "FILE_FLAG_OPEN_REPARSE_POINT",
+    "FILE_FLAG_WRITE_THROUGH",
+    "FILE_SHARE_DELETE",
     "FILE_SHARE_READ",
     "MOVEFILE_REPLACE_EXISTING",
     "MOVEFILE_WRITE_THROUGH",
     "OPEN_EXISTING",
     "WindowsDirectoryClaim",
     "WindowsHandleFilesystem",
+    "WindowsOwnedTreeClaim",
     "validated_relative_parts",
 ]
