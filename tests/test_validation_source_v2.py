@@ -393,6 +393,112 @@ def test_windows_paired_source_publication_uses_durable_moves_and_rolls_back(
     assert not second_destination.exists()
 
 
+def test_windows_paired_source_rollback_preserves_concurrent_foreign_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    first_stage = tmp_path / "first-stage"
+    second_stage = tmp_path / "second-stage"
+    first_stage.mkdir()
+    second_stage.mkdir()
+    (first_stage / "publication.json").write_text("owned\n", encoding="utf-8")
+    (second_stage / "publication.json").write_text("second\n", encoding="utf-8")
+    first_destination = tmp_path / "first"
+    second_destination = tmp_path / "second"
+    calls = 0
+
+    def move(source: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (first_destination / "publication.json").unlink()
+            first_destination.rmdir()
+            first_destination.mkdir()
+            (first_destination / "foreign-sentinel").write_text(
+                "preserve",
+                encoding="utf-8",
+            )
+            raise OSError("second durable move failed after concurrent replacement")
+        source.rename(destination)
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+    monkeypatch.setattr(
+        module,
+        "_remove_staged_tree",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("Windows rollback must not recursively delete by pathname")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="ownership|rollback"):
+        module._commit_paired_directories(  # noqa: SLF001
+            first_stage=first_stage,
+            first_destination=first_destination,
+            second_stage=second_stage,
+            second_destination=second_destination,
+        )
+
+    assert (first_destination / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"
+    assert not second_destination.exists()
+    assert (second_stage / "publication.json").read_text(encoding="utf-8") == "second\n"
+
+
+def test_windows_rollback_restores_foreign_tree_swapped_after_identity_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    first_stage = tmp_path / "first-stage"
+    second_stage = tmp_path / "second-stage"
+    first_stage.mkdir()
+    second_stage.mkdir()
+    (first_stage / "publication.json").write_text("owned\n", encoding="utf-8")
+    (second_stage / "publication.json").write_text("second\n", encoding="utf-8")
+    first_destination = tmp_path / "first"
+    second_destination = tmp_path / "second"
+    calls = 0
+
+    def move(source: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("second durable move failed")
+        if calls == 3:
+            (first_destination / "publication.json").unlink()
+            first_destination.rmdir()
+            first_destination.mkdir()
+            (first_destination / "foreign-sentinel").write_text(
+                "preserve",
+                encoding="utf-8",
+            )
+        source.rename(destination)
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+    monkeypatch.setattr(
+        module,
+        "_remove_staged_tree",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("Windows rollback must not recursively delete by pathname")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="ownership|rollback"):
+        module._commit_paired_directories(  # noqa: SLF001
+            first_stage=first_stage,
+            first_destination=first_destination,
+            second_stage=second_stage,
+            second_destination=second_destination,
+        )
+
+    assert (first_destination / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"
+    assert not first_stage.exists()
+
+
 def test_windows_paired_source_publication_commits_both_staged_trees(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -431,7 +537,7 @@ def test_windows_paired_source_publication_commits_both_staged_trees(
     assert (second_destination / "publication.json").read_text(encoding="utf-8") == "second\n"
 
 
-def test_windows_paired_source_refuses_existing_destination_and_cleans_stages(
+def test_windows_paired_source_refuses_existing_destination_without_path_deletion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -458,5 +564,5 @@ def test_windows_paired_source_refuses_existing_destination_and_cleans_stages(
         )
 
     assert (first_destination / "winner").read_text(encoding="utf-8") == "preserve"
-    assert not first_stage.exists()
-    assert not second_stage.exists()
+    assert (first_stage / "publication.json").read_text(encoding="utf-8") == "first\n"
+    assert (second_stage / "publication.json").read_text(encoding="utf-8") == "second\n"

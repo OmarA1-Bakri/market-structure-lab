@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 from typing import Any, ClassVar, Self
 import weakref
@@ -900,8 +901,9 @@ def discover_scoped_source_v2(
                 )
             )
     except Exception:
-        _remove_staged_tree(audit_stage)
-        _remove_staged_tree(output_stage)
+        if not _is_windows_platform():
+            _remove_staged_tree(audit_stage)
+            _remove_staged_tree(output_stage)
         raise
     admitted = tuple(item for item in candidates if item.admitted)
     if len(admitted) > 1:
@@ -1432,8 +1434,9 @@ def publish_validation_source_v2(
             second_destination=audit_ledger_root,
         )
     except Exception:
-        _remove_staged_tree(publication_stage)
-        _remove_staged_tree(audit_stage)
+        if not _is_windows_platform():
+            _remove_staged_tree(publication_stage)
+            _remove_staged_tree(audit_stage)
         raise
     publication = ValidationSourcePublicationV2(
         status=status,
@@ -3579,29 +3582,103 @@ def _commit_paired_directories_windows(
     second_stage: Path,
     second_destination: Path,
 ) -> None:
-    moved: list[Path] = []
+    first_identity = _owned_publication_tree_identity(first_stage)
+    second_identity = _owned_publication_tree_identity(second_stage)
+    moved: list[tuple[Path, Path, tuple[tuple[object, ...], ...]]] = []
     try:
         for destination in (first_destination, second_destination):
             if path_exists_no_follow(destination):
                 raise FileExistsError(f"refusing stale or concurrent publication: {destination}")
             require_regular_directory(destination.parent)
         durable_move_no_replace(first_stage, first_destination)
-        moved.append(first_destination)
+        moved.append((first_destination, first_stage, first_identity))
         durable_move_no_replace(second_stage, second_destination)
-        moved.append(second_destination)
+        moved.append((second_destination, second_stage, second_identity))
     except Exception as error:
-        for destination in reversed(moved):
+        rollback_errors: list[Exception] = []
+        for destination, stage, identity in reversed(moved):
             try:
-                _remove_staged_tree(destination)
-            except Exception as rollback_error:
-                error.add_note(
-                    f"failed to roll back partial Windows publication {destination}: "
-                    f"{rollback_error}"
+                _rollback_owned_publication_tree(
+                    destination=destination,
+                    stage=stage,
+                    expected_identity=identity,
                 )
+            except Exception as rollback_error:
+                rollback_errors.append(rollback_error)
+        if rollback_errors:
+            details = "; ".join(str(item) for item in rollback_errors)
+            raise RuntimeError(
+                f"Windows paired publication rollback could not prove ownership: {details}"
+            ) from error
+        error.add_note(
+            "verified Windows stage trees were retained because recursive pathname deletion "
+            "is not an ownership-safe rollback primitive"
+        )
         raise
-    finally:
-        _remove_staged_tree(first_stage)
-        _remove_staged_tree(second_stage)
+
+
+def _rollback_owned_publication_tree(
+    *,
+    destination: Path,
+    stage: Path,
+    expected_identity: tuple[tuple[object, ...], ...],
+) -> None:
+    if _owned_publication_tree_identity(destination) != expected_identity:
+        raise RuntimeError(f"publication ownership changed before rollback: {destination}")
+    durable_move_no_replace(destination, stage)
+    try:
+        if _owned_publication_tree_identity(stage) != expected_identity:
+            raise RuntimeError(f"publication ownership changed during rollback: {destination}")
+    except Exception as error:
+        try:
+            durable_move_no_replace(stage, destination)
+        except Exception as restore_error:
+            error.add_note(f"failed to restore foreign rollback path: {restore_error}")
+        raise
+
+
+def _owned_publication_tree_identity(root: Path) -> tuple[tuple[object, ...], ...]:
+    """Capture bounded filesystem identities without following reparse entries."""
+
+    root = Path(root)
+    entries: list[tuple[object, ...]] = []
+    pending: list[tuple[Path, str]] = [(root, ".")]
+    seen = 0
+    while pending:
+        path, relative = pending.pop()
+        metadata = path.stat(follow_symlinks=False)
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+        if stat.S_ISLNK(metadata.st_mode) or attributes & reparse_flag:
+            raise RuntimeError("owned publication tree contains a symlink or reparse entry")
+        if stat.S_ISDIR(metadata.st_mode):
+            kind = "directory"
+        elif stat.S_ISREG(metadata.st_mode):
+            kind = "file"
+        else:
+            raise RuntimeError("owned publication tree contains a special entry")
+        entries.append(
+            (
+                relative,
+                kind,
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+            )
+        )
+        if kind == "file":
+            continue
+        with os.scandir(path) as children:
+            members = sorted(children, key=lambda item: item.name, reverse=True)
+        seen += len(members)
+        if seen > 100_000:
+            raise RuntimeError("owned publication tree exceeds its entry bound")
+        for member in members:
+            member_relative = (
+                member.name if relative == "." else f"{relative}/{member.name}"
+            )
+            pending.append((Path(member.path), member_relative))
+    return tuple(sorted(entries))
 
 
 def _reserve_publication_directory(destination: Path) -> None:

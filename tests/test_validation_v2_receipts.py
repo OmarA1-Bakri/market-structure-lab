@@ -136,10 +136,18 @@ def test_windows_receipt_uses_write_through_move_without_directory_fsync(
 ) -> None:
     from market_structure_lab.research import validation_v2_receipts as module
 
-    moves: list[tuple[Path, Path]] = []
+    moves: list[tuple[Path, Path, bool, tuple[str, ...]]] = []
 
     def move(source: Path, destination: Path) -> None:
-        moves.append((source, destination))
+        assert not destination.exists()
+        moves.append(
+            (
+                source,
+                destination,
+                source.is_dir(),
+                tuple(sorted(path.name for path in source.iterdir())),
+            )
+        )
         source.rename(destination)
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
@@ -155,8 +163,55 @@ def test_windows_receipt_uses_write_through_move_without_directory_fsync(
     receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
 
     assert len(moves) == 1
-    source, destination = moves[0]
-    assert destination == receipt.path
-    assert source.parent == receipt.path.parent
-    assert source.name.startswith(f".{receipt.path.name}.")
+    source, destination, source_was_directory, members = moves[0]
+    assert destination == receipt.path.parent
+    assert source.parent == tmp_path
+    assert source_was_directory is True
+    assert members == (receipt.path.name,)
     assert not source.exists()
+
+
+def test_windows_first_receipt_move_failure_leaves_no_slot_or_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    def fail_move(source: Path, destination: Path) -> None:
+        assert source.is_dir()
+        assert not destination.exists()
+        raise OSError("Windows write-through move failed")
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(module, "durable_move_no_replace", fail_move)
+
+    with pytest.raises(OSError, match="write-through"):
+        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_windows_receipt_first_slot_directory_and_retry_file_are_additive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    moves: list[tuple[Path, Path, bool]] = []
+
+    def move(source: Path, destination: Path) -> None:
+        moves.append((source, destination, source.is_dir()))
+        source.rename(destination)
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    first = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+    second = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+
+    assert first.path.is_file()
+    assert second.path.is_file()
+    assert [(destination, was_directory) for _, destination, was_directory in moves] == [
+        (tmp_path / "VS-0001", True),
+        (second.path, False),
+    ]

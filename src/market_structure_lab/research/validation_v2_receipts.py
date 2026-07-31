@@ -221,6 +221,14 @@ def publish_validation_v2_receipt(
         raise ValueError("receipt attempts must be gap-free and start at one")
     if path_exists_no_follow(destination):
         raise FileExistsError(f"refusing existing validation V2 receipt: {destination}")
+    if not path_exists_no_follow(slot_root) and _is_windows_platform():
+        _publish_first_windows_slot_directory(
+            root=root,
+            slot_root=slot_root,
+            destination=destination,
+            content=content,
+        )
+        return _receipt_from_payload(destination, receipt_payload, content)
     slot_root_created = False
     if path_exists_no_follow(slot_root):
         require_regular_directory(slot_root)
@@ -255,6 +263,35 @@ def publish_validation_v2_receipt(
                 error.add_note(f"failed to clean receipt slot directory: {cleanup_error}")
         raise
     return _receipt_from_payload(destination, receipt_payload, content)
+
+
+def _publish_first_windows_slot_directory(
+    *,
+    root: Path,
+    slot_root: Path,
+    destination: Path,
+    content: bytes,
+) -> None:
+    stage = Path(tempfile.mkdtemp(prefix=f".{slot_root.name}.", suffix=".tmp", dir=root))
+    staged_receipt = stage / destination.name
+    descriptor = os.open(
+        staged_receipt,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        durable_move_no_replace(stage, slot_root)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if stage.exists():
+            staged_receipt.unlink(missing_ok=True)
+            stage.rmdir()
 
 
 def _is_windows_platform() -> bool:
