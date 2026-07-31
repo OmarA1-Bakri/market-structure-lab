@@ -47,6 +47,7 @@ from market_structure_lab.research.validation_v2_splits import (
     AccessOperationKindV2,
     BoundaryRequestV2,
     DevelopmentAccessAttemptLedgerV2,
+    DevelopmentEventAssignmentV2,
     DevelopmentFoldSetV2,
     DevelopmentSplitPublicationV2,
     assign_development_event_v2,
@@ -321,6 +322,9 @@ def test_fold_set_is_deterministic_metadata_only_and_excludes_final_scope(v2_cha
     assert "outcome" not in serialized
     assert "final_access" not in serialized
     assert "programme_id" not in serialized
+    assert first.verify_original() is first
+    with pytest.raises((TypeError, ValueError), match="registered|factory"):
+        copy.copy(first).verify_original()
 
 
 def test_fold_identity_changes_only_with_split_timeframe_or_frozen_exclusion_policy(
@@ -361,7 +365,31 @@ def test_assignment_is_development_only_and_precedes_any_minute_read(
     assert assignment.component == "development"
     assert assignment.partition_role == "outer_diagnostic"
     assert assignment.fold_id == "outer-1"
+    assert assignment.fold_sha256 == pipeline.folds.outer_folds[0].fold_sha256
+    assert assignment.fold_set_sha256 == pipeline.folds.fold_set_sha256
+    assert assignment.split_identity == pipeline.split.split_identity
+    assert assignment.source_publication_sha256 == pipeline.signal.source_publication_sha256
+    assert assignment.source_series_sha256 == pipeline.signal.source_series_sha256
     assert assignment.label_end <= pipeline.split.temporal_holdout.start
+    assert DevelopmentEventAssignmentV2.verify_original(assignment) is assignment
+
+    constructor = {
+        definition.name: getattr(assignment, definition.name)
+        for definition in fields(assignment)
+        if definition.init
+    }
+    with pytest.raises(TypeError, match="factory"):
+        DevelopmentEventAssignmentV2(**constructor)
+    with pytest.raises((TypeError, ValueError), match="registered|factory"):
+        DevelopmentEventAssignmentV2.verify_original(copy.copy(assignment))
+    lookalike = object.__new__(DevelopmentEventAssignmentV2)
+    for definition in fields(assignment):
+        object.__setattr__(lookalike, definition.name, getattr(assignment, definition.name))
+    with pytest.raises((TypeError, ValueError), match="registered|factory"):
+        DevelopmentEventAssignmentV2.verify_original(lookalike)
+    object.__setattr__(assignment, "fold_id", "outer-2")
+    with pytest.raises(ValueError, match="snapshot|original"):
+        DevelopmentEventAssignmentV2.verify_original(assignment)
 
 
 def test_assignment_rejects_asset_or_temporal_holdout_before_minute_read(
@@ -412,6 +440,23 @@ def test_attaches_exact_next_bar_half_open_path_and_gross_excursions(
     assert outcome.gross_signed_return == Decimal("0.1")
     assert outcome.mfe == Decimal("0.2")
     assert outcome.mae == Decimal("-0.2")
+    assert outcome.outcome_id.startswith("DOV2-")
+    assert outcome.assignment_id == pipeline.assignment.assignment_id
+    assert outcome.fold_id == pipeline.assignment.fold_id
+    assert outcome.fold_sha256 == pipeline.assignment.fold_sha256
+    assert outcome.fold_set_sha256 == pipeline.folds.fold_set_sha256
+    assert outcome.split_identity == pipeline.split.split_identity.value
+    assert outcome.aggregate_publication_sha256 == pipeline.signal.source_publication_sha256
+    assert outcome.aggregate_series_identity == pipeline.signal.source_series_sha256
+    assert outcome.aggregate_identity == pipeline.aggregate_series.aggregate_identity.value
+    assert outcome.aggregate_interval_index == pipeline.aggregate_series.key.interval_index
+    assert outcome.minute_path_identity == pipeline.minute_path.path_identity
+    assert outcome.minute_path_audit_identity == pipeline.minute_path.audit_binding.audit_identity
+    assert (
+        outcome.minute_path_target_identity
+        == pipeline.minute_path.request.target_identity
+    )
+    assert DevelopmentOutcomeRowV2.verify_original(outcome) is outcome
 
 
 def test_outcome_binds_aggregate_first_last_and_ordered_source_hashes_to_path(
@@ -486,6 +531,18 @@ def test_direct_replace_and_lookalike_outcome_objects_are_rejected(
         object.__setattr__(lookalike, definition.name, getattr(outcome, definition.name))
     with pytest.raises((TypeError, ValueError), match="original|registered|factory|verifier"):
         DevelopmentOutcomeRowV2.verify_original(lookalike)
+    with pytest.raises((TypeError, ValueError), match="original|registered|factory"):
+        attach_development_outcome_v2(
+            pipeline.signal,
+            aggregate_series=pipeline.aggregate_series,
+            minute_path=pipeline.minute_path,
+            assignment=copy.copy(pipeline.assignment),
+            cost_authority=authority,
+            horizon_hours=24,
+        )
+    object.__setattr__(outcome, "fold_id", "outer-2")
+    with pytest.raises(ValueError, match="snapshot|original"):
+        DevelopmentOutcomeRowV2.verify_original(outcome)
 
 
 @pytest.mark.parametrize("target", ("aggregate", "minute"))

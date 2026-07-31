@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from math import isfinite
 import re
 from typing import TYPE_CHECKING, cast
+import weakref
 
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_bars import CanonicalAggregateBar
@@ -17,6 +19,13 @@ from market_structure_lab.data.aggregate_bars import (
     target_timeframe_minutes,
 )
 from market_structure_lab.data.aggregate_publication import VerifiedAggregateSeries
+from market_structure_lab.data.aggregate_publication_v2 import (
+    AggregateRowV2,
+    AggregatePublicationBudgetV2,
+    VerifiedAggregateSeriesV2,
+    verify_verified_aggregate_series_v2,
+)
+from market_structure_lab.data.validation_source_v2 import VerifiedMinutePathV2
 from market_structure_lab.research.candidates import CandidateSignal
 from market_structure_lab.research.models import (
     EXPECTED_FAMILIES,
@@ -27,6 +36,13 @@ from market_structure_lab.research.models import (
     ValidationWorkBudget,
     ValidationWorkDemand,
 )
+from market_structure_lab.research.validation_v2_costs import (
+    VerifiedCostAuthorityV2,
+    verified_cost_authority_bytes_v2,
+)
+from market_structure_lab.research.validation_v2_splits import (
+    DevelopmentEventAssignmentV2,
+)
 
 if TYPE_CHECKING:
     from market_structure_lab.research.splits import VerifiedFinalAccess
@@ -34,6 +50,19 @@ if TYPE_CHECKING:
 _ATTACHED_OUTCOME_SEAL = object()
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PROGRAMME_ID = re.compile(r"^VP-[a-f0-9]{64}$")
+_DEVELOPMENT_OUTCOME_FACTORY = object()
+_VERIFIED_DEVELOPMENT_OUTCOMES: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[DevelopmentOutcomeRowV2],
+        tuple[object, ...],
+        CandidateSignal,
+        VerifiedAggregateSeriesV2,
+        VerifiedMinutePathV2,
+        DevelopmentEventAssignmentV2,
+        VerifiedCostAuthorityV2,
+    ],
+] = {}
 
 
 class FinalHoldoutAccessRequired(PermissionError):
@@ -477,9 +506,503 @@ def _validate_minute_path(
     return identity.hexdigest(), maximum_high, minimum_low
 
 
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class DevelopmentOutcomeRowV2:
+    """One factory-issued development-only Decimal outcome and exact path binding."""
+
+    outcome_id: str
+    assignment_id: str
+    signal_id: str
+    candidate_id: str
+    candidate_slot_id: str
+    symbol: str
+    timeframe: str
+    direction: int
+    segment_id: int
+    component: str
+    partition_role: str
+    fold_id: str
+    fold_sha256: str
+    fold_set_sha256: str
+    split_identity: str
+    information_cutoff: datetime
+    entry_time: datetime
+    exit_time: datetime
+    horizon_hours: int
+    entry_price: Decimal
+    exit_price: Decimal
+    gross_signed_return: Decimal
+    mfe: Decimal
+    mae: Decimal
+    net_return: Decimal | None
+    incomplete_cost_dimensions: tuple[str, ...]
+    cost_authority_identity: str
+    aggregate_publication_sha256: str
+    aggregate_identity: str
+    aggregate_series_identity: str
+    aggregate_interval_index: int
+    aggregate_row_sha256: tuple[str, ...]
+    minute_path_identity: str
+    minute_path_audit_identity: str
+    minute_path_target_identity: str
+    path_row_count: int
+    source_first_row_sha256: str
+    source_last_row_sha256: str
+    ordered_source_rows_sha256: str
+    final_access_records: int
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _DEVELOPMENT_OUTCOME_FACTORY:
+            raise TypeError("DevelopmentOutcomeRowV2 requires its factory/verifier")
+        if self.component != "development" or self.partition_role != "outer_diagnostic":
+            raise ValueError("V2 outcome must be a development outer diagnostic")
+        if self.final_access_records != 0:
+            raise ValueError("development outcome cannot contain final access")
+        if self.net_return is not None:
+            raise ValueError("incomplete current cost authority cannot compute net return")
+        if not (
+            self.information_cutoff == self.entry_time < self.exit_time
+            and self.exit_time - self.entry_time == timedelta(hours=self.horizon_hours)
+        ):
+            raise ValueError("V2 outcome interval is not the frozen half-open horizon")
+        if self.path_row_count != self.horizon_hours * 60:
+            raise ValueError("V2 outcome minute path is incomplete")
+        for value, label in (
+            (self.entry_price, "entry_price"),
+            (self.exit_price, "exit_price"),
+            (self.gross_signed_return, "gross_signed_return"),
+            (self.mfe, "mfe"),
+            (self.mae, "mae"),
+        ):
+            if not isinstance(value, Decimal) or not value.is_finite():
+                raise ValueError(f"{label} must be a finite Decimal")
+        if self.entry_price <= 0 or self.exit_price <= 0:
+            raise ValueError("V2 outcome prices must be positive")
+        if self.mfe < 0 or self.mae > 0:
+            raise ValueError("V2 outcome excursion signs are invalid")
+        expected = "DOV2-" + hash_json(
+            "phase5-validation-development-outcome-v2",
+            self._identity_payload(),
+        )
+        if self.outcome_id != expected:
+            raise ValueError("V2 outcome identity differs from its exact parents")
+
+    def _identity_payload(self) -> dict[str, object]:
+        return {
+            "assignment_id": self.assignment_id,
+            "signal_id": self.signal_id,
+            "candidate_id": self.candidate_id,
+            "candidate_slot_id": self.candidate_slot_id,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "direction": self.direction,
+            "segment_id": self.segment_id,
+            "component": self.component,
+            "partition_role": self.partition_role,
+            "fold_id": self.fold_id,
+            "fold_sha256": self.fold_sha256,
+            "fold_set_sha256": self.fold_set_sha256,
+            "split_identity": self.split_identity,
+            "information_cutoff": self.information_cutoff,
+            "entry_time": self.entry_time,
+            "exit_time": self.exit_time,
+            "horizon_hours": self.horizon_hours,
+            "entry_price": self.entry_price,
+            "exit_price": self.exit_price,
+            "gross_signed_return": self.gross_signed_return,
+            "mfe": self.mfe,
+            "mae": self.mae,
+            "net_return": self.net_return,
+            "incomplete_cost_dimensions": list(self.incomplete_cost_dimensions),
+            "cost_authority_identity": self.cost_authority_identity,
+            "aggregate_publication_sha256": self.aggregate_publication_sha256,
+            "aggregate_identity": self.aggregate_identity,
+            "aggregate_series_identity": self.aggregate_series_identity,
+            "aggregate_interval_index": self.aggregate_interval_index,
+            "aggregate_row_sha256": list(self.aggregate_row_sha256),
+            "minute_path_identity": self.minute_path_identity,
+            "minute_path_audit_identity": self.minute_path_audit_identity,
+            "minute_path_target_identity": self.minute_path_target_identity,
+            "path_row_count": self.path_row_count,
+            "source_first_row_sha256": self.source_first_row_sha256,
+            "source_last_row_sha256": self.source_last_row_sha256,
+            "ordered_source_rows_sha256": self.ordered_source_rows_sha256,
+            "final_access_records": self.final_access_records,
+        }
+
+    def to_dict(self) -> dict[str, object]:
+        return {"outcome_id": self.outcome_id, **self._identity_payload()}
+
+    def verify_original(self) -> DevelopmentOutcomeRowV2:
+        return _verify_original_development_outcome_v2(self)
+
+
+def attach_development_outcome_v2(
+    signal: CandidateSignal,
+    *,
+    aggregate_series: VerifiedAggregateSeriesV2,
+    minute_path: VerifiedMinutePathV2,
+    assignment: DevelopmentEventAssignmentV2,
+    cost_authority: VerifiedCostAuthorityV2,
+    horizon_hours: int,
+) -> DevelopmentOutcomeRowV2:
+    """Attach one exact development `[entry, exit)` outcome after split assignment."""
+
+    if type(signal) is not CandidateSignal:
+        raise TypeError("V2 outcome requires an exact detector-issued CandidateSignal")
+    if signal.signal_id != "CS-" + hash_json("candidate-signal-v1", signal.to_dict()):
+        raise ValueError("candidate signal identity differs from its frozen fields")
+    if isinstance(horizon_hours, bool) or not isinstance(horizon_hours, int) or horizon_hours < 1:
+        raise ValueError("V2 outcome horizon must be a positive integer")
+    assignment = DevelopmentEventAssignmentV2.verify_original(assignment)
+    _verify_signal_assignment(signal, assignment, horizon_hours)
+    _verify_aggregate_series_original(aggregate_series)
+    minute_path.verify_original()
+    verified_cost_authority_bytes_v2(cost_authority)
+    _verify_v2_parent_bindings(
+        signal,
+        aggregate_series=aggregate_series,
+        minute_path=minute_path,
+        assignment=assignment,
+        cost_authority=cost_authority,
+        horizon_hours=horizon_hours,
+    )
+    timeframe_hours = 1 if signal.timeframe == "1h" else 4
+    if horizon_hours % timeframe_hours:
+        raise ValueError("outcome horizon must contain complete aggregate bars")
+    horizon_bars = horizon_hours // timeframe_hours
+    try:
+        entry_index = next(
+            index
+            for index, row in enumerate(aggregate_series.rows)
+            if row.timestamp == signal.legal_entry
+        )
+    except StopIteration:
+        raise ValueError("legal entry is absent from the verified aggregate series") from None
+    exit_index = entry_index + horizon_bars
+    if entry_index < 1 or exit_index >= len(aggregate_series.rows):
+        raise ValueError("aggregate series does not contain the complete outcome horizon")
+    interval_rows = aggregate_series.rows[entry_index:exit_index]
+    exit_row = aggregate_series.rows[exit_index]
+    expected_step = timedelta(hours=timeframe_hours)
+    prior = aggregate_series.rows[entry_index - 1]
+    if prior.timestamp + expected_step != signal.legal_entry:
+        raise ValueError("legal entry is not the next contiguous aggregate-bar open")
+    for previous, current in zip(
+        aggregate_series.rows[entry_index - 1 : exit_index],
+        aggregate_series.rows[entry_index: exit_index + 1],
+        strict=True,
+    ):
+        if (
+            current.timestamp != previous.timestamp + expected_step
+            or current.symbol != signal.symbol
+            or current.target_timeframe != signal.timeframe
+            or current.interval_index != aggregate_series.key.interval_index
+            or current.segment_id != signal.segment_id
+        ):
+            raise ValueError("aggregate outcome path is not one exact contiguous series")
+    entry_time = interval_rows[0].timestamp
+    exit_time = exit_row.timestamp
+    if exit_time != entry_time + timedelta(hours=horizon_hours):
+        raise ValueError("aggregate exit does not match the frozen horizon")
+    _verify_minute_and_aggregate_paths(
+        minute_path,
+        interval_rows=interval_rows,
+        entry_time=entry_time,
+        exit_time=exit_time,
+        signal=signal,
+    )
+    entry_price = interval_rows[0].open
+    exit_price = exit_row.open
+    maximum_high = max(row.high for row in minute_path.rows)
+    minimum_low = min(row.low for row in minute_path.rows)
+    direction = Decimal(signal.direction)
+    gross = direction * (exit_price / entry_price - Decimal(1))
+    if signal.direction == 1:
+        mfe = maximum_high / entry_price - Decimal(1)
+        mae = minimum_low / entry_price - Decimal(1)
+    else:
+        mfe = Decimal(1) - minimum_low / entry_price
+        mae = Decimal(1) - maximum_high / entry_price
+    first_source = minute_path.rows[0].line_sha256
+    last_source = minute_path.rows[-1].line_sha256
+    payload: dict[str, object] = {
+        "assignment_id": assignment.assignment_id,
+        "signal_id": signal.signal_id,
+        "candidate_id": signal.candidate_id,
+        "candidate_slot_id": signal.candidate_slot_id,
+        "symbol": signal.symbol,
+        "timeframe": signal.timeframe,
+        "direction": signal.direction,
+        "segment_id": signal.segment_id,
+        "component": assignment.component,
+        "partition_role": assignment.partition_role,
+        "fold_id": assignment.fold_id,
+        "fold_sha256": assignment.fold_sha256,
+        "fold_set_sha256": assignment.fold_set_sha256,
+        "split_identity": assignment.split_identity.value,
+        "information_cutoff": signal.information_cutoff,
+        "entry_time": entry_time,
+        "exit_time": exit_time,
+        "horizon_hours": horizon_hours,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "gross_signed_return": gross,
+        "mfe": mfe,
+        "mae": mae,
+        "net_return": None,
+        "incomplete_cost_dimensions": list(
+            cost_authority.incomplete_promotion_grade_dimensions
+        ),
+        "cost_authority_identity": cost_authority.cost_identity.value,
+        "aggregate_publication_sha256": aggregate_series.aggregate_publication_sha256,
+        "aggregate_identity": aggregate_series.aggregate_identity.value,
+        "aggregate_series_identity": aggregate_series.series_identity,
+        "aggregate_interval_index": aggregate_series.key.interval_index,
+        "aggregate_row_sha256": [row.row_sha256 for row in interval_rows],
+        "minute_path_identity": minute_path.path_identity,
+        "minute_path_audit_identity": minute_path.audit_binding.audit_identity,
+        "minute_path_target_identity": minute_path.request.target_identity,
+        "path_row_count": minute_path.row_count,
+        "source_first_row_sha256": first_source,
+        "source_last_row_sha256": last_source,
+        "ordered_source_rows_sha256": minute_path.ordered_row_sha256,
+        "final_access_records": 0,
+    }
+    outcome = DevelopmentOutcomeRowV2(
+        outcome_id="DOV2-"
+        + hash_json("phase5-validation-development-outcome-v2", payload),
+        assignment_id=assignment.assignment_id,
+        signal_id=signal.signal_id,
+        candidate_id=signal.candidate_id,
+        candidate_slot_id=signal.candidate_slot_id,
+        symbol=signal.symbol,
+        timeframe=signal.timeframe,
+        direction=signal.direction,
+        segment_id=signal.segment_id,
+        component=assignment.component,
+        partition_role=assignment.partition_role,
+        fold_id=assignment.fold_id,
+        fold_sha256=assignment.fold_sha256,
+        fold_set_sha256=assignment.fold_set_sha256,
+        split_identity=assignment.split_identity.value,
+        information_cutoff=signal.information_cutoff,
+        entry_time=entry_time,
+        exit_time=exit_time,
+        horizon_hours=horizon_hours,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        gross_signed_return=gross,
+        mfe=mfe,
+        mae=mae,
+        net_return=None,
+        incomplete_cost_dimensions=cost_authority.incomplete_promotion_grade_dimensions,
+        cost_authority_identity=cost_authority.cost_identity.value,
+        aggregate_publication_sha256=aggregate_series.aggregate_publication_sha256,
+        aggregate_identity=aggregate_series.aggregate_identity.value,
+        aggregate_series_identity=aggregate_series.series_identity,
+        aggregate_interval_index=aggregate_series.key.interval_index,
+        aggregate_row_sha256=tuple(row.row_sha256 for row in interval_rows),
+        minute_path_identity=minute_path.path_identity,
+        minute_path_audit_identity=minute_path.audit_binding.audit_identity,
+        minute_path_target_identity=minute_path.request.target_identity,
+        path_row_count=minute_path.row_count,
+        source_first_row_sha256=first_source,
+        source_last_row_sha256=last_source,
+        ordered_source_rows_sha256=minute_path.ordered_row_sha256,
+        final_access_records=0,
+        _factory_token=_DEVELOPMENT_OUTCOME_FACTORY,
+    )
+    _register_development_outcome_v2(
+        outcome,
+        signal,
+        aggregate_series,
+        minute_path,
+        assignment,
+        cost_authority,
+    )
+    return outcome
+
+
+def _verify_signal_assignment(
+    signal: CandidateSignal,
+    assignment: DevelopmentEventAssignmentV2,
+    horizon_hours: int,
+) -> None:
+    if (
+        assignment.signal_id != signal.signal_id
+        or assignment.candidate_id != signal.candidate_id
+        or assignment.candidate_slot_id != signal.candidate_slot_id
+        or assignment.symbol != signal.symbol
+        or assignment.timeframe != signal.timeframe
+        or assignment.segment_id != signal.segment_id
+        or assignment.information_cutoff != signal.information_cutoff
+        or assignment.legal_entry != signal.legal_entry
+        or assignment.label_end != signal.legal_entry + timedelta(hours=horizon_hours)
+        or assignment.source_publication_sha256 != signal.source_publication_sha256
+        or assignment.source_series_sha256 != signal.source_series_sha256
+    ):
+        raise ValueError("signal differs from its exact registered development assignment")
+
+
+def _verify_v2_parent_bindings(
+    signal: CandidateSignal,
+    *,
+    aggregate_series: VerifiedAggregateSeriesV2,
+    minute_path: VerifiedMinutePathV2,
+    assignment: DevelopmentEventAssignmentV2,
+    cost_authority: VerifiedCostAuthorityV2,
+    horizon_hours: int,
+) -> None:
+    request = minute_path.request
+    expected_exit = signal.legal_entry + timedelta(hours=horizon_hours)
+    if (
+        signal.source_publication_sha256 != aggregate_series.aggregate_publication_sha256
+        or signal.source_series_sha256 != aggregate_series.series_identity
+        or signal.symbol != aggregate_series.key.symbol
+        or signal.timeframe != aggregate_series.key.target_timeframe
+        or signal.segment_id != aggregate_series.key.segment_id
+        or assignment.split_identity.value != cost_authority.split_identity
+        or aggregate_series.aggregate_identity.value != cost_authority.aggregate_identity
+        or request.symbol != signal.symbol
+        or request.timeframe != "1m"
+        or request.start != signal.legal_entry
+        or request.end != expected_exit
+        or minute_path.row_count != horizon_hours * 60
+        or minute_path.audit_binding.record_count < 1
+    ):
+        raise ValueError("V2 outcome parents differ in source, split, scope, or path identity")
+    if (
+        cost_authority.final_scope_attempts
+        or cost_authority.final_rows
+        or cost_authority.final_access_records
+    ):
+        raise PermissionError("V2 development outcome cannot consume final-scope authority")
+
+
+def _verify_minute_and_aggregate_paths(
+    minute_path: VerifiedMinutePathV2,
+    *,
+    interval_rows: tuple[AggregateRowV2, ...],
+    entry_time: datetime,
+    exit_time: datetime,
+    signal: CandidateSignal,
+) -> None:
+    if (
+        minute_path.rows[0].timestamp != entry_time
+        or minute_path.rows[-1].timestamp != exit_time - timedelta(minutes=1)
+        or minute_path.rows[0].open != interval_rows[0].open
+    ):
+        raise ValueError("minute path does not match the legal half-open aggregate interval")
+    for index, row in enumerate(minute_path.rows):
+        if (
+            row.timestamp != entry_time + timedelta(minutes=index)
+            or row.symbol != signal.symbol
+            or row.timeframe != "1m"
+        ):
+            raise ValueError("minute outcome path is not contiguous in one development series")
+    width = 60 if signal.timeframe == "1h" else 240
+    if len(interval_rows) * width != len(minute_path.rows):
+        raise ValueError("aggregate and minute outcome path lengths differ")
+    path_hashes = tuple(row.line_sha256 for row in minute_path.rows)
+    for index, aggregate_row in enumerate(interval_rows):
+        source_hashes = path_hashes[index * width : (index + 1) * width]
+        if (
+            aggregate_row.source_first_row_sha256 != source_hashes[0]
+            or aggregate_row.source_last_row_sha256 != source_hashes[-1]
+            or aggregate_row.ordered_source_rows_sha256
+            != hash_json(
+                "phase5-validation-aggregate-bar-source-order-v2",
+                list(source_hashes),
+            )
+        ):
+            raise ValueError("aggregate row source hashes differ from the exact minute path")
+
+
+def _aggregate_verification_budget(
+    series: VerifiedAggregateSeriesV2,
+) -> AggregatePublicationBudgetV2:
+    return AggregatePublicationBudgetV2(
+        max_source_rows=1,
+        max_source_bytes=1,
+        max_parent_partitions=1,
+        max_source_rows_per_chunk=240,
+        max_members=1,
+        max_aggregate_rows=series.row_count,
+        max_rows_per_partition=series.row_count,
+        max_output_bytes=series.byte_count,
+        max_output_files=series.row_count,
+    )
+
+
+def _verify_aggregate_series_original(series: VerifiedAggregateSeriesV2) -> None:
+    if type(series) is not VerifiedAggregateSeriesV2:
+        raise TypeError("V2 outcome requires a factory-issued aggregate series")
+    verify_verified_aggregate_series_v2(
+        series,
+        budget=_aggregate_verification_budget(series),
+    )
+
+
+def _development_outcome_snapshot(outcome: DevelopmentOutcomeRowV2) -> tuple[object, ...]:
+    return tuple(outcome.to_dict().items())
+
+
+def _register_development_outcome_v2(
+    outcome: DevelopmentOutcomeRowV2,
+    signal: CandidateSignal,
+    aggregate_series: VerifiedAggregateSeriesV2,
+    minute_path: VerifiedMinutePathV2,
+    assignment: DevelopmentEventAssignmentV2,
+    cost_authority: VerifiedCostAuthorityV2,
+) -> None:
+    identifier = id(outcome)
+
+    def cleanup(reference: weakref.ReferenceType[DevelopmentOutcomeRowV2]) -> None:
+        current = _VERIFIED_DEVELOPMENT_OUTCOMES.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_DEVELOPMENT_OUTCOMES.pop(identifier, None)
+
+    _VERIFIED_DEVELOPMENT_OUTCOMES[identifier] = (
+        weakref.ref(outcome, cleanup),
+        _development_outcome_snapshot(outcome),
+        signal,
+        aggregate_series,
+        minute_path,
+        assignment,
+        cost_authority,
+    )
+
+
+def _verify_original_development_outcome_v2(
+    outcome: DevelopmentOutcomeRowV2,
+) -> DevelopmentOutcomeRowV2:
+    if type(outcome) is not DevelopmentOutcomeRowV2:
+        raise TypeError("development outcome must be factory-issued")
+    registered = _VERIFIED_DEVELOPMENT_OUTCOMES.get(id(outcome))
+    if registered is None or registered[0]() is not outcome:
+        raise ValueError("development outcome is not the registered original")
+    if _development_outcome_snapshot(outcome) != registered[1]:
+        raise ValueError("development outcome differs from the immutable original snapshot")
+    expected = attach_development_outcome_v2(
+        registered[2],
+        aggregate_series=registered[3],
+        minute_path=registered[4],
+        assignment=registered[5],
+        cost_authority=registered[6],
+        horizon_hours=outcome.horizon_hours,
+    )
+    if expected.to_dict() != outcome.to_dict():
+        raise ValueError("development outcome differs from its exact registered parents")
+    return outcome
+
+
 __all__ = [
     "AttachedOutcome",
+    "DevelopmentOutcomeRowV2",
     "FinalHoldoutAccessRequired",
+    "attach_development_outcome_v2",
     "attach_outcome",
 ]
 

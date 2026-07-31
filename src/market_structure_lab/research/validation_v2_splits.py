@@ -22,6 +22,8 @@ from market_structure_lab.research.validation_v2_models import (
 _SPLIT_FACTORY = object()
 _BOUNDARY_FACTORY = object()
 _AUDIT_BINDING_FACTORY = object()
+_FOLD_SET_FACTORY = object()
+_EVENT_ASSIGNMENT_FACTORY = object()
 _SPLIT_HOLDOUT_DOMAIN = "phase5-validation-asset-holdout-order-v2"
 _SPLIT_IDENTITY_DOMAIN = "phase5-validation-development-split-v2"
 _BOUNDARY_IDENTITY_DOMAIN = "phase5-validation-development-read-boundary-v2"
@@ -36,6 +38,23 @@ _VERIFIED_BOUNDARY_OBJECTS: dict[
         bytes,
         bytes,
         bytes,
+    ],
+] = {}
+_VERIFIED_FOLD_SETS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[DevelopmentFoldSetV2],
+        tuple[object, ...],
+        DevelopmentSplitPublicationV2,
+    ],
+] = {}
+_VERIFIED_EVENT_ASSIGNMENTS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[DevelopmentEventAssignmentV2],
+        tuple[object, ...],
+        DevelopmentFoldSetV2,
+        object,
     ],
 ] = {}
 
@@ -433,6 +452,330 @@ def _grid_block(*, index: int, start: datetime, end: datetime) -> GridBlockV2:
         day_count=(end - start).days,
         block_sha256=hash_json("phase5-validation-grid-block-v2", payload),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentInnerFoldMetadataV2:
+    """Frozen inner-fold identity only; selector assignment is intentionally unsupported."""
+
+    fold_id: str
+    ordinal: int
+    fold_sha256: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "fold_id": self.fold_id,
+            "ordinal": self.ordinal,
+            "fold_sha256": self.fold_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentOuterFoldV2:
+    """One development-only outer diagnostic interval."""
+
+    fold_id: str
+    test_block_index: int
+    test: GridBlockV2
+    inner_folds: tuple[DevelopmentInnerFoldMetadataV2, ...]
+    fold_sha256: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "fold_id": self.fold_id,
+            "test_block_index": self.test_block_index,
+            "test": self.test.to_dict(),
+            "inner_folds": [item.to_dict() for item in self.inner_folds],
+            "fold_sha256": self.fold_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class DevelopmentFoldSetV2:
+    """Factory-issued, outcome-blind development fold metadata."""
+
+    split_identity: DevelopmentSplitIdentityV2
+    timeframe: str
+    development_symbols: tuple[str, ...]
+    purge_hours: int
+    embargo_hours: int
+    outer_folds: tuple[DevelopmentOuterFoldV2, ...]
+    fold_set_sha256: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _FOLD_SET_FACTORY:
+            raise TypeError("DevelopmentFoldSetV2 requires its freeze factory")
+        if self.timeframe not in ("1h", "4h"):
+            raise ValueError("development fold timeframe must be 1h or 4h")
+        if tuple(item.test_block_index for item in self.outer_folds) != (1, 2, 3, 4):
+            raise ValueError("development outer folds must cover blocks 1 through 4")
+        if any(len(item.inner_folds) != 3 for item in self.outer_folds):
+            raise ValueError("development outer folds require three frozen inner identities")
+        if self.fold_set_sha256 != hash_json(
+            "phase5-validation-development-fold-set-v2",
+            self._identity_payload(),
+        ):
+            raise ValueError("development fold-set identity differs")
+
+    def _identity_payload(self) -> dict[str, object]:
+        return {
+            "split_identity": self.split_identity.value,
+            "timeframe": self.timeframe,
+            "development_symbols": list(self.development_symbols),
+            "purge_hours": self.purge_hours,
+            "embargo_hours": self.embargo_hours,
+            "outer_folds": [item.to_dict() for item in self.outer_folds],
+        }
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": "phase5-validation-development-fold-set-v2",
+            **self._identity_payload(),
+            "fold_set_sha256": self.fold_set_sha256,
+        }
+
+    def verify_original(self) -> DevelopmentFoldSetV2:
+        return _verify_original_fold_set_v2(self)
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class DevelopmentEventAssignmentV2:
+    """Factory-issued outer-diagnostic assignment frozen before outcome reads."""
+
+    assignment_id: str
+    signal_id: str
+    candidate_id: str
+    candidate_slot_id: str
+    symbol: str
+    timeframe: str
+    segment_id: int
+    information_cutoff: datetime
+    legal_entry: datetime
+    label_end: datetime
+    component: str
+    partition_role: str
+    fold_id: str
+    fold_sha256: str
+    fold_set_sha256: str
+    split_identity: DevelopmentSplitIdentityV2
+    source_publication_sha256: str
+    source_series_sha256: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _EVENT_ASSIGNMENT_FACTORY:
+            raise TypeError("DevelopmentEventAssignmentV2 requires its assignment factory")
+        for value, label in (
+            (self.information_cutoff, "assignment information cutoff"),
+            (self.legal_entry, "assignment legal entry"),
+            (self.label_end, "assignment label end"),
+        ):
+            _require_utc(value, label)
+        if not (
+            self.information_cutoff == self.legal_entry < self.label_end
+            and self.component == "development"
+            and self.partition_role == "outer_diagnostic"
+        ):
+            raise ValueError("development event assignment scope is invalid")
+        if self.assignment_id != "DEAV2-" + hash_json(
+            "phase5-validation-development-event-assignment-v2",
+            self._identity_payload(),
+        ):
+            raise ValueError("development event assignment identity differs")
+
+    def _identity_payload(self) -> dict[str, object]:
+        return {
+            "signal_id": self.signal_id,
+            "candidate_id": self.candidate_id,
+            "candidate_slot_id": self.candidate_slot_id,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "segment_id": self.segment_id,
+            "information_cutoff": _utc_text(self.information_cutoff),
+            "legal_entry": _utc_text(self.legal_entry),
+            "label_end": _utc_text(self.label_end),
+            "component": self.component,
+            "partition_role": self.partition_role,
+            "fold_id": self.fold_id,
+            "fold_sha256": self.fold_sha256,
+            "fold_set_sha256": self.fold_set_sha256,
+            "split_identity": self.split_identity.value,
+            "source_publication_sha256": self.source_publication_sha256,
+            "source_series_sha256": self.source_series_sha256,
+        }
+
+    def to_dict(self) -> dict[str, object]:
+        return {"assignment_id": self.assignment_id, **self._identity_payload()}
+
+    def verify_original(self) -> DevelopmentEventAssignmentV2:
+        return _verify_original_event_assignment_v2(self)
+
+
+def freeze_development_folds_v2(
+    *,
+    split: DevelopmentSplitPublicationV2,
+    timeframe: str,
+    outcomes: object | None = None,
+) -> DevelopmentFoldSetV2:
+    """Freeze metadata-only outer diagnostics before any outcome attachment."""
+
+    del outcomes
+    _verify_split_original_for_folds(split)
+    if timeframe not in split.policy.timeframes or timeframe not in ("1h", "4h"):
+        raise ValueError("fold timeframe is outside the frozen development split")
+    outer_folds: list[DevelopmentOuterFoldV2] = []
+    for block_index in range(1, 5):
+        inner_folds = tuple(
+            DevelopmentInnerFoldMetadataV2(
+                fold_id=f"outer-{block_index}-inner-{ordinal}",
+                ordinal=ordinal,
+                fold_sha256=hash_json(
+                    "phase5-validation-development-inner-fold-metadata-v2",
+                    {
+                        "split_identity": split.split_identity.value,
+                        "timeframe": timeframe,
+                        "outer_test_block_index": block_index,
+                        "ordinal": ordinal,
+                        "assignment_semantics": "unsupported",
+                    },
+                ),
+            )
+            for ordinal in range(3)
+        )
+        test = split.blocks[block_index]
+        payload = {
+            "fold_id": f"outer-{block_index}",
+            "test_block_index": block_index,
+            "test": test.to_dict(),
+            "inner_folds": [item.to_dict() for item in inner_folds],
+        }
+        outer_folds.append(
+            DevelopmentOuterFoldV2(
+                fold_id=f"outer-{block_index}",
+                test_block_index=block_index,
+                test=test,
+                inner_folds=inner_folds,
+                fold_sha256=hash_json(
+                    "phase5-validation-development-outer-fold-v2", payload
+                ),
+            )
+        )
+    identity_payload = {
+        "split_identity": split.split_identity.value,
+        "timeframe": timeframe,
+        "development_symbols": list(split.development_symbols),
+        "purge_hours": split.policy.purge_hours,
+        "embargo_hours": split.policy.embargo_hours,
+        "outer_folds": [item.to_dict() for item in outer_folds],
+    }
+    folds = DevelopmentFoldSetV2(
+        split_identity=split.split_identity,
+        timeframe=timeframe,
+        development_symbols=split.development_symbols,
+        purge_hours=split.policy.purge_hours,
+        embargo_hours=split.policy.embargo_hours,
+        outer_folds=tuple(outer_folds),
+        fold_set_sha256=hash_json(
+            "phase5-validation-development-fold-set-v2", identity_payload
+        ),
+        _factory_token=_FOLD_SET_FACTORY,
+    )
+    _register_fold_set_v2(folds, split)
+    return folds
+
+
+def assign_development_event_v2(
+    *,
+    folds: DevelopmentFoldSetV2,
+    signal: object,
+    minute_rows: object | None = None,
+    partition_role: str = "outer_diagnostic",
+) -> DevelopmentEventAssignmentV2:
+    """Assign a frozen candidate without constructing or iterating minute rows."""
+
+    del minute_rows
+    _verify_original_fold_set_v2(folds)
+    if partition_role != "outer_diagnostic":
+        raise ValueError("only the frozen outer_diagnostic assignment role is supported")
+    from market_structure_lab.research.candidates import CandidateSignal
+    from market_structure_lab.research.models import VALIDATION_SLOT_ROSTER
+
+    if type(signal) is not CandidateSignal:
+        raise TypeError("development assignment requires an exact CandidateSignal")
+    expected_signal_id = "CS-" + hash_json("candidate-signal-v1", signal.to_dict())
+    if signal.signal_id != expected_signal_id:
+        raise ValueError("candidate signal identity differs from its frozen fields")
+    slot = next(
+        (item for item in VALIDATION_SLOT_ROSTER if item.slot_id == signal.candidate_slot_id),
+        None,
+    )
+    if slot is None:
+        raise ValueError("candidate signal is outside the frozen validation roster")
+    expected_direction = "long" if signal.direction == 1 else "short"
+    if (
+        slot.family != signal.family
+        or slot.timeframe != signal.timeframe
+        or slot.direction != expected_direction
+        or signal.timeframe != folds.timeframe
+    ):
+        raise ValueError("candidate signal differs from its registered slot or fold timeframe")
+    if signal.symbol not in folds.development_symbols:
+        raise PermissionError("candidate signal belongs to final asset-holdout scope")
+    if signal.legal_entry != signal.information_cutoff:
+        raise ValueError("candidate legal entry must equal the next aggregate-bar cutoff")
+    label_end = signal.legal_entry + timedelta(hours=slot.horizon_hours)
+    matching = tuple(
+        fold
+        for fold in folds.outer_folds
+        if fold.test.start <= signal.legal_entry < label_end <= fold.test.end
+    )
+    if len(matching) != 1:
+        raise PermissionError("candidate label interval reaches final or unsupported fold scope")
+    fold = matching[0]
+    payload = {
+        "signal_id": signal.signal_id,
+        "candidate_id": signal.candidate_id,
+        "candidate_slot_id": signal.candidate_slot_id,
+        "symbol": signal.symbol,
+        "timeframe": signal.timeframe,
+        "segment_id": signal.segment_id,
+        "information_cutoff": _utc_text(signal.information_cutoff),
+        "legal_entry": _utc_text(signal.legal_entry),
+        "label_end": _utc_text(label_end),
+        "component": "development",
+        "partition_role": partition_role,
+        "fold_id": fold.fold_id,
+        "fold_sha256": fold.fold_sha256,
+        "fold_set_sha256": folds.fold_set_sha256,
+        "split_identity": folds.split_identity.value,
+        "source_publication_sha256": signal.source_publication_sha256,
+        "source_series_sha256": signal.source_series_sha256,
+    }
+    assignment = DevelopmentEventAssignmentV2(
+        assignment_id="DEAV2-"
+        + hash_json("phase5-validation-development-event-assignment-v2", payload),
+        signal_id=signal.signal_id,
+        candidate_id=signal.candidate_id,
+        candidate_slot_id=signal.candidate_slot_id,
+        symbol=signal.symbol,
+        timeframe=signal.timeframe,
+        segment_id=signal.segment_id,
+        information_cutoff=signal.information_cutoff,
+        legal_entry=signal.legal_entry,
+        label_end=label_end,
+        component="development",
+        partition_role=partition_role,
+        fold_id=fold.fold_id,
+        fold_sha256=fold.fold_sha256,
+        fold_set_sha256=folds.fold_set_sha256,
+        split_identity=folds.split_identity,
+        source_publication_sha256=signal.source_publication_sha256,
+        source_series_sha256=signal.source_series_sha256,
+        _factory_token=_EVENT_ASSIGNMENT_FACTORY,
+    )
+    _register_event_assignment_v2(assignment, folds, signal)
+    return assignment
 
 
 class AccessOperationKindV2(str, Enum):
@@ -956,6 +1299,109 @@ def _register_verified_split(split: DevelopmentSplitPublicationV2, coverage_byte
     )
 
 
+def _verify_split_original_for_folds(split: DevelopmentSplitPublicationV2) -> None:
+    if type(split) is not DevelopmentSplitPublicationV2:
+        raise TypeError("fold freezing requires an exact development split publication")
+    registered = _VERIFIED_SPLIT_OBJECTS.get(id(split))
+    if (
+        registered is None
+        or registered[0]() is not split
+        or registered[1] != split.canonical_bytes
+        or publication_json_bytes(split.to_dict()) != registered[1]
+    ):
+        raise ValueError("development split is not the registered original publication")
+
+
+def _fold_set_snapshot(folds: DevelopmentFoldSetV2) -> tuple[object, ...]:
+    return (
+        folds.split_identity,
+        folds.timeframe,
+        folds.development_symbols,
+        folds.purge_hours,
+        folds.embargo_hours,
+        folds.outer_folds,
+        folds.fold_set_sha256,
+    )
+
+
+def _register_fold_set_v2(
+    folds: DevelopmentFoldSetV2,
+    split: DevelopmentSplitPublicationV2,
+) -> None:
+    identifier = id(folds)
+
+    def cleanup(reference: weakref.ReferenceType[DevelopmentFoldSetV2]) -> None:
+        current = _VERIFIED_FOLD_SETS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_FOLD_SETS.pop(identifier, None)
+
+    _VERIFIED_FOLD_SETS[identifier] = (
+        weakref.ref(folds, cleanup),
+        _fold_set_snapshot(folds),
+        split,
+    )
+
+
+def _verify_original_fold_set_v2(folds: DevelopmentFoldSetV2) -> DevelopmentFoldSetV2:
+    if type(folds) is not DevelopmentFoldSetV2:
+        raise TypeError("development folds must be factory-issued")
+    registered = _VERIFIED_FOLD_SETS.get(id(folds))
+    if registered is None or registered[0]() is not folds:
+        raise ValueError("development folds are not the registered original")
+    if _fold_set_snapshot(folds) != registered[1]:
+        raise ValueError("development folds differ from the immutable snapshot")
+    split = registered[2]
+    _verify_split_original_for_folds(split)
+    expected = freeze_development_folds_v2(split=split, timeframe=folds.timeframe)
+    if expected.to_dict() != folds.to_dict():
+        raise ValueError("development folds differ from the registered split")
+    return folds
+
+
+def _event_assignment_snapshot(
+    assignment: DevelopmentEventAssignmentV2,
+) -> tuple[object, ...]:
+    return tuple(assignment.to_dict().items())
+
+
+def _register_event_assignment_v2(
+    assignment: DevelopmentEventAssignmentV2,
+    folds: DevelopmentFoldSetV2,
+    signal: object,
+) -> None:
+    identifier = id(assignment)
+
+    def cleanup(reference: weakref.ReferenceType[DevelopmentEventAssignmentV2]) -> None:
+        current = _VERIFIED_EVENT_ASSIGNMENTS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_EVENT_ASSIGNMENTS.pop(identifier, None)
+
+    _VERIFIED_EVENT_ASSIGNMENTS[identifier] = (
+        weakref.ref(assignment, cleanup),
+        _event_assignment_snapshot(assignment),
+        folds,
+        signal,
+    )
+
+
+def _verify_original_event_assignment_v2(
+    assignment: DevelopmentEventAssignmentV2,
+) -> DevelopmentEventAssignmentV2:
+    if type(assignment) is not DevelopmentEventAssignmentV2:
+        raise TypeError("development assignment must be factory-issued")
+    registered = _VERIFIED_EVENT_ASSIGNMENTS.get(id(assignment))
+    if registered is None or registered[0]() is not assignment:
+        raise ValueError("development assignment is not the registered original")
+    if _event_assignment_snapshot(assignment) != registered[1]:
+        raise ValueError("development assignment differs from the immutable snapshot")
+    folds = _verify_original_fold_set_v2(registered[2])
+    signal = registered[3]
+    expected = assign_development_event_v2(folds=folds, signal=signal)
+    if expected.to_dict() != assignment.to_dict():
+        raise ValueError("development assignment differs from its registered parents")
+    return assignment
+
+
 def _verified_split_bytes(split: DevelopmentSplitPublicationV2, coverage_bytes: bytes) -> bytes:
     registered = _VERIFIED_SPLIT_OBJECTS.get(id(split))
     if (
@@ -1037,12 +1483,18 @@ __all__ = [
     "BoundaryRequestV2",
     "DevelopmentAccessAuditBindingV2",
     "DevelopmentAccessAttemptLedgerV2",
+    "DevelopmentEventAssignmentV2",
+    "DevelopmentFoldSetV2",
+    "DevelopmentInnerFoldMetadataV2",
+    "DevelopmentOuterFoldV2",
     "DevelopmentReadBoundaryV2",
     "DevelopmentSplitPublicationV2",
     "ExcludedCoverageSymbolV2",
     "GridBlockV2",
     "SplitPolicyV2",
     "UtcIntervalV2",
+    "assign_development_event_v2",
+    "freeze_development_folds_v2",
     "freeze_development_split_v2",
     "issue_development_read_boundary_v2",
     "open_development_consumer_v2",
