@@ -632,6 +632,15 @@ class _MinuteAuditVerificationV2:
     completions: tuple[_MinuteAuditCompletionV2, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _VerifiedMinuteSourceOriginV2:
+    source_identity: str
+    origin_kind: str
+    origin_sha256: str
+    origin_proof_sha256: str
+    evidence_bindings: tuple[tuple[Path, bytes], ...]
+
+
 @dataclass(frozen=True, slots=True, weakref_slot=True)
 class VerifiedDevelopmentMinuteSourceV2:
     """Verifier-issued row capability; callers cannot supply read behavior."""
@@ -1009,11 +1018,11 @@ def _issue_test_minute_source_capability_v2(
     availability_bytes = verified_scoped_source_availability_bytes_v2(
         availability, boundary=boundary
     )
-    if availability.status is not ScopedSourceStatusV2.AVAILABLE:
+    origin = _derive_verified_minute_source_origin(
+        boundary=boundary, availability=availability
+    )
+    if origin is None:
         raise ValueError("minute source capability requires admitted source availability")
-    admitted = tuple(item for item in availability.candidates if item.admitted)
-    if len(admitted) != 1:
-        raise ValueError("minute source capability requires one admitted descriptor")
     expected_requests = len(boundary.allowed_symbols) * len(boundary.allowed_intervals)
     if (
         not isinstance(request_rows, tuple)
@@ -1031,47 +1040,20 @@ def _issue_test_minute_source_capability_v2(
         or not 0 <= fail_request_index < expected_requests
     ):
         raise ValueError("fixture failure request index is invalid")
-    descriptor_path = Path(admitted[0].descriptor_path)
-    descriptor_bytes = read_bounded_regular(descriptor_path, _MAX_DESCRIPTOR_BYTES)
-    descriptor = _decode_canonical_object(descriptor_bytes, "source descriptor")
-    evidence_bindings: list[tuple[Path, bytes]] = [
-        (descriptor_path, descriptor_bytes)
-    ]
-    proof_payload: dict[str, object] = {
-        "source_identity": admitted[0].source_identity,
-        "boundary_sha256": boundary.boundary_sha256,
-        "availability_sha256": availability.availability_sha256,
-        "descriptor_sha256": admitted[0].descriptor_sha256,
-    }
-    for label in ("original_manifest", "predicate_evidence", "verifier_evidence"):
-        evidence_path = _resolve_evidence_path(
-            descriptor_path.parent, descriptor[f"{label}_path"]
-        )
-        evidence_bytes = read_bounded_regular(
-            evidence_path, _MAX_DESCRIPTOR_BYTES
-        )
-        expected_sha256 = descriptor[f"{label}_sha256"]
-        if hashlib.sha256(evidence_bytes).hexdigest() != expected_sha256:
-            raise ValueError("minute source capability evidence bytes changed")
-        evidence_bindings.append((evidence_path, evidence_bytes))
-        proof_payload[f"{label}_sha256"] = expected_sha256
-    origin_proof_sha256 = hash_json(
-        "phase5-development-minute-source-origin-proof-v2", proof_payload
-    )
     public = {
         "schema_version": "phase5-verified-development-minute-source-v2",
-        "source_identity": admitted[0].source_identity,
-        "origin_kind": "admitted-predicate-source-v2",
-        "origin_sha256": admitted[0].descriptor_sha256,
-        "origin_proof_sha256": origin_proof_sha256,
+        "source_identity": origin.source_identity,
+        "origin_kind": origin.origin_kind,
+        "origin_sha256": origin.origin_sha256,
+        "origin_proof_sha256": origin.origin_proof_sha256,
         "boundary_sha256": boundary.boundary_sha256,
         "availability_sha256": availability.availability_sha256,
     }
     capability = VerifiedDevelopmentMinuteSourceV2(
-        source_identity=admitted[0].source_identity,
-        origin_kind="admitted-predicate-source-v2",
-        origin_sha256=admitted[0].descriptor_sha256,
-        origin_proof_sha256=origin_proof_sha256,
+        source_identity=origin.source_identity,
+        origin_kind=origin.origin_kind,
+        origin_sha256=origin.origin_sha256,
+        origin_proof_sha256=origin.origin_proof_sha256,
         boundary_sha256=boundary.boundary_sha256,
         availability_sha256=availability.availability_sha256,
         canonical_bytes=publication_json_bytes(public),
@@ -1082,7 +1064,7 @@ def _issue_test_minute_source_capability_v2(
         boundary=boundary,
         availability=availability,
         availability_bytes=availability_bytes,
-        evidence_bindings=tuple(evidence_bindings),
+        evidence_bindings=origin.evidence_bindings,
         implementation=_FixtureMinuteReadImplementationV2(
             request_rows=request_rows,
             fail_request_index=fail_request_index,
@@ -1420,13 +1402,20 @@ def verify_validation_source_publication_v2(
         boundary=boundary,
         availability=availability,
     )
+    expected_origin = _derive_verified_minute_source_origin(
+        boundary=boundary, availability=availability
+    )
+    _verify_minute_publication_origin(publication, expected_origin)
     audit = _verify_minute_publication_audit(
         publication.audit_ledger_root / "publication.json",
         publication=publication,
+        expected_origin=expected_origin,
     )
     if audit.canonical_bytes != registered[4]:
         raise ValueError("validation source audit original bytes changed")
-    _verify_minute_partition_tree(publication, audit=audit)
+    _verify_minute_partition_tree(
+        publication, audit=audit, expected_origin=expected_origin
+    )
     success = read_bounded_regular(
         publication.publication_root / "_SUCCESS", 128
     )
@@ -1453,6 +1442,9 @@ def load_validation_source_publication_v2(
     availability_bytes = verified_scoped_source_availability_bytes_v2(
         availability, boundary=boundary
     )
+    expected_origin = _derive_verified_minute_source_origin(
+        boundary=boundary, availability=availability
+    )
     publication_root = Path(publication_root)
     audit_ledger_root = Path(audit_ledger_root)
     canonical_bytes = read_bounded_regular(
@@ -1475,11 +1467,15 @@ def load_validation_source_publication_v2(
         boundary=boundary,
         availability=availability,
     )
+    _verify_minute_publication_origin(publication, expected_origin)
     audit = _verify_minute_publication_audit(
         audit_ledger_root / "publication.json",
         publication=publication,
+        expected_origin=expected_origin,
     )
-    _verify_minute_partition_tree(publication, audit=audit)
+    _verify_minute_partition_tree(
+        publication, audit=audit, expected_origin=expected_origin
+    )
     _register_source_publication(
         publication,
         audit_bytes=audit.canonical_bytes,
@@ -1497,6 +1493,109 @@ def load_validation_source_publication_v2(
         boundary=boundary,
         availability=availability,
     )
+
+
+def _derive_verified_minute_source_origin(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+) -> _VerifiedMinuteSourceOriginV2 | None:
+    """Derive the minute-source trust tuple from reopened admitted originals."""
+
+    verified_scoped_source_availability_bytes_v2(
+        availability, boundary=boundary
+    )
+    admitted = tuple(item for item in availability.candidates if item.admitted)
+    if availability.status is ScopedSourceStatusV2.UNAVAILABLE:
+        if admitted or availability.admitted_source_identity is not None:
+            raise ValueError("unavailable source contains admitted origin evidence")
+        return None
+    if (
+        availability.status is not ScopedSourceStatusV2.AVAILABLE
+        or len(admitted) != 1
+        or availability.admitted_source_identity != admitted[0].source_identity
+    ):
+        raise ValueError("available source has no unique admitted origin evidence")
+    candidate = admitted[0]
+    descriptor_path = Path(candidate.descriptor_path)
+    descriptor_bytes = read_bounded_regular(
+        descriptor_path, _MAX_DESCRIPTOR_BYTES
+    )
+    descriptor_sha256 = hashlib.sha256(descriptor_bytes).hexdigest()
+    if descriptor_sha256 != candidate.descriptor_sha256:
+        raise ValueError("admitted source descriptor original bytes changed")
+    descriptor = _decode_canonical_object(
+        descriptor_bytes, "admitted source descriptor"
+    )
+    evidence_bindings: list[tuple[Path, bytes]] = [
+        (descriptor_path, descriptor_bytes)
+    ]
+    reopened: dict[Path, bytes] = {}
+
+    def read_reference(path: Path, _target: str) -> bytes:
+        content = read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES)
+        reopened[path] = content
+        return content
+
+    _verify_trusted_candidate_descriptor(
+        descriptor,
+        descriptor_bytes,
+        descriptor_path=descriptor_path,
+        boundary=boundary,
+        read_reference=read_reference,
+    )
+    if descriptor["source_identity"] != candidate.source_identity:
+        raise ValueError("admitted descriptor source identity differs")
+    proof_payload: dict[str, object] = {
+        "source_identity": candidate.source_identity,
+        "boundary_sha256": boundary.boundary_sha256,
+        "availability_sha256": availability.availability_sha256,
+        "descriptor_sha256": descriptor_sha256,
+    }
+    for label in ("original_manifest", "predicate_evidence", "verifier_evidence"):
+        evidence_path = _resolve_evidence_path(
+            descriptor_path.parent, descriptor[f"{label}_path"]
+        )
+        evidence_bytes = reopened[evidence_path]
+        evidence_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
+        proof_payload[f"{label}_sha256"] = evidence_sha256
+        evidence_bindings.append((evidence_path, evidence_bytes))
+    return _VerifiedMinuteSourceOriginV2(
+        source_identity=candidate.source_identity,
+        origin_kind="admitted-predicate-source-v2",
+        origin_sha256=descriptor_sha256,
+        origin_proof_sha256=hash_json(
+            "phase5-development-minute-source-origin-proof-v2",
+            proof_payload,
+        ),
+        evidence_bindings=tuple(evidence_bindings),
+    )
+
+
+def _verify_minute_publication_origin(
+    publication: ValidationSourcePublicationV2,
+    expected_origin: _VerifiedMinuteSourceOriginV2 | None,
+) -> None:
+    actual = (
+        publication.admitted_source_identity,
+        publication.origin_kind,
+        publication.origin_sha256,
+        publication.origin_proof_sha256,
+    )
+    expected = (
+        (None, None, None, None)
+        if expected_origin is None
+        else (
+            expected_origin.source_identity,
+            expected_origin.origin_kind,
+            expected_origin.origin_sha256,
+            expected_origin.origin_proof_sha256,
+        )
+    )
+    if actual != expected:
+        raise ValueError(
+            "validation source origin differs from admitted original evidence"
+        )
 
 
 def _verify_minute_reader_binding(
@@ -1934,6 +2033,7 @@ def _verify_minute_publication_audit(
     publication_path: Path,
     *,
     publication: ValidationSourcePublicationV2,
+    expected_origin: _VerifiedMinuteSourceOriginV2 | None,
 ) -> _MinuteAuditVerificationV2:
     content = read_bounded_regular(publication_path, _MAX_MINUTE_PUBLICATION_BYTES)
     public = _decode_canonical_object(content, "minute publication audit")
@@ -1964,6 +2064,18 @@ def _verify_minute_publication_audit(
         for key, value in values.items()
         if key != "audit_publication_sha256"
     }
+    expected_source_identity = (
+        None if expected_origin is None else expected_origin.source_identity
+    )
+    expected_origin_kind = (
+        None if expected_origin is None else expected_origin.origin_kind
+    )
+    expected_origin_sha256 = (
+        None if expected_origin is None else expected_origin.origin_sha256
+    )
+    expected_origin_proof_sha256 = (
+        None if expected_origin is None else expected_origin.origin_proof_sha256
+    )
     if (
         values["schema_version"]
         != "phase5-validation-minute-publication-audit-v2"
@@ -1973,9 +2085,13 @@ def _verify_minute_publication_audit(
         or values["source_audit_sha256"] != publication.source_audit_sha256
         or values["admitted_source_identity"]
         != publication.admitted_source_identity
+        or values["admitted_source_identity"] != expected_source_identity
         or values["origin_kind"] != publication.origin_kind
+        or values["origin_kind"] != expected_origin_kind
         or values["origin_sha256"] != publication.origin_sha256
+        or values["origin_sha256"] != expected_origin_sha256
         or values["origin_proof_sha256"] != publication.origin_proof_sha256
+        or values["origin_proof_sha256"] != expected_origin_proof_sha256
         or values["rows_admitted"] != publication.row_count
         or values["bytes_admitted"] != publication.byte_count
         or values["final_scope_attempts"] != 0
@@ -2054,9 +2170,13 @@ def _verify_minute_publication_audit(
             != publication.source_availability_sha256
             or record.get("source_audit_sha256") != publication.source_audit_sha256
             or record.get("origin_kind") != publication.origin_kind
+            or record.get("origin_kind") != expected_origin_kind
             or record.get("origin_sha256") != publication.origin_sha256
+            or record.get("origin_sha256") != expected_origin_sha256
             or record.get("origin_proof_sha256")
             != publication.origin_proof_sha256
+            or record.get("origin_proof_sha256")
+            != expected_origin_proof_sha256
             or record.get("allowed") is not True
             or request
             != {
@@ -2065,7 +2185,7 @@ def _verify_minute_publication_audit(
                 "start": start,
                 "end": end,
                 "operation_kind": AccessOperationKindV2.ITERATOR.value,
-                "target_identity": publication.origin_sha256,
+                "target_identity": expected_origin_sha256,
             }
         ):
             raise ValueError("minute publication audit chain or scope is invalid")
@@ -2110,6 +2230,7 @@ def _verify_minute_partition_tree(
     publication: ValidationSourcePublicationV2,
     *,
     audit: _MinuteAuditVerificationV2,
+    expected_origin: _VerifiedMinuteSourceOriginV2 | None,
 ) -> None:
     files = bounded_regular_files(
         publication.publication_root,
@@ -2129,6 +2250,12 @@ def _verify_minute_partition_tree(
     group_partitions: dict[
         tuple[str, int], list[ValidationSourcePartitionV2]
     ] = {}
+    expected_source_identity = (
+        None if expected_origin is None else expected_origin.source_identity
+    )
+    expected_origin_proof_sha256 = (
+        None if expected_origin is None else expected_origin.origin_proof_sha256
+    )
     for partition in publication.partitions:
         if (
             partition.symbol not in publication.allowed_symbols
@@ -2139,8 +2266,11 @@ def _verify_minute_partition_tree(
             )
             != publication.allowed_intervals[partition.interval_index]
             or partition.source_identity != publication.admitted_source_identity
+            or partition.source_identity != expected_source_identity
             or partition.origin_proof_sha256
             != publication.origin_proof_sha256
+            or partition.origin_proof_sha256
+            != expected_origin_proof_sha256
         ):
             raise ValueError("validation source partition scope or origin is invalid")
         group = (partition.symbol, partition.interval_index)
@@ -2196,8 +2326,11 @@ def _verify_minute_partition_tree(
                 != partition.origin_proof_sha256
                 or partition.source_identity
                 != publication.admitted_source_identity
+                or envelope["source_identity"] != expected_source_identity
                 or partition.origin_proof_sha256
                 != publication.origin_proof_sha256
+                or envelope["origin_proof_sha256"]
+                != expected_origin_proof_sha256
             ):
                 raise ValueError("canonical minute row origin proof differs")
             row = CanonicalMinuteRowV2.from_dict(

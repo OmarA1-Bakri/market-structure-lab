@@ -455,6 +455,107 @@ def _rehash_source_manifest(path: Path, payload: dict[str, object]) -> None:
     )
 
 
+def _reauthor_origin_proof(
+    publication_root: Path,
+    audit_root: Path,
+    *,
+    replacement: str,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    manifest_path = publication_root / "publication.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["origin_proof_sha256"] = replacement
+    for partition in manifest["partitions"]:
+        partition_path = publication_root / partition["path"]
+        rows = []
+        for line in partition_path.read_bytes().splitlines():
+            row = json.loads(line)
+            row["origin_proof_sha256"] = replacement
+            rows.append(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+                + b"\n"
+            )
+        content = b"".join(rows)
+        partition_path.write_bytes(content)
+        partition["sha256"] = hashlib.sha256(content).hexdigest()
+        partition["byte_count"] = len(content)
+        partition["origin_proof_sha256"] = replacement
+
+    prior = None
+    for record_path in sorted((audit_root / "records").glob("*.json")):
+        record = json.loads(record_path.read_bytes())
+        record["origin_proof_sha256"] = replacement
+        if record["phase"] == "completion":
+            members = [
+                item
+                for item in manifest["partitions"]
+                if item["symbol"] == record["request"]["symbol"]
+                and item["interval_start"] == record["request"]["start"]
+                and item["interval_end"] == record["request"]["end"]
+            ]
+            record["byte_count"] = sum(item["byte_count"] for item in members)
+            record["partition_set_sha256"] = hash_json(
+                "phase5-validation-minute-request-partitions-v2", members
+            )
+        record["prior_record_sha256"] = prior
+        record_payload = {
+            key: value for key, value in record.items() if key != "record_sha256"
+        }
+        record["record_sha256"] = hash_json(
+            module._MINUTE_PUBLICATION_AUDIT_RECORD_DOMAIN,  # noqa: SLF001
+            record_payload,
+        )
+        prior = record["record_sha256"]
+        record_path.write_bytes(publication_json_bytes(record))
+
+    audit_path = audit_root / "publication.json"
+    audit = json.loads(audit_path.read_bytes())
+    audit["origin_proof_sha256"] = replacement
+    audit["terminal_record_sha256"] = prior
+    audit["bytes_admitted"] = sum(
+        item["byte_count"] for item in manifest["partitions"]
+    )
+    audit_payload = {
+        key: value for key, value in audit.items() if key != "audit_publication_sha256"
+    }
+    audit["audit_publication_sha256"] = hash_json(
+        module._MINUTE_PUBLICATION_AUDIT_DOMAIN,  # noqa: SLF001
+        audit_payload,
+    )
+    audit_path.write_bytes(publication_json_bytes(audit))
+    manifest["byte_count"] = audit["bytes_admitted"]
+    manifest["audit_publication_sha256"] = audit["audit_publication_sha256"]
+    _rehash_source_manifest(manifest_path, manifest)
+
+
+def test_loader_rejects_coherently_reauthored_zero_origin_proof(
+    source_chain, tmp_path: Path
+) -> None:
+    coverage, split, boundary, availability, _ = source_chain
+    publication, _ = _publish(source_chain, tmp_path, suffix="-zero-proof")
+    _reauthor_origin_proof(
+        publication.publication_root,
+        publication.audit_ledger_root,
+        replacement="0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="origin|proof|source"):
+        load_validation_source_publication_v2(
+            publication_root=publication.publication_root,
+            audit_ledger_root=publication.audit_ledger_root,
+            coverage=coverage,
+            split=split,
+            boundary=boundary,
+            availability=availability,
+        )
+
+
 def test_loader_rejects_self_hashed_scope_and_aggregate_only_audit_attacks(
     source_chain, tmp_path: Path
 ) -> None:
