@@ -17,6 +17,10 @@ from market_structure_lab.core.artifact_io import (
     read_bounded_regular,
     require_regular_directory,
 )
+from market_structure_lab.core.fs_durability import (
+    durable_move_no_replace,
+    fsync_directory_posix,
+)
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.research.models import VALIDATION_SLOT_ROSTER
 
@@ -217,29 +221,44 @@ def publish_validation_v2_receipt(
         raise ValueError("receipt attempts must be gap-free and start at one")
     if path_exists_no_follow(destination):
         raise FileExistsError(f"refusing existing validation V2 receipt: {destination}")
+    slot_root_created = False
     if path_exists_no_follow(slot_root):
         require_regular_directory(slot_root)
     else:
         slot_root.mkdir(mode=0o755)
         require_regular_directory(slot_root)
+        slot_root_created = True
+        if not _is_windows_platform():
+            try:
+                fsync_directory_posix(root)
+            except Exception:
+                slot_root.rmdir()
+                raise
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
     )
+    temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            os.link(temporary_name, destination)
-        except FileExistsError:
-            raise
-        finally:
-            Path(temporary_name).unlink(missing_ok=True)
-    except Exception:
-        Path(temporary_name).unlink(missing_ok=True)
+        durable_move_no_replace(temporary, destination)
+    except Exception as error:
+        temporary.unlink(missing_ok=True)
+        if slot_root_created:
+            try:
+                slot_root.rmdir()
+                if not _is_windows_platform():
+                    fsync_directory_posix(root)
+            except OSError as cleanup_error:
+                error.add_note(f"failed to clean receipt slot directory: {cleanup_error}")
         raise
     return _receipt_from_payload(destination, receipt_payload, content)
+
+
+def _is_windows_platform() -> bool:
+    return os.name == "nt"
 
 
 def publish_validation_v2_receipts(

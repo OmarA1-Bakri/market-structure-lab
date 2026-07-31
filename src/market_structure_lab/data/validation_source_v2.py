@@ -29,6 +29,10 @@ from market_structure_lab.core.artifact_io import (
     read_bounded_regular,
     require_regular_directory,
 )
+from market_structure_lab.core.fs_durability import (
+    durable_move_no_replace,
+    fsync_directory_posix,
+)
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.research.validation_v2_models import (
     DevelopmentSplitIdentityV2,
@@ -3521,12 +3525,20 @@ def _commit_paired_directories(
     second_stage: Path,
     second_destination: Path,
 ) -> None:
+    if _is_windows_platform():
+        _commit_paired_directories_windows(
+            first_stage=first_stage,
+            first_destination=first_destination,
+            second_stage=second_stage,
+            second_destination=second_destination,
+        )
+        return
     reserved: list[Path] = []
     published_files: list[tuple[Path, Path]] = []
     published_directories: list[Path] = []
     try:
-        _fsync_directory(first_stage)
-        _fsync_directory(second_stage)
+        fsync_directory_posix(first_stage)
+        fsync_directory_posix(second_stage)
         _reserve_publication_directory(first_destination)
         reserved.append(first_destination)
         _reserve_publication_directory(second_destination)
@@ -3543,17 +3555,49 @@ def _commit_paired_directories(
             published_files=published_files,
             published_directories=published_directories,
         )
-        _fsync_directory(first_destination)
-        _fsync_directory(second_destination)
-        _fsync_directory(first_destination.parent)
+        fsync_directory_posix(first_destination)
+        fsync_directory_posix(second_destination)
+        fsync_directory_posix(first_destination.parent)
         if second_destination.parent != first_destination.parent:
-            _fsync_directory(second_destination.parent)
+            fsync_directory_posix(second_destination.parent)
     except Exception:
         _rollback_reserved_publications(
             reserved,
             published_files=published_files,
             published_directories=published_directories,
         )
+        raise
+    finally:
+        _remove_staged_tree(first_stage)
+        _remove_staged_tree(second_stage)
+
+
+def _commit_paired_directories_windows(
+    *,
+    first_stage: Path,
+    first_destination: Path,
+    second_stage: Path,
+    second_destination: Path,
+) -> None:
+    moved: list[Path] = []
+    try:
+        for destination in (first_destination, second_destination):
+            if path_exists_no_follow(destination):
+                raise FileExistsError(f"refusing stale or concurrent publication: {destination}")
+            require_regular_directory(destination.parent)
+        durable_move_no_replace(first_stage, first_destination)
+        moved.append(first_destination)
+        durable_move_no_replace(second_stage, second_destination)
+        moved.append(second_destination)
+    except Exception as error:
+        for destination in reversed(moved):
+            try:
+                _remove_staged_tree(destination)
+            except Exception as rollback_error:
+                error.add_note(
+                    f"failed to roll back partial Windows publication {destination}: "
+                    f"{rollback_error}"
+                )
         raise
     finally:
         _remove_staged_tree(first_stage)
@@ -3664,17 +3708,9 @@ def _write_no_clobber(path: Path, content: bytes) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.link(temporary, path, follow_symlinks=False)
+        durable_move_no_replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _publish_directory_no_clobber(root: Path, files: dict[str, bytes]) -> None:
@@ -3685,14 +3721,18 @@ def _publish_directory_no_clobber(root: Path, files: dict[str, bytes]) -> None:
     try:
         for relative, content in files.items():
             _write_no_clobber(temporary / relative, content)
-        _fsync_directory(temporary)
-        os.rename(temporary, root)
-        _fsync_directory(root.parent)
+        if not _is_windows_platform():
+            fsync_directory_posix(temporary)
+        durable_move_no_replace(temporary, root)
     finally:
         if temporary.exists():
             for relative in files:
                 (temporary / relative).unlink(missing_ok=True)
             temporary.rmdir()
+
+
+def _is_windows_platform() -> bool:
+    return os.name == "nt"
 
 
 def _require_sha256(value: object, label: str) -> str:

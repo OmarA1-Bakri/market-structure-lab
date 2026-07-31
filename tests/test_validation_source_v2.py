@@ -353,3 +353,110 @@ def test_paired_source_refuses_concurrent_empty_destination_directory(
     assert output.is_dir()
     assert not tuple(output.iterdir())
     assert not audit.exists()
+
+
+def test_windows_paired_source_publication_uses_durable_moves_and_rolls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    first_stage = tmp_path / "first-stage"
+    second_stage = tmp_path / "second-stage"
+    first_stage.mkdir()
+    second_stage.mkdir()
+    (first_stage / "publication.json").write_text("{}\n", encoding="utf-8")
+    (second_stage / "publication.json").write_text("{}\n", encoding="utf-8")
+    first_destination = tmp_path / "first"
+    second_destination = tmp_path / "second"
+    calls = 0
+
+    def move(source: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("second durable move failed")
+        source.rename(destination)
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    with pytest.raises(OSError, match="second durable move failed"):
+        module._commit_paired_directories(  # noqa: SLF001
+            first_stage=first_stage,
+            first_destination=first_destination,
+            second_stage=second_stage,
+            second_destination=second_destination,
+        )
+
+    assert not first_destination.exists()
+    assert not second_destination.exists()
+
+
+def test_windows_paired_source_publication_commits_both_staged_trees(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    first_stage = tmp_path / "first-stage"
+    second_stage = tmp_path / "second-stage"
+    first_stage.mkdir()
+    second_stage.mkdir()
+    (first_stage / "publication.json").write_text("first\n", encoding="utf-8")
+    (second_stage / "publication.json").write_text("second\n", encoding="utf-8")
+    first_destination = tmp_path / "first"
+    second_destination = tmp_path / "second"
+    moves: list[tuple[Path, Path]] = []
+
+    def move(source: Path, destination: Path) -> None:
+        moves.append((source, destination))
+        source.rename(destination)
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    module._commit_paired_directories(  # noqa: SLF001
+        first_stage=first_stage,
+        first_destination=first_destination,
+        second_stage=second_stage,
+        second_destination=second_destination,
+    )
+
+    assert moves == [
+        (first_stage, first_destination),
+        (second_stage, second_destination),
+    ]
+    assert (first_destination / "publication.json").read_text(encoding="utf-8") == "first\n"
+    assert (second_destination / "publication.json").read_text(encoding="utf-8") == "second\n"
+
+
+def test_windows_paired_source_refuses_existing_destination_and_cleans_stages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    first_stage = tmp_path / "first-stage"
+    second_stage = tmp_path / "second-stage"
+    first_stage.mkdir()
+    second_stage.mkdir()
+    (first_stage / "publication.json").write_text("first\n", encoding="utf-8")
+    (second_stage / "publication.json").write_text("second\n", encoding="utf-8")
+    first_destination = tmp_path / "first"
+    first_destination.mkdir()
+    (first_destination / "winner").write_text("preserve", encoding="utf-8")
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+
+    with pytest.raises(FileExistsError):
+        module._commit_paired_directories(  # noqa: SLF001
+            first_stage=first_stage,
+            first_destination=first_destination,
+            second_stage=second_stage,
+            second_destination=tmp_path / "second",
+        )
+
+    assert (first_destination / "winner").read_text(encoding="utf-8") == "preserve"
+    assert not first_stage.exists()
+    assert not second_stage.exists()

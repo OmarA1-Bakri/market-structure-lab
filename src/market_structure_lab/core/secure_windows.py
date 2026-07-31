@@ -22,7 +22,10 @@ FILE_ATTRIBUTE_DIRECTORY: Final = 0x00000010
 FILE_ATTRIBUTE_REPARSE_POINT: Final = 0x00000400
 FILE_FLAG_OPEN_REPARSE_POINT: Final = 0x00200000
 FILE_FLAG_BACKUP_SEMANTICS: Final = 0x02000000
+MOVEFILE_REPLACE_EXISTING: Final = 0x00000001
+MOVEFILE_WRITE_THROUGH: Final = 0x00000008
 _FILE_ATTRIBUTE_TAG_INFO: Final = 9
+_ERROR_FILE_EXISTS: Final = 80
 _ERROR_ALREADY_EXISTS: Final = 183
 
 
@@ -46,6 +49,8 @@ class WindowsApi(Protocol):
     def create_directory(self, path: str) -> None: ...
 
     def fd_from_handle(self, handle: int, flags: int) -> int: ...
+
+    def move_path(self, source: str, destination: str, flags: int) -> None: ...
 
 
 class CtypesWindowsApi:
@@ -80,6 +85,9 @@ class CtypesWindowsApi:
         self._close_handle = kernel32.CloseHandle
         self._close_handle.argtypes = (wintypes.HANDLE,)
         self._close_handle.restype = wintypes.BOOL
+        self._move_file = kernel32.MoveFileExW
+        self._move_file.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
+        self._move_file.restype = wintypes.BOOL
 
     def open_path(
         self,
@@ -124,12 +132,48 @@ class CtypesWindowsApi:
             self.close(handle)
             raise
 
+    def move_path(self, source: str, destination: str, flags: int) -> None:
+        if not self._move_file(source, destination, flags):
+            _raise_windows_error(destination)
+
 
 class WindowsHandleFilesystem:
     """Pin path components and create entries without following reparse points."""
 
     def __init__(self, api: WindowsApi | None = None) -> None:
         self._api = api or CtypesWindowsApi()
+
+    def move_no_replace_write_through(
+        self,
+        source: str | Path,
+        destination: str | Path,
+    ) -> None:
+        """Move one staged entry durably without permitting replacement."""
+
+        source_value = os.fspath(source)
+        destination_value = os.fspath(destination)
+        if not ntpath.isabs(source_value):
+            source_value = os.path.abspath(source_value)
+        if not ntpath.isabs(destination_value):
+            destination_value = os.path.abspath(destination_value)
+        source_parent = ntpath.dirname(source_value)
+        destination_parent = ntpath.dirname(destination_value)
+        if not source_parent or not destination_parent:
+            raise ValueError("secure Windows move requires absolute source and destination paths")
+        with self.pin_directory_chain(source_parent):
+            if ntpath.normcase(source_parent) == ntpath.normcase(destination_parent):
+                self._api.move_path(
+                    source_value,
+                    destination_value,
+                    MOVEFILE_WRITE_THROUGH,
+                )
+                return
+            with self.pin_directory_chain(destination_parent):
+                self._api.move_path(
+                    source_value,
+                    destination_value,
+                    MOVEFILE_WRITE_THROUGH,
+                )
 
     @contextmanager
     def pin_directory_chain(self, path: str | Path) -> Iterator[tuple[int, ...]]:
@@ -500,7 +544,7 @@ def _require_safe_component(component: str) -> None:
 
 def _raise_windows_error(path: str) -> None:
     error = cast(Any, getattr(ctypes, "get_last_error"))()
-    if error == _ERROR_ALREADY_EXISTS:
+    if error in {_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS}:
         raise FileExistsError(error, "secure artifact entry already exists", path)
     raise OSError(error, f"Win32 secure artifact operation failed: {path}")
 
@@ -517,6 +561,8 @@ __all__ = [
     "FILE_FLAG_BACKUP_SEMANTICS",
     "FILE_FLAG_OPEN_REPARSE_POINT",
     "FILE_SHARE_READ",
+    "MOVEFILE_REPLACE_EXISTING",
+    "MOVEFILE_WRITE_THROUGH",
     "OPEN_EXISTING",
     "WindowsDirectoryClaim",
     "WindowsHandleFilesystem",

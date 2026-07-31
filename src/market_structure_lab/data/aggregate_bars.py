@@ -764,11 +764,14 @@ def _read_indexed_payload(
 def _create_secure_regular(trusted_root: Path, relative_path: Path) -> int:
     if _is_windows_platform():
         return WindowsHandleFilesystem().create_regular_descriptor(trusted_root, relative_path)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow:
+        raise RuntimeError("secure POSIX artifact creation requires no-follow file handles")
     parent_fd, name = _open_posix_parent(trusted_root, relative_path)
     try:
         return os.open(
             name,
-            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | no_follow,
             0o600,
             dir_fd=parent_fd,
         )
@@ -779,9 +782,12 @@ def _create_secure_regular(trusted_root: Path, relative_path: Path) -> int:
 def _open_secure_regular(trusted_root: Path, relative_path: Path) -> int:
     if _is_windows_platform():
         return WindowsHandleFilesystem().open_regular_descriptor(trusted_root, relative_path)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow:
+        raise RuntimeError("secure POSIX artifact reads require no-follow file handles")
     parent_fd, name = _open_posix_parent(trusted_root, relative_path)
     try:
-        return os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        return os.open(name, os.O_RDONLY | no_follow, dir_fd=parent_fd)
     finally:
         os.close(parent_fd)
 

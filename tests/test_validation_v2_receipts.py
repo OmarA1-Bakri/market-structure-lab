@@ -82,3 +82,81 @@ def test_receipt_rejects_retry_gaps_and_unsafe_slot_paths(tmp_path: Path) -> Non
         publish_validation_v2_receipt(tmp_path, _payload("../escape", 1))
     with pytest.raises(ValueError, match="attempt"):
         publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+
+
+def test_receipt_publication_failure_leaves_no_receipt_or_temporary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    def fail_move(_source: Path, _destination: Path) -> None:
+        raise OSError("durable publication failed")
+
+    monkeypatch.setattr(module, "durable_move_no_replace", fail_move)
+
+    with pytest.raises(OSError, match="durable publication failed"):
+        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert not (tmp_path / "VS-0001").exists()
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_receipt_commits_new_slot_directory_before_durable_file_move(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    calls: list[tuple[str, Path]] = []
+
+    def move(source: Path, destination: Path) -> None:
+        calls.append(("move", destination))
+        source.rename(destination)
+
+    monkeypatch.setattr(
+        module,
+        "fsync_directory_posix",
+        lambda path: calls.append(("fsync", path)),
+    )
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert receipt.path.is_file()
+    assert calls == [
+        ("fsync", tmp_path),
+        ("move", receipt.path),
+    ]
+
+
+def test_windows_receipt_uses_write_through_move_without_directory_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    moves: list[tuple[Path, Path]] = []
+
+    def move(source: Path, destination: Path) -> None:
+        moves.append((source, destination))
+        source.rename(destination)
+
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "fsync_directory_posix",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("Windows receipt publication must not fsync a directory descriptor")
+        ),
+    )
+    monkeypatch.setattr(module, "durable_move_no_replace", move)
+
+    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+
+    assert len(moves) == 1
+    source, destination = moves[0]
+    assert destination == receipt.path
+    assert source.parent == receipt.path.parent
+    assert source.name.startswith(f".{receipt.path.name}.")
+    assert not source.exists()
