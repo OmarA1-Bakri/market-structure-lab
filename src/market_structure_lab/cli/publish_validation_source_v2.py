@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(args: argparse.Namespace, *, reader: object | None = None) -> int:
+def run(args: argparse.Namespace) -> int:
     if args.network != "disabled":
         raise ValueError("validation source publication requires network disabled")
     coverage, split, boundary = load_v2_boundary_publications(
@@ -48,7 +48,7 @@ def run(args: argparse.Namespace, *, reader: object | None = None) -> int:
         split=split,
         boundary=boundary,
         availability=availability,
-        reader=reader,
+        source_capability=None,
         publication_root=args.output_root,
         audit_ledger_root=args.audit_ledger_root,
         max_rows_per_partition=args.max_rows_per_partition,

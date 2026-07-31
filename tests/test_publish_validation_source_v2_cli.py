@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ def test_cli_requires_disabled_network() -> None:
 
 def test_cli_has_no_database_network_or_pg_restore_row_path() -> None:
     source = Path(cli.__file__).read_text(encoding="utf-8")
+    assert "reader" not in inspect.signature(cli.run).parameters
     assert "psycopg" not in source
     assert "urllib" not in source
     assert "--data-only" not in source

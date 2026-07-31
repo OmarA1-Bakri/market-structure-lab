@@ -84,6 +84,17 @@ _VERIFIED_SOURCE_PUBLICATIONS: dict[
         tuple[bytes, bytes, bytes, bytes],
     ],
 ] = {}
+_VERIFIED_MINUTE_SOURCE_CAPABILITIES: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[VerifiedDevelopmentMinuteSourceV2],
+        bytes,
+        weakref.ReferenceType[DevelopmentReadBoundaryV2],
+        weakref.ReferenceType[ScopedSourceAvailabilityV2],
+        tuple[tuple[Path, bytes], ...],
+        _FixtureMinuteReadImplementationV2,
+    ],
+] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +380,8 @@ class ValidationSourcePartitionV2:
     interval_end: str
     min_timestamp: str
     max_timestamp: str
+    source_identity: str
+    origin_proof_sha256: str
 
     def __post_init__(self) -> None:
         relative = Path(self.path)
@@ -380,6 +393,9 @@ class ValidationSourcePartitionV2:
         ):
             raise ValueError("validation source partition path is invalid")
         _require_sha256(self.sha256, "partition sha256")
+        _require_sha256(self.origin_proof_sha256, "partition origin proof sha256")
+        if not self.source_identity:
+            raise ValueError("partition source identity is required")
         for label in ("byte_count", "row_count"):
             value = getattr(self, label)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -409,6 +425,8 @@ class ValidationSourcePartitionV2:
             "interval_end": self.interval_end,
             "min_timestamp": self.min_timestamp,
             "max_timestamp": self.max_timestamp,
+            "source_identity": self.source_identity,
+            "origin_proof_sha256": self.origin_proof_sha256,
         }
 
     @classmethod
@@ -427,6 +445,8 @@ class ValidationSourcePartitionV2:
                     "interval_end",
                     "min_timestamp",
                     "max_timestamp",
+                    "source_identity",
+                    "origin_proof_sha256",
                 },
                 "validation source partition",
             )
@@ -446,6 +466,7 @@ class ValidationSourcePublicationV2:
     admitted_source_identity: str | None
     origin_kind: str | None
     origin_sha256: str | None
+    origin_proof_sha256: str | None
     reconciliation_identity_sha256: str
     raw_dump_identity_sha256: str
     source_mapping_version: str
@@ -486,6 +507,8 @@ class ValidationSourcePublicationV2:
         )
         if self.origin_sha256 is not None:
             _require_sha256(self.origin_sha256, "origin_sha256")
+        if self.origin_proof_sha256 is not None:
+            _require_sha256(self.origin_proof_sha256, "origin_proof_sha256")
         if self.allowed_timeframe != "1m" or "1m" not in self.allowed_timeframes:
             raise ValueError("validation source publication must be one-minute")
         if self.allowed_symbols != tuple(sorted(set(self.allowed_symbols))):
@@ -499,12 +522,26 @@ class ValidationSourcePublicationV2:
         paths = tuple(item.path for item in self.partitions)
         if paths != tuple(sorted(paths)) or len(paths) != len(set(paths)):
             raise ValueError("validation source partition paths are not deterministic")
+        for partition in self.partitions:
+            if (
+                partition.symbol not in self.allowed_symbols
+                or partition.interval_index >= len(self.allowed_intervals)
+                or (
+                    partition.interval_start,
+                    partition.interval_end,
+                )
+                != self.allowed_intervals[partition.interval_index]
+            ):
+                raise ValueError(
+                    "validation source partition exceeds its declared source scope"
+                )
         if self.status is ScopedSourceStatusV2.AVAILABLE:
             if (
                 self.failure is not None
                 or self.admitted_source_identity is None
                 or self.origin_kind != "admitted-predicate-source-v2"
                 or self.origin_sha256 is None
+                or self.origin_proof_sha256 is None
                 or not self.partitions
             ):
                 raise ValueError("available validation source binding is incomplete")
@@ -513,6 +550,7 @@ class ValidationSourcePublicationV2:
             or self.admitted_source_identity is not None
             or self.origin_kind is not None
             or self.origin_sha256 is not None
+            or self.origin_proof_sha256 is not None
             or self.partitions
             or self.row_count
             or self.byte_count
@@ -541,6 +579,7 @@ class ValidationSourcePublicationV2:
             "admitted_source_identity": self.admitted_source_identity,
             "origin_kind": self.origin_kind,
             "origin_sha256": self.origin_sha256,
+            "origin_proof_sha256": self.origin_proof_sha256,
             "reconciliation_identity_sha256": self.reconciliation_identity_sha256,
             "raw_dump_identity_sha256": self.raw_dump_identity_sha256,
             "source_mapping_version": self.source_mapping_version,
@@ -569,6 +608,69 @@ class ValidationSourcePublicationV2:
 
 
 _MINUTE_PUBLICATION_FACTORY = object()
+_MINUTE_SOURCE_CAPABILITY_FACTORY = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _FixtureMinuteReadImplementationV2:
+    request_rows: tuple[tuple[CanonicalMinuteRowV2, ...], ...]
+    fail_request_index: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _MinuteAuditCompletionV2:
+    symbol: str
+    interval_index: int
+    row_count: int
+    byte_count: int
+    partition_set_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _MinuteAuditVerificationV2:
+    canonical_bytes: bytes
+    completions: tuple[_MinuteAuditCompletionV2, ...]
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class VerifiedDevelopmentMinuteSourceV2:
+    """Verifier-issued row capability; callers cannot supply read behavior."""
+
+    source_identity: str
+    origin_kind: str
+    origin_sha256: str
+    origin_proof_sha256: str
+    boundary_sha256: str
+    availability_sha256: str
+    canonical_bytes: bytes = field(repr=False, compare=False)
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _MINUTE_SOURCE_CAPABILITY_FACTORY:
+            raise TypeError("VerifiedDevelopmentMinuteSourceV2 requires its verifier factory")
+        if not self.source_identity:
+            raise ValueError("verified minute source identity is required")
+        if self.origin_kind != "admitted-predicate-source-v2":
+            raise ValueError("verified minute source origin kind is invalid")
+        for value, label in (
+            (self.origin_sha256, "origin_sha256"),
+            (self.origin_proof_sha256, "origin_proof_sha256"),
+            (self.boundary_sha256, "boundary_sha256"),
+            (self.availability_sha256, "availability_sha256"),
+        ):
+            _require_sha256(value, label)
+        if self.canonical_bytes != publication_json_bytes(
+            {
+                "schema_version": "phase5-verified-development-minute-source-v2",
+                "source_identity": self.source_identity,
+                "origin_kind": self.origin_kind,
+                "origin_sha256": self.origin_sha256,
+                "origin_proof_sha256": self.origin_proof_sha256,
+                "boundary_sha256": self.boundary_sha256,
+                "availability_sha256": self.availability_sha256,
+            }
+        ):
+            raise ValueError("verified minute source capability bytes differ")
 
 
 def discover_scoped_source_v2(
@@ -895,13 +997,107 @@ def load_scoped_source_availability_v2(
     )
 
 
+def _issue_test_minute_source_capability_v2(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    request_rows: tuple[tuple[CanonicalMinuteRowV2, ...], ...],
+    fail_request_index: int | None,
+) -> VerifiedDevelopmentMinuteSourceV2:
+    """Issue only the bounded fixture implementation used by adversarial tests."""
+
+    availability_bytes = verified_scoped_source_availability_bytes_v2(
+        availability, boundary=boundary
+    )
+    if availability.status is not ScopedSourceStatusV2.AVAILABLE:
+        raise ValueError("minute source capability requires admitted source availability")
+    admitted = tuple(item for item in availability.candidates if item.admitted)
+    if len(admitted) != 1:
+        raise ValueError("minute source capability requires one admitted descriptor")
+    expected_requests = len(boundary.allowed_symbols) * len(boundary.allowed_intervals)
+    if (
+        not isinstance(request_rows, tuple)
+        or len(request_rows) != expected_requests
+        or any(
+            not isinstance(rows, tuple)
+            or any(not isinstance(row, CanonicalMinuteRowV2) for row in rows)
+            for rows in request_rows
+        )
+    ):
+        raise ValueError("fixture minute source rows do not cover exact requests")
+    if fail_request_index is not None and (
+        isinstance(fail_request_index, bool)
+        or not isinstance(fail_request_index, int)
+        or not 0 <= fail_request_index < expected_requests
+    ):
+        raise ValueError("fixture failure request index is invalid")
+    descriptor_path = Path(admitted[0].descriptor_path)
+    descriptor_bytes = read_bounded_regular(descriptor_path, _MAX_DESCRIPTOR_BYTES)
+    descriptor = _decode_canonical_object(descriptor_bytes, "source descriptor")
+    evidence_bindings: list[tuple[Path, bytes]] = [
+        (descriptor_path, descriptor_bytes)
+    ]
+    proof_payload: dict[str, object] = {
+        "source_identity": admitted[0].source_identity,
+        "boundary_sha256": boundary.boundary_sha256,
+        "availability_sha256": availability.availability_sha256,
+        "descriptor_sha256": admitted[0].descriptor_sha256,
+    }
+    for label in ("original_manifest", "predicate_evidence", "verifier_evidence"):
+        evidence_path = _resolve_evidence_path(
+            descriptor_path.parent, descriptor[f"{label}_path"]
+        )
+        evidence_bytes = read_bounded_regular(
+            evidence_path, _MAX_DESCRIPTOR_BYTES
+        )
+        expected_sha256 = descriptor[f"{label}_sha256"]
+        if hashlib.sha256(evidence_bytes).hexdigest() != expected_sha256:
+            raise ValueError("minute source capability evidence bytes changed")
+        evidence_bindings.append((evidence_path, evidence_bytes))
+        proof_payload[f"{label}_sha256"] = expected_sha256
+    origin_proof_sha256 = hash_json(
+        "phase5-development-minute-source-origin-proof-v2", proof_payload
+    )
+    public = {
+        "schema_version": "phase5-verified-development-minute-source-v2",
+        "source_identity": admitted[0].source_identity,
+        "origin_kind": "admitted-predicate-source-v2",
+        "origin_sha256": admitted[0].descriptor_sha256,
+        "origin_proof_sha256": origin_proof_sha256,
+        "boundary_sha256": boundary.boundary_sha256,
+        "availability_sha256": availability.availability_sha256,
+    }
+    capability = VerifiedDevelopmentMinuteSourceV2(
+        source_identity=admitted[0].source_identity,
+        origin_kind="admitted-predicate-source-v2",
+        origin_sha256=admitted[0].descriptor_sha256,
+        origin_proof_sha256=origin_proof_sha256,
+        boundary_sha256=boundary.boundary_sha256,
+        availability_sha256=availability.availability_sha256,
+        canonical_bytes=publication_json_bytes(public),
+        _factory_token=_MINUTE_SOURCE_CAPABILITY_FACTORY,
+    )
+    _register_minute_source_capability(
+        capability,
+        boundary=boundary,
+        availability=availability,
+        availability_bytes=availability_bytes,
+        evidence_bindings=tuple(evidence_bindings),
+        implementation=_FixtureMinuteReadImplementationV2(
+            request_rows=request_rows,
+            fail_request_index=fail_request_index,
+        ),
+    )
+    return capability
+
+
 def publish_validation_source_v2(
     *,
     coverage: SourceCoveragePublicationV2,
     split: DevelopmentSplitPublicationV2,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
-    reader: object | None,
+    source_capability: VerifiedDevelopmentMinuteSourceV2 | None,
     publication_root: Path,
     audit_ledger_root: Path,
     max_rows_per_partition: int,
@@ -955,6 +1151,7 @@ def publish_validation_source_v2(
     admitted_source_identity: str | None = None
     origin_kind: str | None = None
     origin_sha256: str | None = None
+    origin_proof_sha256: str | None = None
     failure: str | None = "scoped_source_unavailable"
     try:
         if status is ScopedSourceStatusV2.AVAILABLE:
@@ -962,11 +1159,16 @@ def publish_validation_source_v2(
                 admitted_source_identity,
                 origin_kind,
                 origin_sha256,
-            ) = _verify_minute_reader_binding(reader, boundary, availability)
+                origin_proof_sha256,
+            ) = _verify_minute_reader_binding(
+                source_capability, boundary, availability
+            )
             failure = None
             for symbol in boundary.allowed_symbols:
                 for interval_index, interval in enumerate(boundary.allowed_intervals):
-                    _verify_minute_reader_binding(reader, boundary, availability)
+                    _verify_minute_reader_binding(
+                        source_capability, boundary, availability
+                    )
                     request = BoundaryRequestV2(
                         symbol=symbol,
                         timeframe="1m",
@@ -986,11 +1188,23 @@ def publish_validation_source_v2(
                         request=request,
                         origin_kind=origin_kind,
                         origin_sha256=origin_sha256,
+                        origin_proof_sha256=origin_proof_sha256,
                         row_count=0,
                         byte_count=0,
+                        partition_set_sha256=None,
                         prior=audit_prior,
                     )
-                    iterator = iter(reader.iter_rows(request))  # type: ignore[union-attr]
+                    iterator = _iter_verified_minute_source_rows(
+                        source_capability,
+                        boundary=boundary,
+                        availability=availability,
+                        request=request,
+                        request_index=(
+                            boundary.allowed_symbols.index(symbol)
+                            * len(boundary.allowed_intervals)
+                            + interval_index
+                        ),
+                    )
                     (
                         request_partitions,
                         request_rows,
@@ -1007,6 +1221,8 @@ def publish_validation_source_v2(
                         max_total_rows=max_total_rows,
                         max_total_bytes=max_total_bytes,
                         max_partitions=max_partitions,
+                        source_identity=admitted_source_identity,
+                        origin_proof_sha256=origin_proof_sha256,
                     )
                     if request_rows < 1:
                         raise ValueError(
@@ -1025,11 +1241,17 @@ def publish_validation_source_v2(
                         request=request,
                         origin_kind=origin_kind,
                         origin_sha256=origin_sha256,
+                        origin_proof_sha256=origin_proof_sha256,
                         row_count=request_rows,
                         byte_count=request_bytes,
+                        partition_set_sha256=_request_partition_set_sha256(
+                            request_partitions
+                        ),
                         prior=audit_prior,
                     )
-            _verify_minute_reader_binding(reader, boundary, availability)
+            _verify_minute_reader_binding(
+                source_capability, boundary, availability
+            )
         audit_payload = {
             "schema_version": "phase5-validation-minute-publication-audit-v2",
             "boundary_sha256": boundary.boundary_sha256,
@@ -1038,6 +1260,7 @@ def publish_validation_source_v2(
             "admitted_source_identity": admitted_source_identity,
             "origin_kind": origin_kind,
             "origin_sha256": origin_sha256,
+            "origin_proof_sha256": origin_proof_sha256,
             "record_count": audit_sequence,
             "terminal_record_sha256": audit_prior,
             "rows_admitted": row_count,
@@ -1065,6 +1288,7 @@ def publish_validation_source_v2(
             admitted_source_identity=admitted_source_identity,
             origin_kind=origin_kind,
             origin_sha256=origin_sha256,
+            origin_proof_sha256=origin_proof_sha256,
             partitions=tuple(partitions),
             row_count=row_count,
             byte_count=byte_count,
@@ -1105,6 +1329,7 @@ def publish_validation_source_v2(
         admitted_source_identity=admitted_source_identity,
         origin_kind=origin_kind,
         origin_sha256=origin_sha256,
+        origin_proof_sha256=origin_proof_sha256,
         reconciliation_identity_sha256=coverage.reconciliation.identity_sha256,
         raw_dump_identity_sha256=coverage.raw_dump.identity_sha256,
         source_mapping_version=coverage.raw_dump.source_mapping_version,
@@ -1188,37 +1413,20 @@ def verify_validation_source_publication_v2(
         != publication.canonical_bytes
     ):
         raise ValueError("validation source publication original bytes changed")
-    if (
-        publication.coverage_identity != coverage.coverage_identity
-        or publication.split_identity != split.split_identity
-        or publication.boundary_sha256 != boundary.boundary_sha256
-        or publication.source_availability_sha256
-        != availability.availability_sha256
-        or publication.source_audit_sha256
-        != availability.audit_publication_sha256
-        or publication.reconciliation_identity_sha256
-        != coverage.reconciliation.identity_sha256
-        or publication.raw_dump_identity_sha256
-        != coverage.raw_dump.identity_sha256
-        or publication.source_mapping_version
-        != coverage.raw_dump.source_mapping_version
-        or publication.allowed_symbols != boundary.allowed_symbols
-        or publication.allowed_intervals
-        != tuple(
-            (_utc_text(item.start), _utc_text(item.end))
-            for item in boundary.allowed_intervals
-        )
-    ):
-        raise ValueError("validation source parent or scope binding is stale")
-    if publication.status is not availability.status:
-        raise ValueError("validation source status differs from scoped availability")
-    audit_bytes = _verify_minute_publication_audit(
+    _validate_minute_publication_parent_bindings(
+        publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+    )
+    audit = _verify_minute_publication_audit(
         publication.audit_ledger_root / "publication.json",
         publication=publication,
     )
-    if audit_bytes != registered[4]:
+    if audit.canonical_bytes != registered[4]:
         raise ValueError("validation source audit original bytes changed")
-    _verify_minute_partition_tree(publication)
+    _verify_minute_partition_tree(publication, audit=audit)
     success = read_bounded_regular(
         publication.publication_root / "_SUCCESS", 128
     )
@@ -1260,13 +1468,21 @@ def load_validation_source_publication_v2(
         audit_ledger_root=audit_ledger_root,
         canonical_bytes=canonical_bytes,
     )
-    audit_bytes = _verify_minute_publication_audit(
+    _validate_minute_publication_parent_bindings(
+        publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+    )
+    audit = _verify_minute_publication_audit(
         audit_ledger_root / "publication.json",
         publication=publication,
     )
+    _verify_minute_partition_tree(publication, audit=audit)
     _register_source_publication(
         publication,
-        audit_bytes=audit_bytes,
+        audit_bytes=audit.canonical_bytes,
         parent_bytes=(
             coverage_bytes,
             split.canonical_bytes,
@@ -1284,30 +1500,153 @@ def load_validation_source_publication_v2(
 
 
 def _verify_minute_reader_binding(
-    reader: object | None,
+    capability: VerifiedDevelopmentMinuteSourceV2 | None,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
-) -> tuple[str, str, str]:
-    if reader is None:
-        raise ValueError("available scoped source requires a registered minute reader")
+) -> tuple[str, str, str, str]:
+    if capability is None:
+        raise ValueError("available scoped source requires a verified source capability")
+    _verify_registered_minute_source_capability(
+        capability, boundary=boundary, availability=availability
+    )
     admitted = tuple(item for item in availability.candidates if item.admitted)
     if len(admitted) != 1:
         raise ValueError("available scoped source has no unique admitted origin")
-    source_identity = getattr(reader, "source_identity", None)
-    origin_kind = getattr(reader, "origin_kind", None)
-    origin_sha256 = getattr(reader, "origin_sha256", None)
     if (
-        source_identity != availability.admitted_source_identity
-        or source_identity != admitted[0].source_identity
-        or origin_kind != "admitted-predicate-source-v2"
-        or origin_sha256 != admitted[0].descriptor_sha256
-        or getattr(reader, "boundary_sha256", None) != boundary.boundary_sha256
-        or getattr(reader, "availability_sha256", None)
-        != availability.availability_sha256
-        or not callable(getattr(reader, "iter_rows", None))
+        capability.source_identity != availability.admitted_source_identity
+        or capability.source_identity != admitted[0].source_identity
+        or capability.origin_kind != "admitted-predicate-source-v2"
+        or capability.origin_sha256 != admitted[0].descriptor_sha256
+        or capability.boundary_sha256 != boundary.boundary_sha256
+        or capability.availability_sha256 != availability.availability_sha256
     ):
-        raise ValueError("minute reader has a mixed, stale, or unverified parent binding")
-    return source_identity, origin_kind, origin_sha256
+        raise ValueError(
+            "minute source capability has a mixed, stale, or unverified parent binding"
+        )
+    return (
+        capability.source_identity,
+        capability.origin_kind,
+        capability.origin_sha256,
+        capability.origin_proof_sha256,
+    )
+
+
+def _validate_minute_publication_parent_bindings(
+    publication: ValidationSourcePublicationV2,
+    *,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+) -> None:
+    if (
+        publication.coverage_identity != coverage.coverage_identity
+        or publication.split_identity != split.split_identity
+        or publication.boundary_sha256 != boundary.boundary_sha256
+        or publication.source_availability_sha256
+        != availability.availability_sha256
+        or publication.source_audit_sha256
+        != availability.audit_publication_sha256
+        or publication.reconciliation_identity_sha256
+        != coverage.reconciliation.identity_sha256
+        or publication.raw_dump_identity_sha256
+        != coverage.raw_dump.identity_sha256
+        or publication.source_mapping_version
+        != coverage.raw_dump.source_mapping_version
+        or publication.allowed_symbols != boundary.allowed_symbols
+        or publication.allowed_intervals
+        != tuple(
+            (_utc_text(item.start), _utc_text(item.end))
+            for item in boundary.allowed_intervals
+        )
+        or publication.status is not availability.status
+    ):
+        raise ValueError("validation source parent or scope binding is stale")
+
+
+def _register_minute_source_capability(
+    capability: VerifiedDevelopmentMinuteSourceV2,
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    availability_bytes: bytes,
+    evidence_bindings: tuple[tuple[Path, bytes], ...],
+    implementation: _FixtureMinuteReadImplementationV2,
+) -> None:
+    identifier = id(capability)
+
+    def cleanup(
+        reference: weakref.ReferenceType[VerifiedDevelopmentMinuteSourceV2],
+    ) -> None:
+        current = _VERIFIED_MINUTE_SOURCE_CAPABILITIES.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_MINUTE_SOURCE_CAPABILITIES.pop(identifier, None)
+
+    reference = weakref.ref(capability, cleanup)
+    _VERIFIED_MINUTE_SOURCE_CAPABILITIES[identifier] = (
+        reference,
+        capability.canonical_bytes,
+        weakref.ref(boundary),
+        weakref.ref(availability),
+        evidence_bindings,
+        implementation,
+    )
+    if availability_bytes != availability.canonical_bytes:
+        raise ValueError("minute source capability availability bytes changed")
+
+
+def _verify_registered_minute_source_capability(
+    capability: VerifiedDevelopmentMinuteSourceV2,
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+) -> _FixtureMinuteReadImplementationV2:
+    if not isinstance(capability, VerifiedDevelopmentMinuteSourceV2):
+        raise TypeError("source reader must be a verifier-issued capability")
+    registered = _VERIFIED_MINUTE_SOURCE_CAPABILITIES.get(id(capability))
+    if (
+        registered is None
+        or registered[0]() is not capability
+        or registered[1] != capability.canonical_bytes
+        or registered[2]() is not boundary
+        or registered[3]() is not availability
+    ):
+        raise ValueError("minute source capability is not the registered original")
+    verified_scoped_source_availability_bytes_v2(
+        availability, boundary=boundary
+    )
+    for path, original_bytes in registered[4]:
+        if read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES) != original_bytes:
+            raise ValueError("minute source capability original evidence changed")
+    return registered[5]
+
+
+def _iter_verified_minute_source_rows(
+    capability: VerifiedDevelopmentMinuteSourceV2 | None,
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    request: BoundaryRequestV2,
+    request_index: int,
+) -> Any:
+    if capability is None:
+        raise ValueError("verified minute source capability is required")
+    implementation = _verify_registered_minute_source_capability(
+        capability, boundary=boundary, availability=availability
+    )
+    if implementation.fail_request_index == request_index:
+        raise RuntimeError("fixture verifier-owned minute source interrupted")
+    rows = implementation.request_rows[request_index]
+
+    def verified_rows() -> Any:
+        for row in rows:
+            _verify_registered_minute_source_capability(
+                capability, boundary=boundary, availability=availability
+            )
+            boundary.authorize(request)
+            yield row
+
+    return verified_rows()
 
 
 def _stream_minute_request(
@@ -1323,6 +1662,8 @@ def _stream_minute_request(
     max_total_rows: int,
     max_total_bytes: int,
     max_partitions: int,
+    source_identity: str,
+    origin_proof_sha256: str,
 ) -> tuple[list[ValidationSourcePartitionV2], int, int]:
     partitions: list[ValidationSourcePartitionV2] = []
     row_buffer: list[tuple[CanonicalMinuteRowV2, bytes]] = []
@@ -1359,6 +1700,8 @@ def _stream_minute_request(
                 interval_end=_utc_text(request.end),
                 min_timestamp=_utc_text(row_buffer[0][0].timestamp),
                 max_timestamp=_utc_text(row_buffer[-1][0].timestamp),
+                source_identity=source_identity,
+                origin_proof_sha256=origin_proof_sha256,
             )
         )
         row_buffer.clear()
@@ -1375,7 +1718,11 @@ def _stream_minute_request(
             raise PermissionError("minute row exceeds its authorized half-open request")
         if previous_timestamp is not None and row.timestamp <= previous_timestamp:
             raise ValueError("minute reader rows must be unique and strictly ordered")
-        content = _canonical_minute_row_bytes(row)
+        content = _canonical_minute_row_bytes(
+            row,
+            source_identity=source_identity,
+            origin_proof_sha256=origin_proof_sha256,
+        )
         if len(content) > _MAX_CANONICAL_ROW_BYTES:
             raise ValueError("canonical minute row exceeds byte ceiling")
         if starting_row_count + request_rows >= max_total_rows:
@@ -1402,8 +1749,10 @@ def _append_minute_publication_audit_record(
     request: BoundaryRequestV2,
     origin_kind: str,
     origin_sha256: str,
+    origin_proof_sha256: str,
     row_count: int,
     byte_count: int,
+    partition_set_sha256: str | None,
     prior: str | None,
 ) -> str:
     payload = {
@@ -1414,6 +1763,7 @@ def _append_minute_publication_audit_record(
         "source_audit_sha256": availability.audit_publication_sha256,
         "origin_kind": origin_kind,
         "origin_sha256": origin_sha256,
+        "origin_proof_sha256": origin_proof_sha256,
         "request": {
             "symbol": request.symbol,
             "timeframe": request.timeframe,
@@ -1425,6 +1775,7 @@ def _append_minute_publication_audit_record(
         "allowed": True,
         "row_count": row_count,
         "byte_count": byte_count,
+        "partition_set_sha256": partition_set_sha256,
         "prior_record_sha256": prior,
     }
     digest = hash_json(_MINUTE_PUBLICATION_AUDIT_RECORD_DOMAIN, payload)
@@ -1445,6 +1796,7 @@ def _minute_publication_identity_payload(
     admitted_source_identity: str | None,
     origin_kind: str | None,
     origin_sha256: str | None,
+    origin_proof_sha256: str | None,
     partitions: tuple[ValidationSourcePartitionV2, ...],
     row_count: int,
     byte_count: int,
@@ -1461,6 +1813,7 @@ def _minute_publication_identity_payload(
         "admitted_source_identity": admitted_source_identity,
         "origin_kind": origin_kind,
         "origin_sha256": origin_sha256,
+        "origin_proof_sha256": origin_proof_sha256,
         "reconciliation_identity_sha256": coverage.reconciliation.identity_sha256,
         "raw_dump_identity_sha256": coverage.raw_dump.identity_sha256,
         "source_mapping_version": coverage.raw_dump.source_mapping_version,
@@ -1501,6 +1854,7 @@ def _validation_source_publication_from_dict(
             "admitted_source_identity",
             "origin_kind",
             "origin_sha256",
+            "origin_proof_sha256",
             "reconciliation_identity_sha256",
             "raw_dump_identity_sha256",
             "source_mapping_version",
@@ -1547,6 +1901,7 @@ def _validation_source_publication_from_dict(
         admitted_source_identity=values["admitted_source_identity"],  # type: ignore[arg-type]
         origin_kind=values["origin_kind"],  # type: ignore[arg-type]
         origin_sha256=values["origin_sha256"],  # type: ignore[arg-type]
+        origin_proof_sha256=values["origin_proof_sha256"],  # type: ignore[arg-type]
         reconciliation_identity_sha256=values[  # type: ignore[arg-type]
             "reconciliation_identity_sha256"
         ],
@@ -1579,7 +1934,7 @@ def _verify_minute_publication_audit(
     publication_path: Path,
     *,
     publication: ValidationSourcePublicationV2,
-) -> bytes:
+) -> _MinuteAuditVerificationV2:
     content = read_bounded_regular(publication_path, _MAX_MINUTE_PUBLICATION_BYTES)
     public = _decode_canonical_object(content, "minute publication audit")
     values = _exact_mapping(
@@ -1592,6 +1947,7 @@ def _verify_minute_publication_audit(
             "admitted_source_identity",
             "origin_kind",
             "origin_sha256",
+            "origin_proof_sha256",
             "record_count",
             "terminal_record_sha256",
             "rows_admitted",
@@ -1619,6 +1975,7 @@ def _verify_minute_publication_audit(
         != publication.admitted_source_identity
         or values["origin_kind"] != publication.origin_kind
         or values["origin_sha256"] != publication.origin_sha256
+        or values["origin_proof_sha256"] != publication.origin_proof_sha256
         or values["rows_admitted"] != publication.row_count
         or values["bytes_admitted"] != publication.byte_count
         or values["final_scope_attempts"] != 0
@@ -1651,6 +2008,7 @@ def _verify_minute_publication_audit(
     prior: str | None = None
     rows = 0
     byte_count = 0
+    completions: list[_MinuteAuditCompletionV2] = []
     for sequence, relative in enumerate(records, start=1):
         record = _decode_canonical_object(
             read_bounded_regular(
@@ -1659,6 +2017,24 @@ def _verify_minute_publication_audit(
             ),
             "minute publication audit record",
         )
+        if set(record) != {
+            "sequence",
+            "phase",
+            "boundary_sha256",
+            "source_availability_sha256",
+            "source_audit_sha256",
+            "origin_kind",
+            "origin_sha256",
+            "origin_proof_sha256",
+            "request",
+            "allowed",
+            "row_count",
+            "byte_count",
+            "partition_set_sha256",
+            "prior_record_sha256",
+            "record_sha256",
+        }:
+            raise ValueError("minute publication audit record schema is invalid")
         digest = record.get("record_sha256")
         record_payload = {
             key: value for key, value in record.items() if key != "record_sha256"
@@ -1679,6 +2055,8 @@ def _verify_minute_publication_audit(
             or record.get("source_audit_sha256") != publication.source_audit_sha256
             or record.get("origin_kind") != publication.origin_kind
             or record.get("origin_sha256") != publication.origin_sha256
+            or record.get("origin_proof_sha256")
+            != publication.origin_proof_sha256
             or record.get("allowed") is not True
             or request
             != {
@@ -1693,13 +2071,28 @@ def _verify_minute_publication_audit(
             raise ValueError("minute publication audit chain or scope is invalid")
         record_rows = _nonnegative_count(record.get("row_count"), "audit rows")
         record_bytes = _nonnegative_count(record.get("byte_count"), "audit bytes")
-        if expected_phase == "start" and (record_rows or record_bytes):
+        partition_set_sha256 = record.get("partition_set_sha256")
+        if expected_phase == "start" and (
+            record_rows or record_bytes or partition_set_sha256 is not None
+        ):
             raise ValueError("minute publication audit start contains output")
         if expected_phase == "completion":
             if record_rows < 1 or record_bytes < 1:
                 raise ValueError("minute publication audit completion is empty")
+            partition_set_sha256 = _require_sha256(
+                partition_set_sha256, "audit partition_set_sha256"
+            )
             rows += record_rows
             byte_count += record_bytes
+            completions.append(
+                _MinuteAuditCompletionV2(
+                    symbol=symbol,
+                    interval_index=expected_requests[request_index][1],
+                    row_count=record_rows,
+                    byte_count=record_bytes,
+                    partition_set_sha256=partition_set_sha256,
+                )
+            )
         prior = digest  # type: ignore[assignment]
     if (
         values["terminal_record_sha256"] != prior
@@ -1707,11 +2100,16 @@ def _verify_minute_publication_audit(
         or byte_count != publication.byte_count
     ):
         raise ValueError("minute publication audit terminal totals differ")
-    return content
+    return _MinuteAuditVerificationV2(
+        canonical_bytes=content,
+        completions=tuple(completions),
+    )
 
 
 def _verify_minute_partition_tree(
     publication: ValidationSourcePublicationV2,
+    *,
+    audit: _MinuteAuditVerificationV2,
 ) -> None:
     files = bounded_regular_files(
         publication.publication_root,
@@ -1728,8 +2126,25 @@ def _verify_minute_partition_tree(
     total_bytes = 0
     prior_key: tuple[str, int, datetime] | None = None
     group_part_index: dict[tuple[str, int], int] = {}
+    group_partitions: dict[
+        tuple[str, int], list[ValidationSourcePartitionV2]
+    ] = {}
     for partition in publication.partitions:
+        if (
+            partition.symbol not in publication.allowed_symbols
+            or partition.interval_index >= len(publication.allowed_intervals)
+            or (
+                partition.interval_start,
+                partition.interval_end,
+            )
+            != publication.allowed_intervals[partition.interval_index]
+            or partition.source_identity != publication.admitted_source_identity
+            or partition.origin_proof_sha256
+            != publication.origin_proof_sha256
+        ):
+            raise ValueError("validation source partition scope or origin is invalid")
         group = (partition.symbol, partition.interval_index)
+        group_partitions.setdefault(group, []).append(partition)
         expected_part = group_part_index.get(group, 0)
         expected_path = (
             Path("partitions")
@@ -1759,8 +2174,47 @@ def _verify_minute_partition_tree(
                 decoded_row = json.loads(line)
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise ValueError("canonical minute row is not JSON") from error
-            row = CanonicalMinuteRowV2.from_dict(decoded_row)
-            if _canonical_minute_row_bytes(row) != line:
+            envelope = _exact_mapping(
+                decoded_row,
+                {
+                    "timestamp",
+                    "symbol",
+                    "timeframe",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "source_identity",
+                    "origin_proof_sha256",
+                },
+                "canonical minute row envelope",
+            )
+            if (
+                envelope["source_identity"] != partition.source_identity
+                or envelope["origin_proof_sha256"]
+                != partition.origin_proof_sha256
+                or partition.source_identity
+                != publication.admitted_source_identity
+                or partition.origin_proof_sha256
+                != publication.origin_proof_sha256
+            ):
+                raise ValueError("canonical minute row origin proof differs")
+            row = CanonicalMinuteRowV2.from_dict(
+                {
+                    key: value
+                    for key, value in envelope.items()
+                    if key not in {"source_identity", "origin_proof_sha256"}
+                }
+            )
+            if (
+                _canonical_minute_row_bytes(
+                    row,
+                    source_identity=partition.source_identity,
+                    origin_proof_sha256=partition.origin_proof_sha256,
+                )
+                != line
+            ):
                 raise ValueError("canonical minute row bytes are not deterministic")
             if (
                 row.symbol != partition.symbol
@@ -1789,6 +2243,20 @@ def _verify_minute_partition_tree(
         total_bytes += len(content)
     if total_rows != publication.row_count or total_bytes != publication.byte_count:
         raise ValueError("validation source aggregate partition counts changed")
+    completion_by_group = {
+        (item.symbol, item.interval_index): item for item in audit.completions
+    }
+    if set(completion_by_group) != set(group_partitions):
+        raise ValueError("validation source audit and partition request coverage differ")
+    for group, members in group_partitions.items():
+        completion = completion_by_group[group]
+        if (
+            completion.row_count != sum(item.row_count for item in members)
+            or completion.byte_count != sum(item.byte_count for item in members)
+            or completion.partition_set_sha256
+            != _request_partition_set_sha256(members)
+        ):
+            raise ValueError("validation source audit partition aggregates differ")
 
 
 def _register_source_publication(
@@ -1844,16 +2312,34 @@ def _validate_minute_publication_limits(
             raise ValueError(f"{label} is outside its fixed positive ceiling")
 
 
-def _canonical_minute_row_bytes(row: CanonicalMinuteRowV2) -> bytes:
+def _canonical_minute_row_bytes(
+    row: CanonicalMinuteRowV2,
+    *,
+    source_identity: str,
+    origin_proof_sha256: str,
+) -> bytes:
     return (
         json.dumps(
-            row.to_dict(),
+            {
+                **row.to_dict(),
+                "source_identity": source_identity,
+                "origin_proof_sha256": origin_proof_sha256,
+            },
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _request_partition_set_sha256(
+    partitions: Any,
+) -> str:
+    return hash_json(
+        "phase5-validation-minute-request-partitions-v2",
+        [item.to_dict() for item in partitions],
+    )
 
 
 def _nonnegative_count(value: object, label: str) -> int:
