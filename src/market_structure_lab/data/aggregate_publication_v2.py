@@ -28,10 +28,10 @@ import weakref
 from market_structure_lab.core.artifact_io import (
     bounded_regular_files,
     iter_bounded_regular_lines,
+    iter_verified_regular_lines,
     path_exists_no_follow,
     read_bounded_regular,
     require_regular_directory,
-    sha256_regular,
 )
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.validation_source_v2 import (
@@ -100,8 +100,9 @@ _VERIFIED_SERIES: dict[
     int,
     tuple[
         weakref.ReferenceType[VerifiedAggregateSeriesV2],
-        weakref.ReferenceType[AggregatePublicationV2],
-        weakref.ReferenceType[AggregateSeriesKeyV2],
+        AggregatePublicationV2,
+        AggregateSeriesKeyV2,
+        AggregatePublicationBudgetV2,
         tuple[object, ...],
     ],
 ] = {}
@@ -477,6 +478,11 @@ class VerifiedAggregateSeriesV2:
         if not isinstance(self.aggregate_identity, AggregatePublicationIdentityV2):
             raise TypeError("verified aggregate series aggregate identity must be nominal")
         _require_sha256(self.budget_sha256, "budget_sha256")
+
+    def verify_original(self) -> VerifiedAggregateSeriesV2:
+        """Revalidate this exact series using its registered opener budget."""
+
+        return verify_original_aggregate_series_v2(self)
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -871,14 +877,8 @@ def iter_verified_aggregate_rows_v2(
             if partition.row_count > budget.max_rows_per_partition:
                 raise ValueError("aggregate partition exceeds row buffer budget")
             path = publication.publication_root / partition.path
-            if sha256_regular(path) != partition.sha256:
-                raise ValueError("aggregate partition checksum changed")
             count = 0
-            for line in iter_bounded_regular_lines(
-                path,
-                maximum_lines=partition.row_count,
-                maximum_line_bytes=_MAX_ROW_BYTES,
-            ):
+            for line in _iter_verified_partition_lines(path, partition):
                 count += 1
                 row = AggregateRowV2.from_dict(_decode_json(line, "aggregate row"))
                 _verify_partition_rows((row,), partition, member, None)
@@ -960,8 +960,17 @@ def open_verified_aggregate_series_v2(
         budget_sha256=publication.budget_sha256,
         _factory_token=_SERIES_FACTORY,
     )
-    _register_verified_series(series, publication)
+    _register_verified_series(series, publication, budget)
     return series
+
+
+def verify_original_aggregate_series_v2(
+    series: VerifiedAggregateSeriesV2,
+) -> VerifiedAggregateSeriesV2:
+    """Revalidate a sealed series using the exact budget accepted by its opener."""
+
+    _, _, budget, _ = _validate_registered_series(series)
+    return verify_verified_aggregate_series_v2(series, budget=budget)
 
 
 def verify_verified_aggregate_series_v2(
@@ -971,7 +980,7 @@ def verify_verified_aggregate_series_v2(
 ) -> VerifiedAggregateSeriesV2:
     """Revalidate a sealed series against its original publication and row bytes."""
 
-    publication, key, snapshot = _validate_registered_series(series)
+    publication, key, _, snapshot = _validate_registered_series(series)
     registered = _validate_registered_publication(publication, reopen_original=False)
     member, partitions = _locate_series(publication, key)
     _preflight_series(member, partitions, budget)
@@ -1106,14 +1115,8 @@ def _read_series_rows(
     width = timedelta(minutes=_TARGET_MINUTES[key.target_timeframe])
     for partition in partitions:
         path = publication.publication_root / partition.path
-        if sha256_regular(path) != partition.sha256:
-            raise ValueError("aggregate series partition checksum changed")
         count = 0
-        for line in iter_bounded_regular_lines(
-            path,
-            maximum_lines=partition.row_count,
-            maximum_line_bytes=_MAX_ROW_BYTES,
-        ):
+        for line in _iter_verified_partition_lines(path, partition):
             count += 1
             row = AggregateRowV2.from_dict(_decode_json(line, "aggregate row"))
             _verify_partition_rows((row,), partition, member, None)
@@ -1138,6 +1141,22 @@ def _read_series_rows(
     if not rows:
         raise ValueError("aggregate series is empty")
     return tuple(rows)
+
+
+def _iter_verified_partition_lines(
+    path: Path,
+    partition: AggregatePartitionV2,
+) -> Iterator[bytes]:
+    try:
+        yield from iter_verified_regular_lines(
+            path,
+            expected_sha256=partition.sha256,
+            expected_byte_count=partition.byte_count,
+            expected_line_count=partition.row_count,
+            maximum_line_bytes=_MAX_ROW_BYTES,
+        )
+    except RuntimeError as error:
+        raise ValueError("aggregate partition bytes/checksum changed") from error
 
 
 def _aggregate_series_identity(
@@ -1167,6 +1186,7 @@ def _aggregate_series_identity(
 def _register_verified_series(
     series: VerifiedAggregateSeriesV2,
     publication: AggregatePublicationV2,
+    budget: AggregatePublicationBudgetV2,
 ) -> None:
     identifier = id(series)
     snapshot = (
@@ -1188,8 +1208,9 @@ def _register_verified_series(
 
     _VERIFIED_SERIES[identifier] = (
         weakref.ref(series, cleanup),
-        weakref.ref(publication),
-        weakref.ref(series.key),
+        publication,
+        series.key,
+        budget,
         snapshot,
     )
 
@@ -1199,6 +1220,7 @@ def _validate_registered_series(
 ) -> tuple[
     AggregatePublicationV2,
     AggregateSeriesKeyV2,
+    AggregatePublicationBudgetV2,
     tuple[object, ...],
 ]:
     if not isinstance(series, VerifiedAggregateSeriesV2):
@@ -1206,12 +1228,12 @@ def _validate_registered_series(
     registered = _VERIFIED_SERIES.get(id(series))
     if registered is None or registered[0]() is not series:
         raise ValueError("verified aggregate series is not the registered original")
-    publication = registered[1]()
-    key = registered[2]()
-    if publication is None or key is None or series.key is not key:
+    publication = registered[1]
+    key = registered[2]
+    if series.key is not key:
         raise ValueError("verified aggregate series parents are no longer original")
     _verify_registered_series_key(key, publication)
-    return publication, key, registered[3]
+    return publication, key, registered[3], registered[4]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2014,18 +2036,12 @@ def _iter_member_rows(
 ) -> Iterator[AggregateRowV2]:
     for partition in member.partitions:
         path = publication.publication_root / partition.path
-        if sha256_regular(path) != partition.sha256:
-            raise ValueError("aggregate partition checksum changed")
         count = 0
         byte_count = 0
         first: AggregateRowV2 | None = None
         previous: AggregateRowV2 | None = None
         step = timedelta(minutes=_TARGET_MINUTES[partition.target_timeframe])
-        for line in iter_bounded_regular_lines(
-            path,
-            maximum_lines=partition.row_count,
-            maximum_line_bytes=_MAX_ROW_BYTES,
-        ):
+        for line in _iter_verified_partition_lines(path, partition):
             row = AggregateRowV2.from_dict(_decode_json(line, "aggregate row"))
             byte_count += len(line) + 1
             count += 1
@@ -2382,6 +2398,7 @@ __all__ = [
     "load_validation_aggregate_publication_v2",
     "open_verified_aggregate_series_v2",
     "publish_validation_aggregates_v2",
+    "verify_original_aggregate_series_v2",
     "verify_verified_aggregate_series_v2",
     "verify_validation_aggregate_publication_v2",
 ]

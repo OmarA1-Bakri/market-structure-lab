@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path
 import stat
+import tempfile
 from typing import BinaryIO
 
 _CHUNK_SIZE = 1024 * 1024
@@ -132,6 +133,54 @@ def iter_bounded_regular_lines(
             yield line[:-1]
 
 
+def iter_verified_regular_lines(
+    path: Path,
+    *,
+    expected_sha256: str,
+    expected_byte_count: int,
+    expected_line_count: int,
+    maximum_line_bytes: int,
+) -> Iterator[bytes]:
+    """Yield records only after one opened file is copied and fully verified."""
+
+    if expected_byte_count < 0 or expected_line_count < 0 or maximum_line_bytes < 1:
+        raise ValueError("expected byte, line, and record bounds must be non-negative")
+    digest = hashlib.sha256()
+    byte_count = 0
+    line_count = 0
+    with tempfile.SpooledTemporaryFile(max_size=_CHUNK_SIZE, mode="w+b") as snapshot:
+        with _open_regular(path) as handle:
+            while line := handle.readline(maximum_line_bytes + 2):
+                line_count += 1
+                byte_count += len(line)
+                if line_count > expected_line_count:
+                    raise RuntimeError(
+                        "artifact file bytes or line count exceed expected bounds"
+                    )
+                if byte_count > expected_byte_count:
+                    raise RuntimeError(
+                        "artifact file bytes or line count exceed expected bounds"
+                    )
+                if len(line) > maximum_line_bytes + 1 or not line.endswith(b"\n"):
+                    raise RuntimeError("artifact record exceeds its bound or lacks a newline")
+                digest.update(line)
+                snapshot.write(line)
+        if byte_count != expected_byte_count:
+            raise RuntimeError("artifact file differs from the expected byte count")
+        if line_count != expected_line_count:
+            raise RuntimeError("artifact file bytes or line count differ from expected bounds")
+        if digest.hexdigest() != expected_sha256:
+            raise RuntimeError("artifact file checksum differs from the expected checksum")
+        snapshot.seek(0)
+        for _ in range(line_count):
+            line = snapshot.readline(maximum_line_bytes + 2)
+            if len(line) > maximum_line_bytes + 1 or not line.endswith(b"\n"):
+                raise RuntimeError("verified artifact snapshot is internally inconsistent")
+            yield line[:-1]
+        if snapshot.read(1):
+            raise RuntimeError("verified artifact snapshot contains unexpected trailing bytes")
+
+
 def sha256_regular(path: Path) -> str:
     """Stream a SHA-256 digest from a non-symlink regular file."""
 
@@ -206,6 +255,7 @@ __all__ = [
     "bounded_regular_files",
     "bounded_subdirectories",
     "iter_bounded_regular_lines",
+    "iter_verified_regular_lines",
     "path_exists_no_follow",
     "read_bounded_regular",
     "regular_file_matches",

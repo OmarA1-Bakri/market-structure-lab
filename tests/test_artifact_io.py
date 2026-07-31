@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import io
 from pathlib import Path
 
@@ -56,3 +57,33 @@ def test_read_bounded_regular_rejects_a_negative_limit(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="exceeds the bounded size limit"):
         artifact_io.read_bounded_regular(artifact, -1)
+
+
+def test_iter_verified_regular_lines_yields_only_from_fully_verified_snapshot(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "rows.jsonl"
+    payload = b'{"row":1}\n{"row":2}\n'
+    artifact.write_bytes(payload)
+
+    assert tuple(
+        artifact_io.iter_verified_regular_lines(
+            artifact,
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            expected_byte_count=len(payload),
+            expected_line_count=2,
+            maximum_line_bytes=32,
+        )
+    ) == (b'{"row":1}', b'{"row":2}')
+
+    observed: list[bytes] = []
+    with pytest.raises(RuntimeError, match="checksum"):
+        for line in artifact_io.iter_verified_regular_lines(
+            artifact,
+            expected_sha256="0" * 64,
+            expected_byte_count=len(payload),
+            expected_line_count=2,
+            maximum_line_bytes=32,
+        ):
+            observed.append(line)
+    assert observed == []

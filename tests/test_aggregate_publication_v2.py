@@ -4,8 +4,13 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import copy
+import gc
 import hashlib
+import json
+import os
 from pathlib import Path
+from typing import BinaryIO, Callable
+import weakref
 
 import pytest
 
@@ -44,11 +49,70 @@ from market_structure_lab.research.validation_v2_splits import (
 )
 
 
+class _ReplaceOnEof:
+    def __init__(self, handle: BinaryIO, replace_entry: Callable[[], None]) -> None:
+        self._handle = handle
+        self._replace_entry = replace_entry
+        self._replaced = False
+
+    def __enter__(self) -> _ReplaceOnEof:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self._handle.close()
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._handle.read(size)
+        self._replace_after_eof(chunk)
+        return chunk
+
+    def readline(self, size: int = -1) -> bytes:
+        line = self._handle.readline(size)
+        self._replace_after_eof(line)
+        return line
+
+    def _replace_after_eof(self, chunk: bytes) -> None:
+        if not chunk and not self._replaced:
+            self._replaced = True
+            self._replace_entry()
+
+
 def _tree_bytes(root: Path) -> dict[str, bytes]:
     return {
         relative: (root / relative).read_bytes()
         for relative in bounded_regular_files(root, maximum=10_000)
     }
+
+
+def _coherent_alternative_partition(original: bytes) -> bytes:
+    encoded: list[bytes] = []
+    for line in original.splitlines():
+        payload = json.loads(line)
+        assert isinstance(payload, dict)
+        volume = payload["volume"]
+        assert isinstance(volume, str) and volume[-1].isdigit()
+        payload["volume"] = volume[:-1] + ("1" if volume[-1] != "1" else "2")
+        identity_payload = dict(payload)
+        identity_payload.pop("row_sha256")
+        payload["row_sha256"] = hash_json(
+            "phase5-validation-aggregate-row-v2",
+            identity_payload,
+        )
+        encoded.append(
+            (
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+    alternative = b"".join(encoded)
+    assert len(alternative) == len(original)
+    assert alternative != original
+    return alternative
 
 
 @pytest.fixture
@@ -613,6 +677,167 @@ def test_sealed_series_exposes_exact_original_publication_provenance(
     object.__setattr__(series, "aggregate_publication_sha256", "0" * 64)
     with pytest.raises(ValueError, match="identity|original|serialization"):
         verify_verified_aggregate_series_v2(series, budget=_budget())
+
+
+@pytest.mark.parametrize("reader_kind", ("public_iterator", "sealed_series"))
+def test_aggregate_readers_never_yield_replaced_partition_bytes(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reader_kind: str,
+) -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+    from market_structure_lab.core import artifact_io
+
+    minute = _publish_minute(v2_chain, tmp_path)
+    publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+    member = publication.members[0]
+    partition = member.partitions[0]
+    partition_path = publication.publication_root / partition.path
+    original_bytes = partition_path.read_bytes()
+    replacement_path = tmp_path / f"{reader_kind}-replacement.jsonl"
+    replacement_path.write_bytes(_coherent_alternative_partition(original_bytes))
+    original_rows = tuple(
+        module.AggregateRowV2.from_dict(json.loads(line))
+        for line in original_bytes.splitlines()
+    )
+
+    original_verify = module.verify_validation_aggregate_publication_v2
+    original_open = artifact_io._open_regular  # noqa: SLF001
+    armed = False
+    replaced = False
+
+    def verify_then_arm(*args: object, **kwargs: object):
+        nonlocal armed
+        result = original_verify(*args, **kwargs)  # type: ignore[arg-type]
+        armed = True
+        return result
+
+    def replace_entry() -> None:
+        nonlocal replaced
+        os.replace(replacement_path, partition_path)
+        replaced = True
+
+    def racing_open(path: Path):
+        handle = original_open(path)
+        if path == partition_path and armed and not replaced:
+            return _ReplaceOnEof(handle, replace_entry)
+        return handle
+
+    monkeypatch.setattr(module, "verify_validation_aggregate_publication_v2", verify_then_arm)
+    monkeypatch.setattr(artifact_io, "_open_regular", racing_open)
+
+    if reader_kind == "public_iterator":
+        observed = tuple(
+            row
+            for row in iter_verified_aggregate_rows_v2(publication, budget=_budget())
+            if (
+                row.symbol,
+                row.interval_index,
+                row.target_timeframe,
+                row.segment_id,
+            )
+            == (
+                member.symbol,
+                member.interval_index,
+                member.target_timeframe,
+                partition.segment_id,
+            )
+        )
+    else:
+        key = issue_aggregate_series_key_v2(
+            publication,
+            symbol=member.symbol,
+            interval_index=member.interval_index,
+            target_timeframe=member.target_timeframe,
+            segment_id=partition.segment_id,
+        )
+        observed = open_verified_aggregate_series_v2(publication, key, _budget()).rows
+
+    assert replaced
+    assert observed == original_rows
+
+
+def test_sealed_series_retains_registered_parents_until_series_collection(
+    v2_chain,
+    tmp_path: Path,
+) -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+
+    def issue_only_series() -> VerifiedAggregateSeriesV2:
+        minute = _publish_minute(v2_chain, tmp_path)
+        publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+        member = publication.members[0]
+        key = issue_aggregate_series_key_v2(
+            publication,
+            symbol=member.symbol,
+            interval_index=member.interval_index,
+            target_timeframe=member.target_timeframe,
+            segment_id=0,
+        )
+        return open_verified_aggregate_series_v2(publication, key, _budget())
+
+    series = issue_only_series()
+    identifier = id(series)
+    reference = weakref.ref(series)
+    gc.collect()
+
+    assert verify_verified_aggregate_series_v2(series, budget=_budget()) is series
+    assert identifier in module._VERIFIED_SERIES  # noqa: SLF001
+
+    del series
+    gc.collect()
+
+    assert reference() is None
+    assert identifier not in module._VERIFIED_SERIES  # noqa: SLF001
+
+
+def test_sealed_series_reuses_its_exact_registered_open_budget(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+
+    minute = _publish_minute(v2_chain, tmp_path)
+    open_budget = _budget(max_rows_per_partition=2)
+    publication = _publish_aggregate(
+        v2_chain,
+        minute,
+        tmp_path / "aggregate",
+        budget=open_budget,
+    )
+    member = next(item for item in publication.members if len(item.partitions) > 1)
+    key = issue_aggregate_series_key_v2(
+        publication,
+        symbol=member.symbol,
+        interval_index=member.interval_index,
+        target_timeframe=member.target_timeframe,
+        segment_id=member.partitions[0].segment_id,
+    )
+    series = open_verified_aggregate_series_v2(publication, key, open_budget)
+    maximum_partition_rows = max(item.row_count for item in member.partitions)
+    assert series.row_count > maximum_partition_rows
+    monkeypatch.setitem(
+        module._HARD_BUDGET_CEILINGS,  # noqa: SLF001
+        "max_rows_per_partition",
+        maximum_partition_rows,
+    )
+
+    verifier = getattr(module, "verify_original_aggregate_series_v2", None)
+    assert verifier is not None, "missing no-argument original-series verifier"
+    assert series.verify_original() is series
+    assert verifier(series) is series
+
+    with pytest.raises((TypeError, ValueError), match="registered|original|factory"):
+        copy.copy(series).verify_original()
+
+    class Lookalike:
+        def __getattr__(self, name: str):
+            return getattr(series, name)
+
+    with pytest.raises(TypeError, match="VerifiedAggregateSeriesV2|verified.*series"):
+        verifier(Lookalike())
 
 
 def test_series_key_and_series_are_nominal_registered_originals(v2_chain, tmp_path: Path) -> None:
