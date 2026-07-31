@@ -12,9 +12,10 @@ from collections.abc import Iterator
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+import ctypes
+import errno
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -55,20 +56,36 @@ _TARGET_MINUTES: dict[str, int] = {"1h": 60, "4h": 240}
 _TARGET_TIMEFRAMES = tuple(_TARGET_MINUTES)
 _MAX_CONTROL_BYTES = 16 * 1024 * 1024
 _MAX_ROW_BYTES = 8 * 1024
-_MAX_BUDGET_VALUE = 100_000_000_000
+_HARD_BUDGET_CEILINGS = {
+    "max_source_rows": 50_000_000,
+    "max_source_bytes": 64 * 1024 * 1024 * 1024,
+    "max_parent_partitions": 100_000,
+    "max_source_rows_per_chunk": 100_000,
+    "max_members": 100_000,
+    "max_aggregate_rows": 2_000_000,
+    "max_rows_per_partition": 100_000,
+    "max_output_bytes": 16 * 1024 * 1024 * 1024,
+    "max_output_files": 100_000,
+}
 _FACTORY = object()
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
-_VERIFIED_AGGREGATES: dict[
-    int,
-    tuple[
-        weakref.ReferenceType[AggregatePublicationV2],
-        bytes,
-        weakref.ReferenceType[ValidationSourcePublicationV2],
-        bytes,
-        weakref.ReferenceType[DevelopmentReadBoundaryV2],
-        bytes,
-    ],
-] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class _AggregateRegistration:
+    publication: weakref.ReferenceType[AggregatePublicationV2]
+    publication_bytes: bytes
+    publication_root: Path
+    minute: ValidationSourcePublicationV2
+    minute_bytes: bytes
+    boundary: DevelopmentReadBoundaryV2
+    boundary_bytes: bytes
+    coverage: SourceCoveragePublicationV2
+    split: DevelopmentSplitPublicationV2
+    availability: ScopedSourceAvailabilityV2
+
+
+_VERIFIED_AGGREGATES: dict[int, _AggregateRegistration] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,13 +105,14 @@ class AggregatePublicationBudgetV2:
     def __post_init__(self) -> None:
         for label in self.__dataclass_fields__:
             value = getattr(self, label)
+            ceiling = _HARD_BUDGET_CEILINGS[label]
             if (
                 isinstance(value, bool)
                 or not isinstance(value, int)
                 or value < 1
-                or value > _MAX_BUDGET_VALUE
+                or value > ceiling
             ):
-                raise ValueError(f"{label} must be a fixed positive bounded integer")
+                raise ValueError(f"{label} must be positive and within its fixed hard ceiling")
         if self.max_source_rows_per_chunk < max(_TARGET_MINUTES.values()):
             raise ValueError("source row chunk ceiling must hold one complete 4h bar")
 
@@ -592,6 +610,8 @@ def publish_validation_aggregates_v2(
             members=members,
             failure=failure,
         )
+        if len(publication.canonical_bytes) > _MAX_CONTROL_BYTES:
+            raise ValueError("aggregate control publication exceeds hard byte ceiling")
         _write_no_clobber(stage / "publication.json", publication.canonical_bytes)
         _write_no_clobber(
             stage / "_SUCCESS", f"{publication.aggregate_identity.value}\n".encode("ascii")
@@ -600,7 +620,14 @@ def publish_validation_aggregates_v2(
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
         raise
-    _register(publication, minute_publication=minute_publication, boundary=boundary)
+    _register(
+        publication,
+        minute_publication=minute_publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+    )
     return verify_validation_aggregate_publication_v2(
         publication,
         minute_publication=minute_publication,
@@ -624,17 +651,17 @@ def verify_validation_aggregate_publication_v2(
 
     if not isinstance(publication, AggregatePublicationV2):
         raise TypeError("aggregate publication must be verifier-issued")
-    registered = _VERIFIED_AGGREGATES.get(id(publication))
+    registered = _validate_registered_publication(publication)
     if (
-        registered is None
-        or registered[0]() is not publication
-        or registered[1] != publication.canonical_bytes
-        or registered[2]() is not minute_publication
-        or registered[3] != minute_publication.canonical_bytes
-        or registered[4]() is not boundary
-        or registered[5] != boundary.canonical_bytes
+        registered.minute is not minute_publication
+        or registered.minute_bytes != minute_publication.canonical_bytes
+        or registered.boundary is not boundary
+        or registered.boundary_bytes != boundary.canonical_bytes
+        or registered.coverage is not coverage
+        or registered.split is not split
+        or registered.availability is not availability
     ):
-        raise ValueError("aggregate publication is not the registered verified original")
+        raise ValueError("aggregate publication parent capability is not the original")
     verify_development_read_boundary_v2(boundary, coverage, split)
     verify_validation_source_publication_v2(
         minute_publication,
@@ -653,27 +680,11 @@ def verify_validation_aggregate_publication_v2(
     if success != f"{publication.aggregate_identity.value}\n".encode("ascii"):
         raise ValueError("aggregate success marker changed")
     _verify_publication_bindings(publication, minute_publication, coverage, split, boundary)
+    _verify_rederived_members(publication, minute_publication, boundary)
     expected_files = {"publication.json", "_SUCCESS"}
     for member in publication.members:
         for partition in member.partitions:
             expected_files.add(partition.path)
-            path = publication.publication_root / partition.path
-            if sha256_regular(path) != partition.sha256:
-                raise ValueError("aggregate partition checksum changed")
-            rows: list[AggregateRowV2] = []
-            byte_count = 0
-            for line in iter_bounded_regular_lines(
-                path,
-                maximum_lines=partition.row_count,
-                maximum_line_bytes=_MAX_ROW_BYTES,
-            ):
-                byte_count += len(line) + 1
-                rows.append(AggregateRowV2.from_dict(_decode_json(line, "aggregate row")))
-            if len(rows) != partition.row_count:
-                raise ValueError("aggregate partition row count changed")
-            if byte_count != partition.byte_count:
-                raise ValueError("aggregate partition byte count changed")
-            _verify_partition_rows(tuple(rows), partition, member, boundary)
     scan_limit = max(32, len(expected_files) * 8)
     if (
         set(
@@ -718,7 +729,14 @@ def load_validation_aggregate_publication_v2(
     )
     if publication.aggregate_identity != expected_aggregate_identity:
         raise ValueError("aggregate publication differs from expected frozen identity")
-    _register(publication, minute_publication=minute_publication, boundary=boundary)
+    _register(
+        publication,
+        minute_publication=minute_publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+    )
     return verify_validation_aggregate_publication_v2(
         publication,
         minute_publication=minute_publication,
@@ -736,9 +754,15 @@ def iter_verified_aggregate_rows_v2(
 ) -> Iterator[AggregateRowV2]:
     """Iterate bounded original aggregate bytes from a verifier-issued capability."""
 
-    registered = _VERIFIED_AGGREGATES.get(id(publication))
-    if registered is None or registered[0]() is not publication:
-        raise ValueError("aggregate read capability is not the verified original")
+    registered = _validate_registered_publication(publication)
+    verify_validation_aggregate_publication_v2(
+        publication,
+        minute_publication=registered.minute,
+        coverage=registered.coverage,
+        split=registered.split,
+        boundary=registered.boundary,
+        availability=registered.availability,
+    )
     if publication.row_count > budget.max_aggregate_rows:
         raise ValueError("aggregate read exceeds row budget")
     if publication.byte_count > budget.max_output_bytes:
@@ -801,9 +825,8 @@ def _preflight(
     if estimated_rows > budget.max_aggregate_rows:
         raise ValueError("aggregate row demand exceeds budget ceiling")
     if publication.status is ScopedSourceStatusV2.AVAILABLE:
-        estimated_files = max(
-            member_count, math.ceil(max(1, estimated_rows) / budget.max_rows_per_partition)
-        )
+        estimated_segments = publication.row_count // 240
+        estimated_files = max(member_count, estimated_rows, estimated_segments * 2)
         if estimated_files > budget.max_output_files:
             raise ValueError("aggregate output file demand exceeds budget ceiling")
         conservative_bytes = estimated_rows * _MAX_ROW_BYTES + _MAX_CONTROL_BYTES
@@ -988,7 +1011,7 @@ def _build_group_members(
             writer.finish_segment()
         segment_count += 1
 
-    for row in _iter_group_rows(
+    source_rows = _iter_group_rows(
         minute_publication,
         parent_partitions,
         symbol=symbol,
@@ -996,24 +1019,29 @@ def _build_group_members(
         interval_start=interval_start,
         interval_end=interval_end,
         budget=budget,
+    )
+    for chunk in _iter_chunks(
+        source_rows,
+        maximum=budget.max_source_rows_per_chunk,
     ):
-        if previous is None or row.timestamp != previous + timedelta(minutes=1):
-            if previous is not None:
-                finish_segment()
-            if row.timestamp.minute or row.timestamp.hour % 4:
-                raise ValueError("partial or non-UTC-aligned aggregate segment")
-        rolling.update(bytes.fromhex(row.row_sha256))
-        source_count += 1
-        buffer.append(row)
-        previous = row.timestamp
-        if len(buffer) == 240:
-            block = tuple(buffer)
-            for timeframe, writer in writers.items():
-                for aggregate in _aggregate_segment(
-                    block, timeframe, interval_index, segment_count
-                ):
-                    writer.append(aggregate)
-            buffer.clear()
+        for row in chunk:
+            if previous is None or row.timestamp != previous + timedelta(minutes=1):
+                if previous is not None:
+                    finish_segment()
+                if row.timestamp.minute or row.timestamp.hour % 4:
+                    raise ValueError("partial or non-UTC-aligned aggregate segment")
+            rolling.update(bytes.fromhex(row.row_sha256))
+            source_count += 1
+            buffer.append(row)
+            previous = row.timestamp
+            if len(buffer) == 240:
+                block = tuple(buffer)
+                for timeframe, writer in writers.items():
+                    for aggregate in _aggregate_segment(
+                        block, timeframe, interval_index, segment_count
+                    ):
+                        writer.append(aggregate)
+                buffer.clear()
     if source_count < 1:
         raise ValueError("aggregate member source is empty")
     finish_segment()
@@ -1060,6 +1088,19 @@ def _build_group_members(
             )
         )
     return tuple(members)
+
+
+def _iter_chunks(rows: Iterator[Any], *, maximum: int) -> Iterator[tuple[Any, ...]]:
+    while True:
+        chunk = []
+        try:
+            for _ in range(maximum):
+                chunk.append(next(rows))
+        except StopIteration:
+            if chunk:
+                yield tuple(chunk)
+            return
+        yield tuple(chunk)
 
 
 def _iter_group_rows(
@@ -1424,6 +1465,10 @@ def _verify_publication_bindings(
         or publication.reconciliation_identity_sha256 != coverage.reconciliation.identity_sha256
         or publication.raw_dump_identity_sha256 != coverage.raw_dump.identity_sha256
         or publication.source_mapping_version != coverage.raw_dump.source_mapping_version
+        or publication.admitted_source_identity != minute.admitted_source_identity
+        or publication.origin_kind != minute.origin_kind
+        or publication.origin_sha256 != minute.origin_sha256
+        or publication.origin_proof_sha256 != minute.origin_proof_sha256
         or publication.parent_partition_bindings != bindings
         or publication.allowed_symbols != boundary.allowed_symbols
         or publication.allowed_intervals
@@ -1435,6 +1480,176 @@ def _verify_publication_bindings(
         raise ValueError(
             "aggregate publication parent, source, audit, or boundary binding is stale"
         )
+
+
+def _verify_rederived_members(
+    publication: AggregatePublicationV2,
+    minute: ValidationSourcePublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+) -> None:
+    if publication.status is ScopedSourceStatusV2.UNAVAILABLE:
+        return
+    members = {
+        (item.symbol, item.interval_index, item.target_timeframe): item
+        for item in publication.members
+    }
+    for symbol in boundary.allowed_symbols:
+        for interval_index, interval in enumerate(boundary.allowed_intervals):
+            parents = tuple(
+                item
+                for item in minute.partitions
+                if item.symbol == symbol and item.interval_index == interval_index
+            )
+            expected_paths = tuple(item.path for item in parents)
+            expected_set = hash_json(
+                "phase5-validation-aggregate-parent-partition-set-v2",
+                [item.to_dict() for item in parents],
+            )
+            group_members = {
+                timeframe: members[(symbol, interval_index, timeframe)]
+                for timeframe in _TARGET_TIMEFRAMES
+            }
+            actual = {
+                timeframe: _iter_member_rows(
+                    publication,
+                    member,
+                    boundary,
+                )
+                for timeframe, member in group_members.items()
+            }
+            rolling = hashlib.sha256(b"phase5-validation-aggregate-source-row-order-v2\x00")
+            buffer: list[_SourceRow] = []
+            source_count = 0
+            segment_count = 0
+            previous: datetime | None = None
+
+            def finish_segment() -> None:
+                nonlocal segment_count
+                if buffer:
+                    raise ValueError("rederived aggregate source has a partial terminal segment")
+                segment_count += 1
+
+            source_rows = _iter_group_rows(
+                minute,
+                parents,
+                symbol=symbol,
+                interval_index=interval_index,
+                interval_start=interval.start,
+                interval_end=interval.end,
+                budget=AggregatePublicationBudgetV2(
+                    **_HARD_BUDGET_CEILINGS,
+                ),
+            )
+            for chunk in _iter_chunks(
+                source_rows,
+                maximum=_HARD_BUDGET_CEILINGS["max_source_rows_per_chunk"],
+            ):
+                for row in chunk:
+                    if previous is None or row.timestamp != previous + timedelta(minutes=1):
+                        if previous is not None:
+                            finish_segment()
+                        if row.timestamp.minute or row.timestamp.hour % 4:
+                            raise ValueError("rederived aggregate segment is not UTC aligned")
+                    rolling.update(bytes.fromhex(row.row_sha256))
+                    source_count += 1
+                    buffer.append(row)
+                    previous = row.timestamp
+                    if len(buffer) == 240:
+                        block = tuple(buffer)
+                        for timeframe in _TARGET_TIMEFRAMES:
+                            for expected in _aggregate_segment(
+                                block,
+                                timeframe,
+                                interval_index,
+                                segment_count,
+                            ):
+                                observed = next(actual[timeframe], None)
+                                if observed != expected:
+                                    raise ValueError(
+                                        "aggregate row differs from rederived minute parent"
+                                    )
+                        buffer.clear()
+            if source_count < 1:
+                raise ValueError("rederived aggregate source is empty")
+            finish_segment()
+            ordered_source = rolling.hexdigest()
+            for timeframe, member in group_members.items():
+                if next(actual[timeframe], None) is not None:
+                    raise ValueError("aggregate publication contains extra rederived rows")
+                if (
+                    member.source_partition_paths != expected_paths
+                    or member.source_partition_set_sha256 != expected_set
+                    or member.source_row_count != source_count
+                    or member.ordered_source_row_sha256 != ordered_source
+                    or member.segment_count != segment_count
+                ):
+                    raise ValueError(
+                        "aggregate member parent order, digest, or segment identity differs"
+                    )
+
+
+def _iter_member_rows(
+    publication: AggregatePublicationV2,
+    member: AggregateMemberV2,
+    boundary: DevelopmentReadBoundaryV2,
+) -> Iterator[AggregateRowV2]:
+    for partition in member.partitions:
+        path = publication.publication_root / partition.path
+        if sha256_regular(path) != partition.sha256:
+            raise ValueError("aggregate partition checksum changed")
+        count = 0
+        byte_count = 0
+        first: AggregateRowV2 | None = None
+        previous: AggregateRowV2 | None = None
+        step = timedelta(minutes=_TARGET_MINUTES[partition.target_timeframe])
+        for line in iter_bounded_regular_lines(
+            path,
+            maximum_lines=partition.row_count,
+            maximum_line_bytes=_MAX_ROW_BYTES,
+        ):
+            row = AggregateRowV2.from_dict(_decode_json(line, "aggregate row"))
+            byte_count += len(line) + 1
+            count += 1
+            if first is None:
+                first = row
+            if previous is not None and row.timestamp != previous.timestamp + step:
+                raise ValueError("aggregate partition rows overlap or have a gap")
+            _verify_row_scope(row, partition, member, boundary)
+            previous = row
+            yield row
+        if (
+            first is None
+            or previous is None
+            or count != partition.row_count
+            or byte_count != partition.byte_count
+            or _utc_text(first.timestamp) != partition.min_timestamp
+            or _utc_text(previous.timestamp) != partition.max_timestamp
+        ):
+            raise ValueError("aggregate partition bounds, rows, or bytes changed")
+
+
+def _verify_row_scope(
+    row: AggregateRowV2,
+    partition: AggregatePartitionV2,
+    member: AggregateMemberV2,
+    boundary: DevelopmentReadBoundaryV2,
+) -> None:
+    if (
+        row.symbol != member.symbol
+        or row.symbol != partition.symbol
+        or row.interval_index != member.interval_index
+        or row.interval_index != partition.interval_index
+        or row.target_timeframe != member.target_timeframe
+        or row.target_timeframe != partition.target_timeframe
+        or row.segment_id != partition.segment_id
+    ):
+        raise ValueError("aggregate row member grid differs")
+    interval = boundary.allowed_intervals[row.interval_index]
+    if (
+        row.symbol not in boundary.allowed_symbols
+        or not interval.start <= row.timestamp < interval.end
+    ):
+        raise ValueError("aggregate row overlaps forbidden or final scope")
 
 
 def _verify_partition_rows(
@@ -1469,24 +1684,64 @@ def _register(
     publication: AggregatePublicationV2,
     *,
     minute_publication: ValidationSourcePublicationV2,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
     boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
 ) -> None:
     identifier = id(publication)
 
     def cleanup(reference: weakref.ReferenceType[AggregatePublicationV2]) -> None:
         current = _VERIFIED_AGGREGATES.get(identifier)
-        if current is not None and current[0] is reference:
+        if current is not None and current.publication is reference:
             _VERIFIED_AGGREGATES.pop(identifier, None)
 
     reference = weakref.ref(publication, cleanup)
-    _VERIFIED_AGGREGATES[identifier] = (
-        reference,
-        publication.canonical_bytes,
-        weakref.ref(minute_publication),
-        minute_publication.canonical_bytes,
-        weakref.ref(boundary),
-        boundary.canonical_bytes,
+    _VERIFIED_AGGREGATES[identifier] = _AggregateRegistration(
+        publication=reference,
+        publication_bytes=publication.canonical_bytes,
+        publication_root=publication.publication_root,
+        minute=minute_publication,
+        minute_bytes=minute_publication.canonical_bytes,
+        boundary=boundary,
+        boundary_bytes=boundary.canonical_bytes,
+        coverage=coverage,
+        split=split,
+        availability=availability,
     )
+
+
+def _validate_registered_publication(
+    publication: AggregatePublicationV2,
+) -> _AggregateRegistration:
+    if not isinstance(publication, AggregatePublicationV2):
+        raise TypeError("aggregate publication must be verifier-issued")
+    registered = _VERIFIED_AGGREGATES.get(id(publication))
+    if (
+        registered is None
+        or registered.publication() is not publication
+        or registered.publication_root != publication.publication_root
+    ):
+        raise ValueError("aggregate publication is not the registered original")
+    try:
+        current_bytes = publication_json_bytes(publication.to_dict())
+        current_identity = AggregatePublicationIdentityV2.from_payload(
+            publication._identity_payload()
+        )
+    except Exception as error:
+        raise ValueError("aggregate publication current serialization is invalid") from error
+    if (
+        current_bytes != registered.publication_bytes
+        or publication.canonical_bytes != registered.publication_bytes
+        or publication.aggregate_identity != current_identity
+        or read_bounded_regular(
+            registered.publication_root / "publication.json",
+            _MAX_CONTROL_BYTES,
+        )
+        != registered.publication_bytes
+    ):
+        raise ValueError("aggregate publication serialization or identity differs from original")
+    return registered
 
 
 def _aggregate_row_bytes(row: AggregateRowV2) -> bytes:
@@ -1502,46 +1757,76 @@ def _aggregate_row_bytes(row: AggregateRowV2) -> bytes:
 
 
 def _publish_stage_no_clobber(stage: Path, destination: Path) -> None:
+    _fsync_staged_tree(stage)
+    _rename_no_replace(stage, destination)
     try:
-        os.mkdir(destination)
-    except FileExistsError:
-        raise FileExistsError(f"refusing existing aggregate publication: {destination}") from None
-    try:
-        for relative in bounded_regular_files(stage, maximum=100_000):
-            source = stage / relative
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            _copy_regular_no_clobber(source, target)
-        shutil.rmtree(stage)
+        _fsync_directory(destination.parent)
     except Exception:
+        shutil.rmtree(destination, ignore_errors=False)
+        _fsync_directory(destination.parent)
         raise
 
 
-def _copy_regular_no_clobber(source: Path, target: Path) -> None:
-    source_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    target_flags = (
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
+def _fsync_staged_tree(stage: Path) -> None:
+    files = bounded_regular_files(
+        stage,
+        maximum=_HARD_BUDGET_CEILINGS["max_output_files"] + 2,
     )
-    source_descriptor = os.open(source, source_flags)
-    target_descriptor = -1
+    if "_SUCCESS" not in files:
+        raise ValueError("aggregate stage lacks its terminal success marker")
+    directories = {stage}
+    for relative in files:
+        path = stage / relative
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise RuntimeError("aggregate stage artifact is not regular")
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        directories.update(path.parents)
+    for directory in sorted(
+        (item for item in directories if item == stage or stage in item.parents),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        _fsync_directory(directory)
+
+
+def _rename_no_replace(stage: Path, destination: Path) -> None:
+    if os.name == "nt":
+        os.rename(stage, destination)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("atomic no-replace directory publication is unsupported")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(-100, os.fsencode(stage), -100, os.fsencode(destination), 1)
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(f"refusing existing aggregate publication: {destination}")
+    raise OSError(error_number, os.strerror(error_number), destination)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
-        if not stat.S_ISREG(os.fstat(source_descriptor).st_mode):
-            raise RuntimeError("aggregate stage artifact is not regular")
-        target_descriptor = os.open(target, target_flags, 0o600)
-        while chunk := os.read(source_descriptor, 1024 * 1024):
-            view = memoryview(chunk)
-            while view:
-                written = os.write(target_descriptor, view)
-                view = view[written:]
-        os.fsync(target_descriptor)
+        os.fsync(descriptor)
     finally:
-        os.close(source_descriptor)
-        if target_descriptor >= 0:
-            os.close(target_descriptor)
+        os.close(descriptor)
 
 
 def _write_no_clobber(path: Path, content: bytes) -> None:

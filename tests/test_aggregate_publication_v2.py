@@ -453,3 +453,68 @@ def test_caller_constructed_and_reconstructed_verified_objects_reject(
     copied = copy.copy(publication)
     with pytest.raises((TypeError, ValueError), match="verified|original"):
         tuple(iter_verified_aggregate_rows_v2(copied, budget=_budget()))
+
+
+def test_registered_capability_rejects_in_memory_origin_and_member_mutation(
+    v2_chain, tmp_path: Path
+) -> None:
+    minute = _publish_minute(v2_chain, tmp_path)
+    publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+    object.__setattr__(publication, "origin_sha256", "0" * 64)
+    with pytest.raises(ValueError, match="original|serialization|identity"):
+        tuple(iter_verified_aggregate_rows_v2(publication, budget=_budget()))
+
+
+def test_atomic_commit_rolls_back_on_fsync_failure(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+
+    minute = _publish_minute(v2_chain, tmp_path)
+    output = tmp_path / "aggregate"
+    monkeypatch.setattr(
+        module,
+        "_fsync_staged_tree",
+        lambda _root: (_ for _ in ()).throw(OSError("interrupted fsync")),
+    )
+    with pytest.raises(OSError, match="interrupted"):
+        _publish_aggregate(v2_chain, minute, output)
+    assert not output.exists()
+
+
+def test_atomic_commit_never_replaces_concurrent_destination(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+
+    minute = _publish_minute(v2_chain, tmp_path)
+    output = tmp_path / "aggregate"
+    original = module._rename_no_replace  # noqa: SLF001
+
+    def race(stage: Path, destination: Path) -> None:
+        destination.mkdir()
+        (destination / "winner").write_text("preserve", encoding="ascii")
+        original(stage, destination)
+
+    monkeypatch.setattr(module, "_rename_no_replace", race)
+    with pytest.raises(FileExistsError):
+        _publish_aggregate(v2_chain, minute, output)
+    assert (output / "winner").read_text(encoding="ascii") == "preserve"
+
+
+def test_chunking_and_fixed_hard_ceilings_are_enforced() -> None:
+    import market_structure_lab.data.aggregate_publication_v2 as module
+
+    consumed = 0
+
+    def counting():
+        nonlocal consumed
+        for value in range(10):
+            consumed += 1
+            yield value
+
+    chunks = module._iter_chunks(counting(), maximum=3)  # noqa: SLF001
+    assert next(chunks) == (0, 1, 2)
+    assert consumed == 3
+    with pytest.raises(ValueError, match="hard ceiling"):
+        _budget(max_source_rows=50_000_001)
