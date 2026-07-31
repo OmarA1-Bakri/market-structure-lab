@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import UTC, datetime
+import json
 
 import pytest
 
@@ -9,44 +10,70 @@ from market_structure_lab.research.models import (
     ValidationWorkDemand,
 )
 from market_structure_lab.research.validation_v2 import (
-    AttachedDevelopmentOutcomeV2,
     SlotRunnerInputsV2,
+    _issue_fixture_outcome_reader_v2,
     apply_global_holm_v2,
+    global_holm_pvalues_v2,
     run_slot_roster_v2,
     verify_slot_results_v2,
 )
 
-SHA = "a" * 64
 
-
-def _inputs() -> SlotRunnerInputsV2:
+def _inputs(
+    *, complete_costs: bool = False, precision_available: bool = True
+) -> SlotRunnerInputsV2:
     by_slot = {
-        slot.slot_id: (
-            AttachedDevelopmentOutcomeV2(
-                event_id=f"event-{slot.slot_id}",
-                slot_id=slot.slot_id,
-                fold_id="outer-1",
-                symbol="SOLUSDT",
-                timeframe=slot.timeframe,
-                timestamp=datetime(2025, 1, 6, tzinfo=UTC),
-                net_return=0.0,
-                source_partition_sha256=SHA,
-                aggregate_row_sha256="b" * 64,
-                split_sha256="c" * 64,
-                cost_authority_sha256="d" * 64,
-            ),
-        )
+        slot.slot_id: [
+            {
+                "event_id": f"event-{slot.slot_id}",
+                "timestamp": datetime(2025, 1, 6, tzinfo=UTC).isoformat(),
+                "symbol": "SOLUSDT",
+                "timeframe": slot.timeframe,
+                "entry_price": 100.0,
+                "exit_price": 100.0,
+                "volume": 10.0,
+                "detector_metric": 1.0,
+                "partition_role": "inner_train",
+            }
+        ]
         for slot in VALIDATION_SLOT_ROSTER
     }
-    return SlotRunnerInputsV2(
+    reader = _issue_fixture_outcome_reader_v2(
+        json.dumps(
+            {"schema_version": "validation-v2-outcome-fixture-v1", "slots": by_slot}, sort_keys=True
+        ).encode(),
         programme_id="VPV2-" + "1" * 64,
-        outcomes_by_slot=by_slot,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
-        promotion_grade_costs_complete=False,
-        precision_available=True,
+        source_publication_sha256="e" * 64,
+        aggregate_publication_sha256="f" * 64,
+        expected_slot_ids=tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER),
+    )
+    return SlotRunnerInputsV2(
+        programme_id="VPV2-" + "1" * 64,
+        outcome_reader=reader,
+        split_sha256="c" * 64,
+        cost_authority_sha256="d" * 64,
+        promotion_grade_costs_complete=complete_costs,
+        precision_available=precision_available,
         runner_version="slot-runner-v2",
     )
+
+
+def test_outcome_fixture_rejects_missing_and_extra_slot_keys() -> None:
+    payload = json.dumps(
+        {"schema_version": "validation-v2-outcome-fixture-v1", "slots": {}}
+    ).encode()
+    with pytest.raises(ValueError, match="missing|extra"):
+        _issue_fixture_outcome_reader_v2(
+            payload,
+            programme_id="VPV2-" + "1" * 64,
+            split_sha256="c" * 64,
+            cost_authority_sha256="d" * 64,
+            source_publication_sha256="e" * 64,
+            aggregate_publication_sha256="f" * 64,
+            expected_slot_ids=("VS-0001",),
+        )
 
 
 def test_exact_roster_invokes_one_distinct_computation_per_slot() -> None:
@@ -60,7 +87,17 @@ def test_exact_roster_invokes_one_distinct_computation_per_slot() -> None:
     assert len({item.attempt_sha256 for item in results}) == 1_104
     assert len({item.result_sha256 for item in results}) == 1_104
     assert all(item.metrics for item in results if item.computation_completed)
-    assert all(item.decision == "inconclusive" for item in results if item.computation_completed)
+
+
+def test_statistical_insufficiency_stays_inconclusive_with_complete_costs() -> None:
+    results = run_slot_roster_v2(
+        _inputs(complete_costs=True), budget=ValidationWorkBudget(), demand=ValidationWorkDemand()
+    )
+    primary = next(item for item in results if item.slot_id == "VS-0001")
+    assert primary.execution_status == "completed"
+    assert primary.decision == "inconclusive"
+    assert primary.p_value is None
+    assert "fewer than two" in primary.reason
 
 
 def test_global_holm_requires_exact_64_primaries_and_keeps_unevaluable_visible() -> None:
@@ -82,3 +119,47 @@ def test_verifier_rejects_fanout_and_wrong_runner() -> None:
     results[1] = replace(results[1], attempt_sha256=results[0].attempt_sha256)
     with pytest.raises(ValueError, match="attempt"):
         verify_slot_results_v2(tuple(results), runner_version="slot-runner-v2")
+
+
+def test_exact_counts_role_dispatch_and_additive_retry_identities() -> None:
+    budget = ValidationWorkBudget()
+    demand = ValidationWorkDemand()
+    first = run_slot_roster_v2(_inputs(precision_available=False), budget=budget, demand=demand)
+    b_count = sum(slot.family == "B" for slot in VALIDATION_SLOT_ROSTER)
+    assert sum(item.decision == "not_evaluated" for item in first) == b_count
+    assert sum(item.computation_completed for item in first) == 1_104 - b_count
+    formulas = {
+        item.runner_kind: item.metrics.get("formula")
+        for item in first
+        if item.computation_completed
+    }
+    assert len(set(formulas.values())) == len(formulas)
+    attempt_numbers = {slot.slot_id: 2 for slot in VALIDATION_SLOT_ROSTER}
+    retry = run_slot_roster_v2(
+        _inputs(), budget=budget, demand=demand, attempt_numbers=attempt_numbers
+    )
+    assert all(item.attempt_number == 2 for item in retry)
+    assert not {item.attempt_sha256 for item in first} & {item.attempt_sha256 for item in retry}
+
+
+def test_global_holm_known_boundary_ties_and_invalid_values() -> None:
+    primary_ids = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER if slot.primary)
+    boundary = 0.05 / 64
+    pvalues = {slot_id: 1.0 for slot_id in primary_ids}
+    pvalues[primary_ids[0]] = boundary
+    pvalues[primary_ids[1]] = boundary
+    pvalues[primary_ids[2]] = None
+    adjusted = global_holm_pvalues_v2(pvalues)
+    assert adjusted[0].adjusted_p_value == pytest.approx(0.05)
+    assert adjusted[1].adjusted_p_value == pytest.approx(0.05)
+    assert adjusted[0].rejected and adjusted[1].rejected
+    assert adjusted[2].effective_p_value == 1.0 and not adjusted[2].evaluable
+    ordered = sorted(adjusted, key=lambda item: (item.effective_p_value, item.slot_id))
+    assert [item.adjusted_p_value for item in ordered] == sorted(
+        item.adjusted_p_value for item in ordered
+    )
+    for invalid in (float("nan"), float("inf"), -0.1, 1.1):
+        attacked = dict(pvalues)
+        attacked[primary_ids[0]] = invalid
+        with pytest.raises(ValueError, match="finite|\\[0, 1\\]"):
+            global_holm_pvalues_v2(attacked)

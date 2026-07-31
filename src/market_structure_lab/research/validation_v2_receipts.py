@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from types import MappingProxyType
 
@@ -16,10 +17,14 @@ from market_structure_lab.core.artifact_io import (
     read_bounded_regular,
     require_regular_directory,
 )
+from market_structure_lab.core.identity import hash_json
 from market_structure_lab.research.models import VALIDATION_SLOT_ROSTER
 
 _MAX_RECEIPT_BYTES = 256 * 1024
 _SCHEMA = "validation-slot-receipt-v2"
+_SLOT_ID = re.compile(r"^VS-[0-9]{4}$")
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_PROGRAMME = re.compile(r"^VPV2-[a-f0-9]{64}$")
 
 
 def _canonical(payload: object) -> bytes:
@@ -40,19 +45,73 @@ class ValidationReceiptV2:
     runner_version: str
     attempt_sha256: str
     input_sha256: str
+    evidence_sha256: str
     result_sha256: str
+    parent_slot_id: str | None
+    parent_attempt_sha256: str | None
+    parent_result_sha256: str | None
     execution_status: str
     decision: str
     computation_completed: bool
+    reason: str
+    p_value: float | None
     metrics: Mapping[str, object]
     receipt_sha256: str
     canonical_bytes: bytes = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if _PROGRAMME.fullmatch(self.programme_id) is None:
+            raise ValueError("receipt programme_id is invalid")
+        if _SLOT_ID.fullmatch(self.slot_id) is None:
+            raise ValueError("receipt slot_id is invalid")
+        slot = next(
+            (item for item in VALIDATION_SLOT_ROSTER if item.slot_id == self.slot_id),
+            None,
+        )
+        if slot is None or self.runner_kind != slot.kind.value:
+            raise ValueError("receipt runner kind differs from frozen slot")
+        for value, label in (
+            (self.attempt_sha256, "attempt_sha256"),
+            (self.input_sha256, "input_sha256"),
+            (self.evidence_sha256, "evidence_sha256"),
+            (self.result_sha256, "result_sha256"),
+            (self.receipt_sha256, "receipt_sha256"),
+        ):
+            if _SHA256.fullmatch(value) is None:
+                raise ValueError(f"receipt {label} is invalid")
+        if self.parent_slot_id != slot.parent_slot_id:
+            raise ValueError("receipt parent slot differs from frozen roster")
+        for parent in (self.parent_attempt_sha256, self.parent_result_sha256):
+            if parent is not None and _SHA256.fullmatch(parent) is None:
+                raise ValueError("receipt parent identity is invalid")
+        if slot.parent_slot_id is None and (
+            self.parent_attempt_sha256 is not None or self.parent_result_sha256 is not None
+        ):
+            raise ValueError("root receipt cannot have parent attempt/result identities")
+        if slot.parent_slot_id is not None and (
+            self.parent_attempt_sha256 is None or self.parent_result_sha256 is None
+        ):
+            raise ValueError("child receipt requires parent attempt/result identities")
         if self.attempt_number < 1:
             raise ValueError("receipt attempt_number must be positive")
         if self.computation_completed and not self.metrics:
             raise ValueError("completed computation receipt requires metrics")
+        if self.execution_status == "completed":
+            if self.decision == "not_evaluated":
+                raise ValueError("completed receipt cannot be not_evaluated")
+        elif self.execution_status in {"failed", "abandoned"}:
+            if self.decision != "not_evaluated" or self.computation_completed:
+                raise ValueError("failed/abandoned receipt must be not_evaluated")
+        else:
+            raise ValueError("receipt execution status is invalid")
+        if self.p_value is not None and (
+            not isinstance(self.p_value, float)
+            or not self.p_value == self.p_value
+            or not 0.0 <= self.p_value <= 1.0
+        ):
+            raise ValueError("receipt p_value must be finite and in [0, 1]")
+        if self.path.parent.name != self.slot_id:
+            raise ValueError("receipt path does not match its slot")
         object.__setattr__(self, "metrics", MappingProxyType(dict(self.metrics)))
 
 
@@ -95,10 +154,16 @@ def publish_validation_v2_receipt(
         "runner_version",
         "attempt_sha256",
         "input_sha256",
+        "evidence_sha256",
         "result_sha256",
+        "parent_slot_id",
+        "parent_attempt_sha256",
+        "parent_result_sha256",
         "execution_status",
         "decision",
         "computation_completed",
+        "reason",
+        "p_value",
         "metrics",
     }
     if not required <= set(payload):
@@ -115,10 +180,48 @@ def publish_validation_v2_receipt(
         raise ValueError("validation V2 receipt exceeds the byte ceiling")
     slot = str(payload["slot_id"])
     attempt = int(payload["attempt_number"])
-    destination = root / slot / f"attempt-{attempt:04d}.json"
+    if _SLOT_ID.fullmatch(slot) is None:
+        raise ValueError("receipt slot_id must be a canonical frozen slot identifier")
+    if attempt < 1:
+        raise ValueError("receipt attempt must start at one")
+    expected_attempt = hash_json(
+        "phase5-validation-slot-attempt-v2",
+        {
+            "slot_id": slot,
+            "input_sha256": payload["input_sha256"],
+            "attempt_number": attempt,
+        },
+    )
+    if payload["attempt_sha256"] != expected_attempt:
+        raise ValueError("receipt attempt identity differs")
+    expected_result = hash_json(
+        "phase5-validation-slot-computation-result-v2",
+        {
+            "programme_id": payload["programme_id"],
+            "slot_id": slot,
+            "attempt_sha256": payload["attempt_sha256"],
+            "input_sha256": payload["input_sha256"],
+            "evidence_sha256": payload["evidence_sha256"],
+            "execution_status": payload["execution_status"],
+            "decision": payload["decision"],
+            "computation_completed": payload["computation_completed"],
+            "p_value": payload["p_value"],
+            "metrics": payload["metrics"],
+        },
+    )
+    if payload["result_sha256"] != expected_result:
+        raise ValueError("receipt result identity differs")
+    slot_root = root / slot
+    destination = slot_root / f"attempt-{attempt:04d}.json"
+    if attempt > 1 and not path_exists_no_follow(root / slot / f"attempt-{attempt - 1:04d}.json"):
+        raise ValueError("receipt attempts must be gap-free and start at one")
     if path_exists_no_follow(destination):
         raise FileExistsError(f"refusing existing validation V2 receipt: {destination}")
-    destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if path_exists_no_follow(slot_root):
+        require_regular_directory(slot_root)
+    else:
+        slot_root.mkdir(mode=0o755)
+        require_regular_directory(slot_root)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
     )
@@ -157,6 +260,11 @@ def _receipt_from_payload(
     attempt_number = payload["attempt_number"]
     if isinstance(attempt_number, bool) or not isinstance(attempt_number, int):
         raise TypeError("receipt attempt_number must be an integer")
+    raw_p_value = payload["p_value"]
+    if raw_p_value is not None and (
+        isinstance(raw_p_value, bool) or not isinstance(raw_p_value, (int, float))
+    ):
+        raise TypeError("receipt p_value must be numeric or null")
     return ValidationReceiptV2(
         path=path,
         programme_id=str(payload["programme_id"]),
@@ -166,10 +274,26 @@ def _receipt_from_payload(
         runner_version=str(payload["runner_version"]),
         attempt_sha256=str(payload["attempt_sha256"]),
         input_sha256=str(payload["input_sha256"]),
+        evidence_sha256=str(payload["evidence_sha256"]),
         result_sha256=str(payload["result_sha256"]),
+        parent_slot_id=(
+            str(payload["parent_slot_id"]) if payload["parent_slot_id"] is not None else None
+        ),
+        parent_attempt_sha256=(
+            str(payload["parent_attempt_sha256"])
+            if payload["parent_attempt_sha256"] is not None
+            else None
+        ),
+        parent_result_sha256=(
+            str(payload["parent_result_sha256"])
+            if payload["parent_result_sha256"] is not None
+            else None
+        ),
         execution_status=str(payload["execution_status"]),
         decision=str(payload["decision"]),
         computation_completed=bool(payload["computation_completed"]),
+        reason=str(payload["reason"]),
+        p_value=(float(raw_p_value) if raw_p_value is not None else None),
         metrics=metrics,
         receipt_sha256=str(payload["receipt_sha256"]),
         canonical_bytes=content,
@@ -231,6 +355,9 @@ def verify_validation_v2_receipts(
     attempts: set[str] = set()
     inputs: set[str] = set()
     results: set[str] = set()
+    programmes = {receipt.programme_id for receipt in selected.values()}
+    if len(programmes) != 1:
+        raise ValueError("selected receipts cross programme identities")
     completed = not_evaluated = inconclusive = failed = abandoned = 0
     frozen_runners = {slot.slot_id: slot.kind.value for slot in VALIDATION_SLOT_ROSTER}
     for slot_id in expected:
@@ -261,6 +388,18 @@ def verify_validation_v2_receipts(
             failed += 1
         if receipt.execution_status == "abandoned":
             abandoned += 1
+    for slot_id in expected:
+        receipt = selected[slot_id]
+        if receipt.parent_slot_id is None:
+            continue
+        parent = selected.get(receipt.parent_slot_id)
+        if parent is None:
+            raise ValueError("selected child receipt is missing its selected parent")
+        if (
+            receipt.parent_attempt_sha256 != parent.attempt_sha256
+            or receipt.parent_result_sha256 != parent.result_sha256
+        ):
+            raise ValueError("selected child receipt binds a stale parent retry")
     return ValidationV2ReceiptReport(
         planned_slots=len(expected),
         attempted_slots=len(selected),
@@ -305,11 +444,25 @@ def verify_validation_programme_v2(
             receipt.attempt_number != result.attempt_number
             or receipt.attempt_sha256 != result.attempt_sha256
             or receipt.input_sha256 != result.input_sha256
+            or receipt.evidence_sha256 != result.evidence_sha256
             or receipt.result_sha256 != result.result_sha256
+            or receipt.parent_slot_id
+            != next(
+                (
+                    slot.parent_slot_id
+                    for slot in VALIDATION_SLOT_ROSTER
+                    if slot.slot_id == result.slot_id
+                ),
+                None,
+            )
+            or receipt.parent_attempt_sha256 != result.parent_attempt_sha256
+            or receipt.parent_result_sha256 != result.parent_result_sha256
             or receipt.runner_kind != result.runner_kind
             or receipt.execution_status != result.execution_status
             or receipt.decision != result.decision
             or receipt.computation_completed != result.computation_completed
+            or receipt.reason != result.reason
+            or receipt.p_value != result.p_value
             or dict(receipt.metrics) != dict(result.metrics)
         ):
             raise ValueError("selected receipt differs from its slot computation result")
