@@ -4,13 +4,23 @@ from dataclasses import fields, replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable, cast
 
 import pytest
 
+from market_structure_lab.data.validation_source_v2 import ValidationSourcePublicationV2
 from market_structure_lab.research import validation_v2_costs as costs
 
 
 SHA = "a" * 64
+
+
+def _counting_verifier(calls: dict[str, int], key: str) -> Callable[..., object]:
+    def verify(value: object, *_args: object, **_kwargs: object) -> object:
+        calls[key] += 1
+        return value
+
+    return verify
 
 
 def _parents(
@@ -233,12 +243,12 @@ def test_every_consumption_revalidates_parent_and_original_bytes(tmp_path, monke
     monkeypatch.setattr(
         costs,
         "verify_binance_archive_acquisition_v2",
-        lambda *a, **k: calls.__setitem__("archive", calls["archive"] + 1) or a[0],
+        _counting_verifier(calls, "archive"),
     )
     monkeypatch.setattr(
         costs,
         "verify_validation_aggregate_publication_v2",
-        lambda *a, **k: calls.__setitem__("aggregate", calls["aggregate"] + 1) or a[0],
+        _counting_verifier(calls, "aggregate"),
     )
     authority = costs.publish_validation_cost_authority_v2(
         source_publication=parents.minute,
@@ -321,9 +331,12 @@ def test_dimension_substitution_and_coherent_self_rehash_do_not_replace_original
 
 def test_mixed_parent_capability_is_rejected(tmp_path, monkeypatch) -> None:
     authority, parents = _publish(tmp_path, monkeypatch)
-    mixed_source = SimpleNamespace(
-        source_publication_identity=parents.minute.source_publication_identity,
-        canonical_bytes=parents.minute.canonical_bytes,
+    mixed_source = cast(
+        ValidationSourcePublicationV2,
+        SimpleNamespace(
+            source_publication_identity=parents.minute.source_publication_identity,
+            canonical_bytes=parents.minute.canonical_bytes,
+        ),
     )
     with pytest.raises(ValueError, match="parent capability"):
         costs.verify_validation_cost_authority_v2(
