@@ -14,9 +14,14 @@ from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.aggregate_publication_v2 import (
     AggregatePublicationBudgetV2,
     AggregatePublicationV2,
+    AggregateSeriesKeyV2,
+    VerifiedAggregateSeriesV2,
+    issue_aggregate_series_key_v2,
     iter_verified_aggregate_rows_v2,
     load_validation_aggregate_publication_v2,
+    open_verified_aggregate_series_v2,
     publish_validation_aggregates_v2,
+    verify_verified_aggregate_series_v2,
     verify_validation_aggregate_publication_v2,
 )
 from market_structure_lab.data.validation_source_v2 import (
@@ -545,3 +550,101 @@ def test_reader_budget_rejects_before_parent_rederivation_or_output_iteration(
                 budget=_budget(max_aggregate_rows=1),
             )
         )
+
+
+def test_sealed_series_reader_returns_one_contiguous_original_segment(
+    v2_chain, tmp_path: Path
+) -> None:
+    minute = _publish_minute(v2_chain, tmp_path)
+    publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+    member = publication.members[0]
+    key = issue_aggregate_series_key_v2(
+        publication,
+        symbol=member.symbol,
+        interval_index=member.interval_index,
+        target_timeframe=member.target_timeframe,
+        segment_id=0,
+    )
+
+    series = open_verified_aggregate_series_v2(
+        publication,
+        key,
+        _budget(),
+    )
+
+    assert isinstance(key, AggregateSeriesKeyV2)
+    assert isinstance(series, VerifiedAggregateSeriesV2)
+    assert series.key is key
+    assert series.rows
+    assert all(row.segment_id == 0 for row in series.rows)
+    assert all(
+        following.timestamp - prior.timestamp
+        == timedelta(minutes={"1h": 60, "4h": 240}[key.target_timeframe])
+        for prior, following in zip(series.rows, series.rows[1:], strict=False)
+    )
+    assert verify_verified_aggregate_series_v2(series, budget=_budget()) is series
+
+
+def test_series_key_and_series_are_nominal_registered_originals(v2_chain, tmp_path: Path) -> None:
+    minute = _publish_minute(v2_chain, tmp_path)
+    publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+    member = publication.members[0]
+    key = issue_aggregate_series_key_v2(
+        publication,
+        symbol=member.symbol,
+        interval_index=member.interval_index,
+        target_timeframe=member.target_timeframe,
+        segment_id=0,
+    )
+    series = open_verified_aggregate_series_v2(publication, key, _budget())
+
+    with pytest.raises(TypeError, match="factory"):
+        AggregateSeriesKeyV2(
+            symbol=key.symbol,
+            interval_index=key.interval_index,
+            target_timeframe=key.target_timeframe,
+            segment_id=key.segment_id,
+        )
+    with pytest.raises((TypeError, ValueError), match="registered|original|factory"):
+        open_verified_aggregate_series_v2(publication, copy.copy(key), _budget())
+    with pytest.raises((TypeError, ValueError), match="registered|original|factory"):
+        verify_verified_aggregate_series_v2(copy.copy(series), budget=_budget())
+    object.__setattr__(series.rows[0], "close", Decimal("999"))
+    with pytest.raises(ValueError, match="identity|original|serialization"):
+        verify_verified_aggregate_series_v2(series, budget=_budget())
+
+
+def test_series_budget_and_missing_or_mixed_segment_reject_before_open(
+    v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    minute = _publish_minute(v2_chain, tmp_path)
+    publication = _publish_aggregate(v2_chain, minute, tmp_path / "aggregate")
+    member = publication.members[0]
+    key = issue_aggregate_series_key_v2(
+        publication,
+        symbol=member.symbol,
+        interval_index=member.interval_index,
+        target_timeframe=member.target_timeframe,
+        segment_id=0,
+    )
+    monkeypatch.setattr(
+        "market_structure_lab.data.aggregate_publication_v2."
+        "verify_validation_aggregate_publication_v2",
+        lambda *_args, **_kwargs: pytest.fail("budget failure opened publication"),
+    )
+    with pytest.raises(ValueError, match="row budget"):
+        open_verified_aggregate_series_v2(
+            publication,
+            key,
+            _budget(max_aggregate_rows=1),
+        )
+
+    missing = issue_aggregate_series_key_v2(
+        publication,
+        symbol=member.symbol,
+        interval_index=member.interval_index,
+        target_timeframe=member.target_timeframe,
+        segment_id=member.segment_count,
+    )
+    with pytest.raises(ValueError, match="exactly one|segment"):
+        open_verified_aggregate_series_v2(publication, missing, _budget())

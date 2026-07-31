@@ -40,6 +40,7 @@ from market_structure_lab.research.validation_v2_models import (
 from market_structure_lab.research.validation_v2_splits import (
     AccessOperationKindV2,
     BoundaryRequestV2,
+    DevelopmentAccessAttemptLedgerV2,
     DevelopmentReadBoundaryV2,
     DevelopmentSplitPublicationV2,
     verify_development_read_boundary_v2,
@@ -61,6 +62,14 @@ _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _MAX_CANONICAL_ROW_BYTES = 4_096
 _MAX_MINUTE_PUBLICATION_BYTES = 64 * 1024 * 1024
 _MAX_MINUTE_PUBLICATION_ENTRIES = 100_000
+_MINUTE_PATH_FACTORY = object()
+_MINUTE_ROW_FACTORY = object()
+_MINUTE_PATH_BUDGET_CEILINGS = {
+    "max_total_rows": 50_000_000,
+    "max_total_bytes": 64 * 1024 * 1024 * 1024,
+    "max_partitions": _MAX_MINUTE_PUBLICATION_ENTRIES - 2,
+    "max_returned_rows": 50_000_000,
+}
 _TRUSTED_VERIFIER_EVIDENCE_SHA256: frozenset[str] = frozenset()
 _VERIFIED_AVAILABILITIES: dict[
     int,
@@ -93,6 +102,21 @@ _VERIFIED_MINUTE_SOURCE_CAPABILITIES: dict[
         weakref.ReferenceType[ScopedSourceAvailabilityV2],
         tuple[tuple[Path, bytes], ...],
         _FixtureMinuteReadImplementationV2,
+    ],
+] = {}
+
+_VERIFIED_MINUTE_PATHS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[VerifiedMinutePathV2],
+        weakref.ReferenceType[ValidationSourcePublicationV2],
+        SourceCoveragePublicationV2,
+        DevelopmentSplitPublicationV2,
+        DevelopmentReadBoundaryV2,
+        ScopedSourceAvailabilityV2,
+        BoundaryRequestV2,
+        int,
+        tuple[object, ...],
     ],
 ] = {}
 
@@ -366,6 +390,92 @@ class CanonicalMinuteRowV2:
             close=_parse_decimal(values["close"], "close"),
             volume=_parse_decimal(values["volume"], "volume"),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class MinutePathReadBudgetV2:
+    """Fixed bounds checked before reopening a minute publication."""
+
+    max_total_rows: int
+    max_total_bytes: int
+    max_partitions: int
+    max_returned_rows: int
+
+    def __post_init__(self) -> None:
+        for label in self.__dataclass_fields__:
+            value = getattr(self, label)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 1
+                or value > _MINUTE_PATH_BUDGET_CEILINGS[label]
+            ):
+                raise ValueError(f"{label} must be positive and within its fixed hard ceiling")
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedMinuteRowV2:
+    """Canonical minute values bound to the exact original JSONL line."""
+
+    timestamp: datetime
+    symbol: str
+    timeframe: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+    source_identity: str
+    origin_proof_sha256: str
+    line_sha256: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _MINUTE_ROW_FACTORY:
+            raise TypeError("VerifiedMinuteRowV2 requires its factory")
+        CanonicalMinuteRowV2(
+            timestamp=self.timestamp,
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            open=self.open,
+            high=self.high,
+            low=self.low,
+            close=self.close,
+            volume=self.volume,
+        )
+        if not self.source_identity:
+            raise ValueError("verified minute row source identity is required")
+        _require_sha256(self.origin_proof_sha256, "verified minute origin proof")
+        _require_sha256(self.line_sha256, "verified minute line sha256")
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class VerifiedMinutePathV2:
+    """Factory-sealed exact one-row-per-minute path."""
+
+    request: BoundaryRequestV2
+    rows: tuple[VerifiedMinuteRowV2, ...]
+    partition_paths: tuple[str, ...]
+    row_count: int
+    byte_count: int
+    ordered_row_sha256: str
+    path_identity: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _MINUTE_PATH_FACTORY:
+            raise TypeError("VerifiedMinutePathV2 requires its factory")
+        if not isinstance(self.request, BoundaryRequestV2):
+            raise TypeError("verified minute path request must be typed")
+        if self.row_count != len(self.rows) or self.row_count < 1:
+            raise ValueError("verified minute path row count differs")
+        if self.byte_count < 1:
+            raise ValueError("verified minute path byte count must be positive")
+        if not self.partition_paths or self.partition_paths != tuple(
+            sorted(set(self.partition_paths))
+        ):
+            raise ValueError("verified minute path partitions must be uniquely ordered")
+        _require_sha256(self.ordered_row_sha256, "ordered_row_sha256")
+        _require_sha256(self.path_identity, "path_identity")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1493,6 +1603,407 @@ def load_validation_source_publication_v2(
         boundary=boundary,
         availability=availability,
     )
+
+
+def read_verified_minute_path_v2(
+    publication: ValidationSourcePublicationV2,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    request: BoundaryRequestV2,
+    expected_row_count: int,
+    budget: MinutePathReadBudgetV2,
+    audit: DevelopmentAccessAttemptLedgerV2,
+) -> VerifiedMinutePathV2:
+    """Read an audited, bounded, gap-free path from original minute partitions."""
+
+    if not isinstance(publication, ValidationSourcePublicationV2):
+        raise TypeError("minute path publication must be verifier-issued")
+    if not isinstance(request, BoundaryRequestV2):
+        raise TypeError("minute path request must be BoundaryRequestV2")
+    if not isinstance(budget, MinutePathReadBudgetV2):
+        raise TypeError("minute path budget must be MinutePathReadBudgetV2")
+    if not isinstance(audit, DevelopmentAccessAttemptLedgerV2):
+        raise TypeError("minute path audit must be DevelopmentAccessAttemptLedgerV2")
+    audit.start(request)
+    audit.adjudicate(request)
+    partitions = _select_minute_path_partitions(publication, request)
+    _preflight_minute_path(
+        publication,
+        request=request,
+        partitions=partitions,
+        expected_row_count=expected_row_count,
+        budget=budget,
+    )
+    verify_validation_source_publication_v2(
+        publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+    )
+    rows, byte_count = _read_minute_path_rows(publication, request, partitions)
+    if len(rows) != expected_row_count:
+        raise ValueError("verified minute path row count differs from expected row count")
+    ordered = hash_json(
+        "phase5-validation-minute-path-row-order-v2",
+        [item.line_sha256 for item in rows],
+    )
+    identity = _minute_path_identity(
+        publication,
+        request,
+        partitions,
+        rows,
+        byte_count,
+        ordered,
+    )
+    result = VerifiedMinutePathV2(
+        request=request,
+        rows=rows,
+        partition_paths=tuple(item.path for item in partitions),
+        row_count=len(rows),
+        byte_count=byte_count,
+        ordered_row_sha256=ordered,
+        path_identity=identity,
+        _factory_token=_MINUTE_PATH_FACTORY,
+    )
+    audit.complete(request, row_count=result.row_count, byte_count=result.byte_count)
+    _register_verified_minute_path(
+        result,
+        publication=publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        expected_row_count=expected_row_count,
+    )
+    return result
+
+
+def verify_verified_minute_path_v2(
+    path: VerifiedMinutePathV2,
+    *,
+    publication: ValidationSourcePublicationV2,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    request: BoundaryRequestV2,
+    expected_row_count: int,
+    budget: MinutePathReadBudgetV2,
+) -> VerifiedMinutePathV2:
+    """Reopen and rederive a registered minute path without adding audit records."""
+
+    snapshot = _validate_registered_minute_path(
+        path,
+        publication=publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        request=request,
+        expected_row_count=expected_row_count,
+    )
+    partitions = _select_minute_path_partitions(publication, request)
+    _preflight_minute_path(
+        publication,
+        request=request,
+        partitions=partitions,
+        expected_row_count=expected_row_count,
+        budget=budget,
+    )
+    verify_validation_source_publication_v2(
+        publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+    )
+    rows, byte_count = _read_minute_path_rows(publication, request, partitions)
+    ordered = hash_json(
+        "phase5-validation-minute-path-row-order-v2",
+        [item.line_sha256 for item in rows],
+    )
+    identity = _minute_path_identity(
+        publication,
+        request,
+        partitions,
+        rows,
+        byte_count,
+        ordered,
+    )
+    current = (
+        path.request,
+        path.rows,
+        path.partition_paths,
+        path.row_count,
+        path.byte_count,
+        path.ordered_row_sha256,
+        path.path_identity,
+    )
+    expected = (
+        request,
+        rows,
+        tuple(item.path for item in partitions),
+        len(rows),
+        byte_count,
+        ordered,
+        identity,
+    )
+    if current != snapshot or current != expected or len(rows) != expected_row_count:
+        raise ValueError("verified minute path serialization or identity differs from original")
+    return path
+
+
+def _select_minute_path_partitions(
+    publication: ValidationSourcePublicationV2,
+    request: BoundaryRequestV2,
+) -> tuple[ValidationSourcePartitionV2, ...]:
+    partitions = tuple(
+        item
+        for item in publication.partitions
+        if (
+            item.symbol == request.symbol
+            and _parse_utc_text(item.max_timestamp, "partition maximum") >= request.start
+            and _parse_utc_text(item.min_timestamp, "partition minimum") < request.end
+        )
+    )
+    if not partitions:
+        raise ValueError("minute path request has no overlapping manifest partitions")
+    if (
+        tuple(item.path for item in partitions) != tuple(sorted(item.path for item in partitions))
+        or len({item.interval_index for item in partitions}) != 1
+        or any(
+            item.source_identity != publication.admitted_source_identity
+            or item.origin_proof_sha256 != publication.origin_proof_sha256
+            for item in partitions
+        )
+    ):
+        raise ValueError("minute path manifest partitions are mixed or unordered")
+    return partitions
+
+
+def _preflight_minute_path(
+    publication: ValidationSourcePublicationV2,
+    *,
+    request: BoundaryRequestV2,
+    partitions: tuple[ValidationSourcePartitionV2, ...],
+    expected_row_count: int,
+    budget: MinutePathReadBudgetV2,
+) -> None:
+    if publication.status is not ScopedSourceStatusV2.AVAILABLE:
+        raise ValueError("minute path requires an available publication")
+    if publication.row_count > budget.max_total_rows:
+        raise ValueError("minute publication exceeds total row budget")
+    if publication.byte_count > budget.max_total_bytes:
+        raise ValueError("minute publication exceeds total byte budget")
+    if len(publication.partitions) > budget.max_partitions:
+        raise ValueError("minute publication exceeds total partition budget")
+    duration = request.end - request.start
+    duration_minutes = int(duration.total_seconds() // 60)
+    if (
+        isinstance(expected_row_count, bool)
+        or not isinstance(expected_row_count, int)
+        or expected_row_count < 1
+        or expected_row_count != duration_minutes
+    ):
+        raise ValueError("expected row count must equal the request's UTC minute count")
+    if expected_row_count > budget.max_returned_rows:
+        raise ValueError("minute path exceeds returned row budget")
+    if sum(item.byte_count for item in partitions) > budget.max_total_bytes:
+        raise ValueError("minute path selected partitions exceed byte budget")
+    if request.timeframe != "1m":
+        raise PermissionError("minute path request timeframe must be 1m")
+    if publication.origin_sha256 is None or request.target_identity != publication.origin_sha256:
+        raise ValueError("minute path request target differs from the verified origin")
+
+
+def _read_minute_path_rows(
+    publication: ValidationSourcePublicationV2,
+    request: BoundaryRequestV2,
+    partitions: tuple[ValidationSourcePartitionV2, ...],
+) -> tuple[tuple[VerifiedMinuteRowV2, ...], int]:
+    rows: list[VerifiedMinuteRowV2] = []
+    byte_count = 0
+    expected_timestamp = request.start
+    for partition in partitions:
+        content = read_bounded_regular(
+            publication.publication_root / partition.path,
+            partition.byte_count,
+        )
+        if (
+            len(content) != partition.byte_count
+            or hashlib.sha256(content).hexdigest() != partition.sha256
+            or not content.endswith(b"\n")
+        ):
+            raise ValueError("minute path partition bytes changed")
+        lines = content.splitlines(keepends=True)
+        if len(lines) != partition.row_count:
+            raise ValueError("minute path partition row count changed")
+        for line in lines:
+            try:
+                decoded = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("verified minute row is not JSON") from error
+            envelope = _exact_mapping(
+                decoded,
+                {
+                    "timestamp",
+                    "symbol",
+                    "timeframe",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "source_identity",
+                    "origin_proof_sha256",
+                },
+                "verified minute row envelope",
+            )
+            canonical = CanonicalMinuteRowV2.from_dict(
+                {
+                    key: value
+                    for key, value in envelope.items()
+                    if key not in {"source_identity", "origin_proof_sha256"}
+                }
+            )
+            if not request.start <= canonical.timestamp < request.end:
+                continue
+            if (
+                canonical.timestamp != expected_timestamp
+                or canonical.symbol != request.symbol
+                or canonical.timeframe != "1m"
+                or envelope["source_identity"] != partition.source_identity
+                or envelope["source_identity"] != publication.admitted_source_identity
+                or envelope["origin_proof_sha256"] != partition.origin_proof_sha256
+                or envelope["origin_proof_sha256"] != publication.origin_proof_sha256
+                or _canonical_minute_row_bytes(
+                    canonical,
+                    source_identity=partition.source_identity,
+                    origin_proof_sha256=partition.origin_proof_sha256,
+                )
+                != line
+            ):
+                raise ValueError("minute path contains a gap, mixed scope, or changed origin")
+            rows.append(
+                VerifiedMinuteRowV2(
+                    timestamp=canonical.timestamp,
+                    symbol=canonical.symbol,
+                    timeframe=canonical.timeframe,
+                    open=canonical.open,
+                    high=canonical.high,
+                    low=canonical.low,
+                    close=canonical.close,
+                    volume=canonical.volume,
+                    source_identity=partition.source_identity,
+                    origin_proof_sha256=partition.origin_proof_sha256,
+                    line_sha256=hashlib.sha256(line).hexdigest(),
+                    _factory_token=_MINUTE_ROW_FACTORY,
+                )
+            )
+            byte_count += len(line)
+            expected_timestamp += timedelta(minutes=1)
+    if not rows or expected_timestamp != request.end:
+        raise ValueError("minute path does not contain exactly one row per UTC minute")
+    return tuple(rows), byte_count
+
+
+def _minute_path_identity(
+    publication: ValidationSourcePublicationV2,
+    request: BoundaryRequestV2,
+    partitions: tuple[ValidationSourcePartitionV2, ...],
+    rows: tuple[VerifiedMinuteRowV2, ...],
+    byte_count: int,
+    ordered_row_sha256: str,
+) -> str:
+    return hash_json(
+        "phase5-validation-verified-minute-path-v2",
+        {
+            "source_publication_identity": publication.source_publication_identity.value,
+            "request": {
+                "symbol": request.symbol,
+                "timeframe": request.timeframe,
+                "start": _utc_text(request.start),
+                "end": _utc_text(request.end),
+                "operation_kind": request.operation_kind.value,
+                "target_identity": request.target_identity,
+            },
+            "partitions": [item.to_dict() for item in partitions],
+            "row_count": len(rows),
+            "byte_count": byte_count,
+            "ordered_row_sha256": ordered_row_sha256,
+        },
+    )
+
+
+def _register_verified_minute_path(
+    path: VerifiedMinutePathV2,
+    *,
+    publication: ValidationSourcePublicationV2,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    expected_row_count: int,
+) -> None:
+    identifier = id(path)
+    snapshot = (
+        path.request,
+        path.rows,
+        path.partition_paths,
+        path.row_count,
+        path.byte_count,
+        path.ordered_row_sha256,
+        path.path_identity,
+    )
+
+    def cleanup(reference: weakref.ReferenceType[VerifiedMinutePathV2]) -> None:
+        current = _VERIFIED_MINUTE_PATHS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_MINUTE_PATHS.pop(identifier, None)
+
+    _VERIFIED_MINUTE_PATHS[identifier] = (
+        weakref.ref(path, cleanup),
+        weakref.ref(publication),
+        coverage,
+        split,
+        boundary,
+        availability,
+        path.request,
+        expected_row_count,
+        snapshot,
+    )
+
+
+def _validate_registered_minute_path(
+    path: VerifiedMinutePathV2,
+    *,
+    publication: ValidationSourcePublicationV2,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    request: BoundaryRequestV2,
+    expected_row_count: int,
+) -> tuple[object, ...]:
+    if not isinstance(path, VerifiedMinutePathV2):
+        raise TypeError("verified minute path must be factory-issued")
+    registered = _VERIFIED_MINUTE_PATHS.get(id(path))
+    if (
+        registered is None
+        or registered[0]() is not path
+        or registered[1]() is not publication
+        or registered[2] is not coverage
+        or registered[3] is not split
+        or registered[4] is not boundary
+        or registered[5] is not availability
+        or registered[6] != request
+        or registered[7] != expected_row_count
+    ):
+        raise ValueError("verified minute path is not the registered original")
+    return registered[8]
 
 
 def _derive_verified_minute_source_origin(
@@ -3101,20 +3612,25 @@ def _exact_mapping(payload: object, expected: set[str], label: str) -> dict[str,
 __all__ = [
     "CanonicalMinuteRowV2",
     "DumpTocMetadataV2",
+    "MinutePathReadBudgetV2",
     "ScopedSourceAvailabilityV2",
     "ScopedSourceCandidateV2",
     "ScopedSourceStatusV2",
     "ValidationSourcePartitionV2",
     "ValidationSourcePublicationV2",
+    "VerifiedMinutePathV2",
+    "VerifiedMinuteRowV2",
     "discover_scoped_source_v2",
     "load_scoped_source_availability_v2",
     "load_validation_source_publication_v2",
     "load_v2_boundary_publications",
     "publish_validation_source_v2",
+    "read_verified_minute_path_v2",
     "reject_pg_restore_row_source_v2",
     "verify_dump_toc_metadata_v2",
     "verify_scoped_source_availability_v2",
     "verify_validation_source_publication_v2",
+    "verify_verified_minute_path_v2",
     "verified_scoped_source_availability_bytes_v2",
     "verified_scoped_source_availability_binding_v2",
 ]

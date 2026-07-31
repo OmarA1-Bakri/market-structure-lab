@@ -68,6 +68,8 @@ _HARD_BUDGET_CEILINGS = {
     "max_output_files": 100_000,
 }
 _FACTORY = object()
+_SERIES_KEY_FACTORY = object()
+_SERIES_FACTORY = object()
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
@@ -86,6 +88,23 @@ class _AggregateRegistration:
 
 
 _VERIFIED_AGGREGATES: dict[int, _AggregateRegistration] = {}
+_VERIFIED_SERIES_KEYS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[AggregateSeriesKeyV2],
+        weakref.ReferenceType[AggregatePublicationV2],
+        tuple[str, int, str, int],
+    ],
+] = {}
+_VERIFIED_SERIES: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[VerifiedAggregateSeriesV2],
+        weakref.ReferenceType[AggregatePublicationV2],
+        weakref.ReferenceType[AggregateSeriesKeyV2],
+        tuple[object, ...],
+    ],
+] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +413,60 @@ class AggregateRowV2:
             ordered_source_rows_sha256=values["ordered_source_rows_sha256"],  # type: ignore[arg-type]
             row_sha256=values["row_sha256"],  # type: ignore[arg-type]
         )
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class AggregateSeriesKeyV2:
+    """Nominal selector for one aggregate member segment."""
+
+    symbol: str
+    interval_index: int
+    target_timeframe: str
+    segment_id: int
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _SERIES_KEY_FACTORY:
+            raise TypeError("AggregateSeriesKeyV2 requires its factory")
+        if not self.symbol or self.symbol != self.symbol.upper():
+            raise ValueError("aggregate series symbol must be non-empty uppercase")
+        _nonnegative(self.interval_index, "aggregate series interval_index")
+        if self.target_timeframe not in _TARGET_TIMEFRAMES:
+            raise ValueError("aggregate series target timeframe is invalid")
+        _nonnegative(self.segment_id, "aggregate series segment_id")
+
+    def _payload(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "interval_index": self.interval_index,
+            "target_timeframe": self.target_timeframe,
+            "segment_id": self.segment_id,
+        }
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class VerifiedAggregateSeriesV2:
+    """Factory-sealed rows from exactly one original aggregate segment."""
+
+    key: AggregateSeriesKeyV2
+    rows: tuple[AggregateRowV2, ...]
+    row_count: int
+    byte_count: int
+    ordered_row_sha256: str
+    series_identity: str
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _SERIES_FACTORY:
+            raise TypeError("VerifiedAggregateSeriesV2 requires its factory")
+        if not isinstance(self.key, AggregateSeriesKeyV2):
+            raise TypeError("verified aggregate series key must be nominal")
+        _positive(self.row_count, "verified aggregate series row_count")
+        _positive(self.byte_count, "verified aggregate series byte_count")
+        if self.row_count != len(self.rows):
+            raise ValueError("verified aggregate series row count differs")
+        _require_sha256(self.ordered_row_sha256, "ordered_row_sha256")
+        _require_sha256(self.series_identity, "series_identity")
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -802,6 +875,311 @@ def iter_verified_aggregate_rows_v2(
                 yield row
             if count != partition.row_count:
                 raise ValueError("aggregate partition row count changed")
+
+
+def issue_aggregate_series_key_v2(
+    publication: AggregatePublicationV2,
+    *,
+    symbol: str,
+    interval_index: int,
+    target_timeframe: str,
+    segment_id: int,
+) -> AggregateSeriesKeyV2:
+    """Issue a publication-bound nominal series selector without opening row bytes."""
+
+    _validate_registered_publication(publication, reopen_original=False)
+    key = AggregateSeriesKeyV2(
+        symbol=symbol,
+        interval_index=interval_index,
+        target_timeframe=target_timeframe,
+        segment_id=segment_id,
+        _factory_token=_SERIES_KEY_FACTORY,
+    )
+    identifier = id(key)
+
+    def cleanup(reference: weakref.ReferenceType[AggregateSeriesKeyV2]) -> None:
+        current = _VERIFIED_SERIES_KEYS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_SERIES_KEYS.pop(identifier, None)
+
+    _VERIFIED_SERIES_KEYS[identifier] = (
+        weakref.ref(key, cleanup),
+        weakref.ref(publication),
+        (key.symbol, key.interval_index, key.target_timeframe, key.segment_id),
+    )
+    return key
+
+
+def open_verified_aggregate_series_v2(
+    publication: AggregatePublicationV2,
+    key: AggregateSeriesKeyV2,
+    budget: AggregatePublicationBudgetV2,
+) -> VerifiedAggregateSeriesV2:
+    """Open one preflighted original aggregate segment as a sealed series."""
+
+    registered = _validate_registered_publication(publication, reopen_original=False)
+    _verify_registered_series_key(key, publication)
+    member, partitions = _locate_series(publication, key)
+    _preflight_series(member, partitions, budget)
+    verify_validation_aggregate_publication_v2(
+        publication,
+        minute_publication=registered.minute,
+        coverage=registered.coverage,
+        split=registered.split,
+        boundary=registered.boundary,
+        availability=registered.availability,
+    )
+    rows = _read_series_rows(publication, key, member, partitions)
+    ordered = hash_json(
+        "phase5-validation-aggregate-series-row-order-v2",
+        [row.row_sha256 for row in rows],
+    )
+    identity = _aggregate_series_identity(publication, key, partitions, rows, ordered)
+    series = VerifiedAggregateSeriesV2(
+        key=key,
+        rows=rows,
+        row_count=len(rows),
+        byte_count=sum(item.byte_count for item in partitions),
+        ordered_row_sha256=ordered,
+        series_identity=identity,
+        _factory_token=_SERIES_FACTORY,
+    )
+    _register_verified_series(series, publication)
+    return series
+
+
+def verify_verified_aggregate_series_v2(
+    series: VerifiedAggregateSeriesV2,
+    *,
+    budget: AggregatePublicationBudgetV2,
+) -> VerifiedAggregateSeriesV2:
+    """Revalidate a sealed series against its original publication and row bytes."""
+
+    publication, key, snapshot = _validate_registered_series(series)
+    registered = _validate_registered_publication(publication, reopen_original=False)
+    member, partitions = _locate_series(publication, key)
+    _preflight_series(member, partitions, budget)
+    verify_validation_aggregate_publication_v2(
+        publication,
+        minute_publication=registered.minute,
+        coverage=registered.coverage,
+        split=registered.split,
+        boundary=registered.boundary,
+        availability=registered.availability,
+    )
+    rows = _read_series_rows(publication, key, member, partitions)
+    ordered = hash_json(
+        "phase5-validation-aggregate-series-row-order-v2",
+        [row.row_sha256 for row in rows],
+    )
+    identity = _aggregate_series_identity(publication, key, partitions, rows, ordered)
+    current = (
+        series.key,
+        series.rows,
+        series.row_count,
+        series.byte_count,
+        series.ordered_row_sha256,
+        series.series_identity,
+    )
+    expected = (
+        key,
+        rows,
+        len(rows),
+        sum(item.byte_count for item in partitions),
+        ordered,
+        identity,
+    )
+    if current != snapshot or current != expected:
+        raise ValueError(
+            "verified aggregate series serialization or identity differs from original"
+        )
+    return series
+
+
+def _verify_registered_series_key(
+    key: AggregateSeriesKeyV2,
+    publication: AggregatePublicationV2,
+) -> None:
+    if not isinstance(key, AggregateSeriesKeyV2):
+        raise TypeError("aggregate series key must be factory-issued")
+    registered = _VERIFIED_SERIES_KEYS.get(id(key))
+    current = (key.symbol, key.interval_index, key.target_timeframe, key.segment_id)
+    if (
+        registered is None
+        or registered[0]() is not key
+        or registered[1]() is not publication
+        or registered[2] != current
+    ):
+        raise ValueError("aggregate series key is not the registered original")
+
+
+def _locate_series(
+    publication: AggregatePublicationV2,
+    key: AggregateSeriesKeyV2,
+) -> tuple[AggregateMemberV2, tuple[AggregatePartitionV2, ...]]:
+    matches = tuple(
+        member
+        for member in publication.members
+        if (
+            member.symbol,
+            member.interval_index,
+            member.target_timeframe,
+        )
+        == (key.symbol, key.interval_index, key.target_timeframe)
+    )
+    if len(matches) != 1:
+        raise ValueError("aggregate series key must locate exactly one member")
+    partitions = tuple(item for item in matches[0].partitions if item.segment_id == key.segment_id)
+    if not partitions or {item.segment_id for item in partitions} != {key.segment_id}:
+        raise ValueError("aggregate series key must locate exactly one non-empty segment")
+    return matches[0], partitions
+
+
+def _preflight_series(
+    member: AggregateMemberV2,
+    partitions: tuple[AggregatePartitionV2, ...],
+    budget: AggregatePublicationBudgetV2,
+) -> None:
+    if not isinstance(budget, AggregatePublicationBudgetV2):
+        raise TypeError("aggregate series budget must be AggregatePublicationBudgetV2")
+    row_count = sum(item.row_count for item in partitions)
+    byte_count = sum(item.byte_count for item in partitions)
+    if row_count > budget.max_aggregate_rows:
+        raise ValueError("aggregate series exceeds row budget")
+    if byte_count > budget.max_output_bytes:
+        raise ValueError("aggregate series exceeds byte budget")
+    if len(partitions) > budget.max_output_files:
+        raise ValueError("aggregate series exceeds partition budget")
+    if any(item.row_count > budget.max_rows_per_partition for item in partitions):
+        raise ValueError("aggregate series partition exceeds row buffer budget")
+    if any(
+        (
+            item.symbol,
+            item.interval_index,
+            item.target_timeframe,
+            item.segment_id,
+        )
+        != (
+            member.symbol,
+            member.interval_index,
+            member.target_timeframe,
+            partitions[0].segment_id,
+        )
+        for item in partitions
+    ):
+        raise ValueError("aggregate series partitions are mixed")
+
+
+def _read_series_rows(
+    publication: AggregatePublicationV2,
+    key: AggregateSeriesKeyV2,
+    member: AggregateMemberV2,
+    partitions: tuple[AggregatePartitionV2, ...],
+) -> tuple[AggregateRowV2, ...]:
+    rows: list[AggregateRowV2] = []
+    prior: datetime | None = None
+    width = timedelta(minutes=_TARGET_MINUTES[key.target_timeframe])
+    for partition in partitions:
+        path = publication.publication_root / partition.path
+        if sha256_regular(path) != partition.sha256:
+            raise ValueError("aggregate series partition checksum changed")
+        count = 0
+        for line in iter_bounded_regular_lines(
+            path,
+            maximum_lines=partition.row_count,
+            maximum_line_bytes=_MAX_ROW_BYTES,
+        ):
+            count += 1
+            row = AggregateRowV2.from_dict(_decode_json(line, "aggregate row"))
+            _verify_partition_rows((row,), partition, member, None)
+            if (
+                row.symbol,
+                row.interval_index,
+                row.target_timeframe,
+                row.segment_id,
+            ) != (
+                key.symbol,
+                key.interval_index,
+                key.target_timeframe,
+                key.segment_id,
+            ):
+                raise ValueError("aggregate series contains mixed rows")
+            if prior is not None and row.timestamp != prior + width:
+                raise ValueError("aggregate series contains a timestamp gap")
+            prior = row.timestamp
+            rows.append(row)
+        if count != partition.row_count:
+            raise ValueError("aggregate series partition row count changed")
+    if not rows:
+        raise ValueError("aggregate series is empty")
+    return tuple(rows)
+
+
+def _aggregate_series_identity(
+    publication: AggregatePublicationV2,
+    key: AggregateSeriesKeyV2,
+    partitions: tuple[AggregatePartitionV2, ...],
+    rows: tuple[AggregateRowV2, ...],
+    ordered_row_sha256: str,
+) -> str:
+    return hash_json(
+        "phase5-validation-verified-aggregate-series-v2",
+        {
+            "aggregate_identity": publication.aggregate_identity.value,
+            "key": key._payload(),
+            "partitions": [item.to_dict() for item in partitions],
+            "row_count": len(rows),
+            "byte_count": sum(item.byte_count for item in partitions),
+            "ordered_row_sha256": ordered_row_sha256,
+        },
+    )
+
+
+def _register_verified_series(
+    series: VerifiedAggregateSeriesV2,
+    publication: AggregatePublicationV2,
+) -> None:
+    identifier = id(series)
+    snapshot = (
+        series.key,
+        series.rows,
+        series.row_count,
+        series.byte_count,
+        series.ordered_row_sha256,
+        series.series_identity,
+    )
+
+    def cleanup(reference: weakref.ReferenceType[VerifiedAggregateSeriesV2]) -> None:
+        current = _VERIFIED_SERIES.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_SERIES.pop(identifier, None)
+
+    _VERIFIED_SERIES[identifier] = (
+        weakref.ref(series, cleanup),
+        weakref.ref(publication),
+        weakref.ref(series.key),
+        snapshot,
+    )
+
+
+def _validate_registered_series(
+    series: VerifiedAggregateSeriesV2,
+) -> tuple[
+    AggregatePublicationV2,
+    AggregateSeriesKeyV2,
+    tuple[object, ...],
+]:
+    if not isinstance(series, VerifiedAggregateSeriesV2):
+        raise TypeError("verified aggregate series must be factory-issued")
+    registered = _VERIFIED_SERIES.get(id(series))
+    if registered is None or registered[0]() is not series:
+        raise ValueError("verified aggregate series is not the registered original")
+    publication = registered[1]()
+    key = registered[2]()
+    if publication is None or key is None or series.key is not key:
+        raise ValueError("verified aggregate series parents are no longer original")
+    _verify_registered_series_key(key, publication)
+    return publication, key, registered[3]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1965,8 +2343,13 @@ __all__ = [
     "AggregatePublicationBudgetV2",
     "AggregatePublicationV2",
     "AggregateRowV2",
+    "AggregateSeriesKeyV2",
+    "VerifiedAggregateSeriesV2",
+    "issue_aggregate_series_key_v2",
     "iter_verified_aggregate_rows_v2",
     "load_validation_aggregate_publication_v2",
+    "open_verified_aggregate_series_v2",
     "publish_validation_aggregates_v2",
+    "verify_verified_aggregate_series_v2",
     "verify_validation_aggregate_publication_v2",
 ]
