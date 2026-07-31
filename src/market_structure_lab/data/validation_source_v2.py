@@ -9,6 +9,7 @@ development boundary.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -1896,12 +1897,9 @@ def _read_minute_path_rows(
     byte_count = 0
     expected_timestamp = request.start
     for partition in partitions:
-        lines = iter_verified_regular_lines(
+        lines = _iter_verified_minute_partition_lines(
             publication.publication_root / partition.path,
-            expected_sha256=partition.sha256,
-            expected_byte_count=partition.byte_count,
-            expected_line_count=partition.row_count,
-            maximum_line_bytes=_MAX_CANONICAL_ROW_BYTES - 1,
+            partition,
         )
         for raw_line in lines:
             line = raw_line + b"\n"
@@ -1971,6 +1969,22 @@ def _read_minute_path_rows(
     if not rows or expected_timestamp != request.end:
         raise ValueError("minute path does not contain exactly one row per UTC minute")
     return tuple(rows), byte_count
+
+
+def _iter_verified_minute_partition_lines(
+    path: Path,
+    partition: ValidationSourcePartitionV2,
+) -> Iterator[bytes]:
+    try:
+        yield from iter_verified_regular_lines(
+            path,
+            expected_sha256=partition.sha256,
+            expected_byte_count=partition.byte_count,
+            expected_line_count=partition.row_count,
+            maximum_line_bytes=_MAX_CANONICAL_ROW_BYTES - 1,
+        )
+    except RuntimeError as error:
+        raise ValueError("minute partition bytes/checksum changed") from error
 
 
 def _minute_path_identity(
@@ -2896,12 +2910,9 @@ def _verify_minute_partition_tree(
         if partition.path != expected_path:
             raise ValueError("validation source partition path order is invalid")
         group_part_index[group] = expected_part + 1
-        lines = iter_verified_regular_lines(
+        lines = _iter_verified_minute_partition_lines(
             publication.publication_root / partition.path,
-            expected_sha256=partition.sha256,
-            expected_byte_count=partition.byte_count,
-            expected_line_count=partition.row_count,
-            maximum_line_bytes=_MAX_CANONICAL_ROW_BYTES - 1,
+            partition,
         )
         row_count = 0
         first_timestamp: datetime | None = None

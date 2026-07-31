@@ -163,6 +163,43 @@ def test_minute_path_streams_verified_multi_partition_payload_larger_than_chunk(
     assert path.verify_original() is path
 
 
+def test_minute_path_maps_tampered_partition_to_public_value_error_and_stops_audit(
+    v2_chain,
+    tmp_path: Path,
+) -> None:
+    import test_aggregate_publication_v2 as fixtures
+
+    coverage, split, boundary, availability = v2_chain
+    publication = fixtures._publish_minute(v2_chain, tmp_path)
+    request = _request(publication, boundary)
+    partition = next(
+        item
+        for item in publication.partitions
+        if item.symbol == request.symbol
+        and item.min_timestamp <= request.start.isoformat().replace("+00:00", "Z")
+        <= item.max_timestamp
+    )
+    partition_path = publication.publication_root / partition.path
+    content = partition_path.read_bytes()
+    partition_path.write_bytes(b"[" + content[1:])
+    audit = _audit(boundary)
+
+    with pytest.raises(ValueError, match="minute partition bytes/checksum changed"):
+        read_verified_minute_path_v2(
+            publication,
+            coverage,
+            split,
+            boundary,
+            availability,
+            request,
+            60,
+            _budget(),
+            audit,
+        )
+
+    assert tuple(record.phase for record in audit.records) == ("start", "adjudication")
+
+
 def test_minute_path_reads_exact_original_lines_and_completes_audit(
     v2_chain, tmp_path: Path
 ) -> None:
