@@ -855,9 +855,30 @@ def load_binance_archive_acquisition_v2(
     boundary: DevelopmentReadBoundaryV2,
     manifest: BinanceArchiveRequestManifestV2,
     manifest_path: Path,
+    expected_publication_sha256: str | None = None,
+    expected_audit_publication_sha256: str | None = None,
+    maximum_object_count: int | None = None,
+    maximum_total_bytes: int | None = None,
+    maximum_row_count: int | None = None,
 ) -> BinanceArchiveAcquisitionResultV2:
     """Reopen and revalidate original acquisition, audit, and cache bytes."""
 
+    if expected_publication_sha256 is not None:
+        _require_sha256(expected_publication_sha256, "expected_publication_sha256")
+    if expected_audit_publication_sha256 is not None:
+        _require_sha256(
+            expected_audit_publication_sha256,
+            "expected_audit_publication_sha256",
+        )
+    for value, label in (
+        (maximum_object_count, "maximum_object_count"),
+        (maximum_total_bytes, "maximum_total_bytes"),
+        (maximum_row_count, "maximum_row_count"),
+    ):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise ValueError(f"{label} must be a non-negative integer")
     _verify_manifest_original(manifest, boundary=boundary, publication_path=manifest_path)
     publication_path = Path(publication_root) / "publication.json"
     content = read_bounded_regular(publication_path, _MAX_PUBLICATION_BYTES)
@@ -892,9 +913,31 @@ def load_binance_archive_acquisition_v2(
     identity_payload = {key: value for key, value in public.items() if key != "publication_sha256"}
     if public["publication_sha256"] != hash_json(_ACQUISITION_DOMAIN, identity_payload):
         raise ValueError("archive acquisition publication digest is invalid")
+    if (
+        expected_publication_sha256 is not None
+        and public["publication_sha256"] != expected_publication_sha256
+    ):
+        raise ValueError("archive acquisition publication differs from expected identity")
+    if (
+        expected_audit_publication_sha256 is not None
+        and public["audit_publication_sha256"] != expected_audit_publication_sha256
+    ):
+        raise ValueError("archive acquisition audit differs from expected identity")
+    if public["final_scope_attempts"] != 0 or public["final_rows"] != 0:
+        raise ValueError("archive acquisition cannot contain final access")
+    _preflight_acquisition_workload(
+        public,
+        manifest=manifest,
+        maximum_object_count=maximum_object_count,
+        maximum_total_bytes=maximum_total_bytes,
+        maximum_row_count=maximum_row_count,
+    )
     audit_path = Path(public["audit_publication_path"])
     audit = _inspect_archive_audit_publication(
-        audit_path, expected_boundary_sha256=boundary.boundary_sha256
+        audit_path,
+        expected_boundary_sha256=boundary.boundary_sha256,
+        maximum_request_count=manifest.budgets.max_requests,
+        maximum_record_count=min(100_000, manifest.budgets.max_requests * 2),
     )
     raw_objects, object_bindings = _validate_acquisition_inventory(
         public,
@@ -1211,7 +1254,17 @@ def _inspect_archive_audit_publication(
     publication_path: Path,
     *,
     expected_boundary_sha256: str,
+    maximum_request_count: int | None = None,
+    maximum_record_count: int = 100_000,
 ) -> _ArchiveAuditVerification:
+    for value, label in (
+        (maximum_request_count, "maximum_request_count"),
+        (maximum_record_count, "maximum_record_count"),
+    ):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise ValueError(f"{label} must be a non-negative integer")
     content = read_bounded_regular(publication_path, _MAX_PUBLICATION_BYTES)
     try:
         public = json.loads(content)
@@ -1256,7 +1309,14 @@ def _inspect_archive_audit_publication(
         "phase5-binance-archive-access-audit-v2", payload
     ):
         raise ValueError("archive audit publication digest is invalid")
-    records = bounded_regular_files(publication_path.parent / "records", maximum=100_000)
+    if maximum_request_count is not None and public["request_count"] > maximum_request_count:
+        raise ValueError("archive audit request_count exceeds frozen manifest budget")
+    if public["record_count"] > maximum_record_count:
+        raise ValueError("archive audit record_count exceeds frozen manifest budget")
+    records = bounded_regular_files(
+        publication_path.parent / "records",
+        maximum=maximum_record_count,
+    )
     if public["record_count"] != len(records):
         raise ValueError("archive audit record count differs from chain")
     prior: str | None = None
@@ -1365,6 +1425,82 @@ def _inspect_archive_audit_publication(
         request_count=start_count,
         outcomes=tuple(outcomes),
     )
+
+
+def _preflight_acquisition_workload(
+    public: dict[str, object],
+    *,
+    manifest: BinanceArchiveRequestManifestV2,
+    maximum_object_count: int | None,
+    maximum_total_bytes: int | None,
+    maximum_row_count: int | None,
+) -> None:
+    """Admit declared archive work before audit enumeration or cache hashing."""
+
+    request_count = _nonnegative_int(public["request_count"], "request_count")
+    compressed_bytes = _nonnegative_int(public["compressed_bytes"], "compressed_bytes")
+    decompressed_bytes = _nonnegative_int(public["decompressed_bytes"], "decompressed_bytes")
+    row_count = _nonnegative_int(public["row_count"], "row_count")
+    raw_objects = public["objects"]
+    if not isinstance(raw_objects, list):
+        raise ValueError("archive acquisition objects must be a list")
+    budgets = manifest.budgets
+    if request_count > budgets.max_requests:
+        raise ValueError("archive acquisition request_count exceeds frozen manifest budget")
+    if len(raw_objects) > budgets.max_files:
+        raise ValueError("archive acquisition object count exceeds frozen manifest budget")
+    if compressed_bytes > budgets.max_total_compressed_bytes:
+        raise ValueError("archive acquisition compressed bytes exceed frozen manifest budget")
+    if decompressed_bytes > budgets.max_total_decompressed_bytes:
+        raise ValueError("archive acquisition decompressed bytes exceed frozen manifest budget")
+    if compressed_bytes + decompressed_bytes > budgets.max_disk_bytes:
+        raise ValueError("archive acquisition total bytes exceed frozen manifest disk budget")
+    if row_count > budgets.max_rows:
+        raise ValueError("archive acquisition rows exceed frozen manifest budget")
+    if maximum_object_count is not None and len(raw_objects) > maximum_object_count:
+        raise ValueError("archive acquisition object count exceeds admitted maximum")
+    if (
+        maximum_total_bytes is not None
+        and compressed_bytes + decompressed_bytes > maximum_total_bytes
+    ):
+        raise ValueError("archive acquisition total bytes exceed admitted maximum")
+    if maximum_row_count is not None and row_count > maximum_row_count:
+        raise ValueError("archive acquisition row_count exceeds admitted maximum")
+    expected_object_fields = {
+        "request_sha256",
+        "official_sha256",
+        "local_sha256",
+        "cache_object",
+        "compressed_bytes",
+        "decompressed_bytes",
+        "row_count",
+    }
+    aggregate_compressed = 0
+    aggregate_decompressed = 0
+    aggregate_rows = 0
+    for item in raw_objects:
+        if not isinstance(item, dict) or set(item) != expected_object_fields:
+            raise ValueError("archive acquisition object schema is invalid")
+        object_compressed = _nonnegative_int(item["compressed_bytes"], "object compressed_bytes")
+        object_decompressed = _nonnegative_int(
+            item["decompressed_bytes"], "object decompressed_bytes"
+        )
+        object_rows = _nonnegative_int(item["row_count"], "object row_count")
+        if object_compressed > budgets.max_compressed_object_bytes:
+            raise ValueError("archive object compressed bytes exceed frozen manifest budget")
+        if object_decompressed > budgets.max_decompressed_object_bytes:
+            raise ValueError("archive object decompressed bytes exceed frozen manifest budget")
+        if object_rows > budgets.max_rows:
+            raise ValueError("archive object rows exceed frozen manifest budget")
+        aggregate_compressed += object_compressed
+        aggregate_decompressed += object_decompressed
+        aggregate_rows += object_rows
+    if (
+        aggregate_compressed > compressed_bytes
+        or aggregate_decompressed != decompressed_bytes
+        or aggregate_rows != row_count
+    ):
+        raise ValueError("acquisition aggregate object counts are inconsistent")
 
 
 def _validate_acquisition_inventory(

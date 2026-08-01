@@ -32,7 +32,7 @@ from market_structure_lab.research.validation_v2_models import (
 pytest_plugins = ("test_aggregate_publication_v2",)
 
 
-def _public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import test_aggregate_publication_v2 as aggregate_tests
     import test_validation_precision_authority_v2 as precision_tests
     from test_validation_v2_real_vertical_slice import (
@@ -161,7 +161,7 @@ def test_public_runner_derives_nonempty_outcomes_from_verified_publications(
 ) -> None:
     from market_structure_lab.research import validation_v2 as module
 
-    config, sources, budget, demand = _public_programme_inputs(
+    config, sources, budget, demand = public_programme_inputs(
         v2_chain,
         tmp_path,
         monkeypatch,
@@ -189,7 +189,7 @@ def test_public_runner_rejects_over_budget_before_source_revalidation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config, sources, budget, demand = _public_programme_inputs(
+    config, sources, budget, demand = public_programme_inputs(
         v2_chain,
         tmp_path,
         monkeypatch,
@@ -223,7 +223,7 @@ def test_public_runner_rejects_missing_or_ambiguous_bootstrap_holm_amendment_bef
             PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
         ),
     )
-    config, sources, budget, demand = _public_programme_inputs(
+    config, sources, budget, demand = public_programme_inputs(
         v2_chain,
         tmp_path,
         monkeypatch,

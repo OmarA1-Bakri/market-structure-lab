@@ -61,6 +61,79 @@ _FACTORY = object()
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
+def preflight_validation_cost_authority_v2(
+    *,
+    publication_root: Path,
+    expected_cost_identity: CostAuthorityIdentityV2,
+) -> tuple[str, str, str]:
+    """Bind cost and archive-parent identities before any archive cache is opened."""
+
+    if not isinstance(expected_cost_identity, CostAuthorityIdentityV2):
+        raise TypeError("expected cost identity must be typed")
+    content = read_bounded_regular(
+        Path(publication_root) / "publication.json",
+        _MAX_PUBLICATION_BYTES,
+    )
+    try:
+        payload = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("cost authority publication is invalid JSON") from error
+    if not isinstance(payload, dict) or publication_json_bytes(payload) != content:
+        raise ValueError("cost authority publication is not canonical")
+    expected_fields = {
+        "schema_version",
+        "coverage_identity",
+        "split_identity",
+        "boundary_sha256",
+        "source_publication_identity",
+        "aggregate_identity",
+        "source_availability_sha256",
+        "archive_manifest_sha256",
+        "archive_publication_sha256",
+        "archive_audit_publication_sha256",
+        "allowed_origin",
+        "instrument_kind",
+        "dimensions",
+        "evaluation_status",
+        "conclusion",
+        "incomplete_promotion_grade_dimensions",
+        "not_evaluated_reasons",
+        "final_scope_attempts",
+        "final_rows",
+        "final_access_records",
+        "cost_identity",
+    }
+    if (
+        set(payload) != expected_fields
+        or payload["schema_version"] != VerifiedCostAuthorityV2._schema
+    ):
+        raise ValueError("cost authority publication has unexpected or missing fields")
+    identity_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"schema_version", "cost_identity"}
+    }
+    if (
+        payload["cost_identity"] != expected_cost_identity.value
+        or CostAuthorityIdentityV2.from_payload(identity_payload) != expected_cost_identity
+    ):
+        raise ValueError("cost authority differs from expected frozen identity")
+    if any(
+        payload[field_name] != 0
+        for field_name in ("final_scope_attempts", "final_rows", "final_access_records")
+    ):
+        raise ValueError("cost authority cannot contain final access")
+    manifest_sha256 = _require_sha256(payload["archive_manifest_sha256"], "archive_manifest_sha256")
+    publication_sha256 = _require_sha256(
+        payload["archive_publication_sha256"], "archive_publication_sha256"
+    )
+    audit_publication_sha256 = _require_sha256(
+        payload["archive_audit_publication_sha256"],
+        "archive_audit_publication_sha256",
+    )
+    return manifest_sha256, publication_sha256, audit_publication_sha256
+
+
 class CostDimensionV2(str, Enum):
     FEE = "fee"
     SPREAD = "spread"
@@ -1029,6 +1102,7 @@ __all__ = [
     "REQUIRED_COST_DIMENSIONS_V2",
     "VerifiedCostAuthorityV2",
     "load_validation_cost_authority_v2",
+    "preflight_validation_cost_authority_v2",
     "publish_validation_cost_authority_v2",
     "verified_cost_authority_bytes_v2",
     "verify_validation_cost_authority_metadata_v2",

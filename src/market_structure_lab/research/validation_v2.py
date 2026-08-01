@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from math import isfinite
+from pathlib import Path
 from types import MappingProxyType
 import re
 from typing import Any, cast
@@ -25,13 +26,19 @@ from market_structure_lab.data.aggregate_publication_v2 import (
     AggregatePublicationV2,
     VerifiedAggregateSeriesV2,
     issue_aggregate_series_key_v2,
+    load_validation_aggregate_publication_v2,
     open_verified_aggregate_series_v2,
     verify_original_aggregate_series_v2,
     verify_validation_aggregate_publication_metadata_v2,
     verify_validation_aggregate_publication_v2,
 )
+from market_structure_lab.data.binance_archive_v2 import (
+    load_binance_archive_acquisition_v2,
+    load_binance_archive_request_manifest_v2,
+)
 from market_structure_lab.data.validation_precision_authority_v2 import (
     ValidationPrecisionAuthorityV2,
+    load_validation_precision_authority_v2,
     verify_validation_precision_authority_metadata_v2,
     verify_validation_precision_authority_v2,
 )
@@ -40,6 +47,9 @@ from market_structure_lab.data.validation_source_v2 import (
     ScopedSourceAvailabilityV2,
     ValidationSourcePublicationV2,
     VerifiedMinutePathV2,
+    load_scoped_source_availability_v2,
+    load_validation_source_publication_v2,
+    load_v2_boundary_publications,
     read_verified_minute_path_v2,
     verify_original_minute_path_v2,
     verified_scoped_source_availability_bytes_v2,
@@ -74,6 +84,8 @@ from market_structure_lab.research.outcomes import (
 )
 from market_structure_lab.research.validation_v2_costs import (
     VerifiedCostAuthorityV2,
+    load_validation_cost_authority_v2,
+    preflight_validation_cost_authority_v2,
     verified_cost_authority_bytes_v2,
     verify_validation_cost_authority_metadata_v2,
 )
@@ -176,6 +188,245 @@ class ValidationV2SourceBundle:
         _revalidate_source_bundle_v2(self)
 
 
+@dataclass(frozen=True, slots=True)
+class ValidationV2SourceBundlePaths:
+    """Explicit immutable publication locations; no discovery or latest lookup."""
+
+    coverage_path: Path
+    split_path: Path
+    boundary_path: Path
+    availability_root: Path
+    minute_publication_root: Path
+    minute_audit_root: Path
+    aggregate_publication_root: Path
+    precision_authority_root: Path
+    archive_manifest_path: Path
+    archive_publication_root: Path
+    archive_cache_root: Path
+    cost_authority_root: Path
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            value = getattr(self, field_name)
+            if not isinstance(value, Path) or not value.is_absolute():
+                raise ValueError(f"{field_name} must be an absolute Path")
+
+
+def load_validation_v2_source_bundle(
+    *,
+    config: ValidationProgrammeConfigV2,
+    paths: ValidationV2SourceBundlePaths,
+    budget: ValidationWorkBudget,
+    admitted_demand: ValidationWorkDemand,
+) -> ValidationV2SourceBundle:
+    """Reconstruct one config-bound development bundle under admitted work limits."""
+
+    if type(config) is not ValidationProgrammeConfigV2:
+        raise TypeError("config must be the exact ValidationProgrammeConfigV2 type")
+    if type(paths) is not ValidationV2SourceBundlePaths:
+        raise TypeError("paths must be the exact ValidationV2SourceBundlePaths type")
+    if type(budget) is not ValidationWorkBudget:
+        raise TypeError("budget must be the exact ValidationWorkBudget type")
+    if type(admitted_demand) is not ValidationWorkDemand:
+        raise TypeError("admitted_demand must be the exact ValidationWorkDemand type")
+    if ValidationProgrammeConfigV2.from_config_dict(config.to_config_dict()) != config:
+        raise ValueError("programme config differs from its validated value")
+    if ValidationWorkBudget(**budget.to_dict()) != budget:
+        raise ValueError("work budget differs from its validated value")
+    demand_payload = {
+        field_name: getattr(admitted_demand, field_name)
+        for field_name in admitted_demand.__dataclass_fields__
+    }
+    if ValidationWorkDemand(**demand_payload) != admitted_demand:
+        raise ValueError("admitted demand differs from its validated value")
+    ValidationWorkBudget.preflight(budget, admitted_demand)
+    if config.work_budget_sha256 != budget.sha256:
+        raise ValueError("programme work budget identity differs")
+    if (
+        budget.bootstrap_draws,
+        budget.max_bootstrap_draws,
+        budget.max_bootstrap_cells,
+    ) != (4_800, 4_800, 307_200):
+        raise ValueError("source loading requires the amended 4,800-draw bootstrap policy")
+    amendment_digests = tuple(
+        digest
+        for policy_id, digest in config.policy_identities
+        if policy_id == PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID
+    )
+    if amendment_digests != (PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,):
+        raise ValueError(
+            f"programme must bind exactly one {PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID} policy identity"
+        )
+    expected_roster = ValidationRosterIdentityV2.from_payload(
+        [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
+    )
+    if config.roster_identity != expected_roster:
+        raise ValueError("programme roster identity differs from the frozen roster")
+
+    coverage, split, boundary = load_v2_boundary_publications(
+        coverage_path=paths.coverage_path,
+        split_path=paths.split_path,
+        boundary_path=paths.boundary_path,
+    )
+    if config.coverage_identity != coverage.coverage_identity:
+        raise ValueError("programme coverage identity differs from verified publication")
+    if config.split_identity != split.split_identity:
+        raise ValueError("programme split identity differs from verified publication")
+    availability = load_scoped_source_availability_v2(
+        publication_root=paths.availability_root,
+        boundary=boundary,
+    )
+
+    def admit_source_observation(publication: ValidationSourcePublicationV2) -> None:
+        if config.access_ledger_identity != _development_access_ledger_identity_v2(
+            boundary=boundary,
+            source_publication=publication,
+        ):
+            raise ValueError(
+                "programme access ledger identity differs from the frozen development policy"
+            )
+
+    source_publication = load_validation_source_publication_v2(
+        publication_root=paths.minute_publication_root,
+        audit_ledger_root=paths.minute_audit_root,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        expected_source_identity=config.source_identity,
+        maximum_row_count=min(budget.max_source_rows, admitted_demand.source_rows),
+        maximum_byte_count=min(budget.max_source_bytes, admitted_demand.source_bytes),
+        pre_observation_admission=admit_source_observation,
+    )
+    physical_demand = replace(
+        admitted_demand,
+        source_rows=source_publication.row_count,
+        source_bytes=source_publication.byte_count,
+        symbols=len(boundary.allowed_symbols),
+        ranges=len(boundary.allowed_intervals),
+    )
+    _require_actual_demand_admitted_v2(admitted=admitted_demand, actual=physical_demand)
+    ValidationWorkBudget.preflight(budget, physical_demand)
+    aggregate_publication = load_validation_aggregate_publication_v2(
+        publication_root=paths.aggregate_publication_root,
+        expected_aggregate_identity=config.aggregate_identity,
+        minute_publication=source_publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        maximum_row_count=min(budget.max_aggregate_bars, admitted_demand.aggregate_bars),
+    )
+    physical_demand = replace(
+        physical_demand,
+        aggregate_bars=aggregate_publication.row_count,
+    )
+    _require_actual_demand_admitted_v2(admitted=admitted_demand, actual=physical_demand)
+    ValidationWorkBudget.preflight(budget, physical_demand)
+    precision_authority = load_validation_precision_authority_v2(
+        publication_root=paths.precision_authority_root,
+        expected_precision_authority_identity=config.precision_identity,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        minute_publication=source_publication,
+        aggregate_publication=aggregate_publication,
+    )
+
+    expected_manifest, expected_archive, expected_archive_audit = (
+        preflight_validation_cost_authority_v2(
+            publication_root=paths.cost_authority_root,
+            expected_cost_identity=config.cost_identity,
+        )
+    )
+    archive_manifest = load_binance_archive_request_manifest_v2(
+        publication_path=paths.archive_manifest_path,
+        boundary=boundary,
+        source_availability=availability,
+    )
+    if archive_manifest.manifest_sha256 != expected_manifest:
+        raise ValueError("cost authority archive manifest identity differs")
+    archive_acquisition = load_binance_archive_acquisition_v2(
+        publication_root=paths.archive_publication_root,
+        cache_root=paths.archive_cache_root,
+        boundary=boundary,
+        manifest=archive_manifest,
+        manifest_path=paths.archive_manifest_path,
+        expected_publication_sha256=expected_archive,
+        expected_audit_publication_sha256=expected_archive_audit,
+        maximum_object_count=min(budget.max_artifacts, admitted_demand.artifacts),
+        maximum_total_bytes=min(budget.max_artifact_bytes, admitted_demand.artifact_bytes),
+        maximum_row_count=min(budget.max_source_rows, admitted_demand.source_rows),
+    )
+    if (
+        archive_acquisition.publication_sha256 != expected_archive
+        or archive_acquisition.audit_publication_sha256 != expected_archive_audit
+    ):
+        raise ValueError("cost authority archive acquisition identity differs")
+    physical_demand = replace(
+        physical_demand,
+        source_rows=max(source_publication.row_count, archive_acquisition.row_count),
+        artifacts=archive_acquisition.object_count,
+        artifact_bytes=(
+            archive_acquisition.compressed_bytes + archive_acquisition.decompressed_bytes
+        ),
+    )
+    _require_actual_demand_admitted_v2(admitted=admitted_demand, actual=physical_demand)
+    ValidationWorkBudget.preflight(budget, physical_demand)
+    cost_authority = load_validation_cost_authority_v2(
+        publication_root=paths.cost_authority_root,
+        expected_cost_identity=config.cost_identity,
+        source_publication=source_publication,
+        aggregate_publication=aggregate_publication,
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        archive_manifest=archive_manifest,
+        archive_manifest_path=paths.archive_manifest_path,
+        archive_acquisition=archive_acquisition,
+    )
+    bundle = ValidationV2SourceBundle(
+        coverage=coverage,
+        split=split,
+        boundary=boundary,
+        availability=availability,
+        source_publication=source_publication,
+        aggregate_publication=aggregate_publication,
+        precision_authority=precision_authority,
+        cost_authority=cost_authority,
+    )
+    if config.access_ledger_identity != development_access_ledger_identity_v2(bundle):
+        raise ValueError(
+            "programme access ledger identity differs from the frozen development policy"
+        )
+    if any(
+        (
+            availability.final_scope_attempts,
+            availability.final_rows,
+            availability.final_access_records,
+            source_publication.final_scope_attempts,
+            source_publication.final_rows,
+            source_publication.final_access_records,
+            aggregate_publication.final_scope_attempts,
+            aggregate_publication.final_rows,
+            aggregate_publication.final_access_records,
+            precision_authority.final_scope_attempts,
+            precision_authority.final_rows,
+            precision_authority.final_access_records,
+            archive_acquisition.final_scope_attempts,
+            archive_acquisition.final_rows,
+            cost_authority.final_scope_attempts,
+            cost_authority.final_rows,
+            cost_authority.final_access_records,
+        )
+    ):
+        raise ValueError("development source bundle contains final-scope access")
+    bundle.revalidate()
+    return bundle
+
+
 def _revalidate_source_bundle_v2(sources: ValidationV2SourceBundle) -> None:
     """Trusted exact-type source revalidation used by the public runner."""
 
@@ -221,23 +472,32 @@ def development_access_ledger_identity_v2(
 
     if type(sources) is not ValidationV2SourceBundle:
         raise TypeError("sources must be the exact ValidationV2SourceBundle type")
+    return _development_access_ledger_identity_v2(
+        boundary=sources.boundary,
+        source_publication=sources.source_publication,
+    )
+
+
+def _development_access_ledger_identity_v2(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    source_publication: ValidationSourcePublicationV2,
+) -> AccessAuditLedgerIdentityV2:
     return AccessAuditLedgerIdentityV2.from_payload(
         {
             "schema_version": "phase5-validation-development-ledger-policy-v2",
-            "boundary_sha256": sources.boundary.boundary_sha256,
-            "source_publication_identity": (
-                sources.source_publication.source_publication_identity.value
-            ),
+            "boundary_sha256": boundary.boundary_sha256,
+            "source_publication_identity": source_publication.source_publication_identity.value,
             "source_publication_sha256": hashlib.sha256(
-                sources.source_publication.canonical_bytes
+                source_publication.canonical_bytes
             ).hexdigest(),
             "allowed_operation_kind": AccessOperationKindV2.FILE.value,
             "allowed_timeframe": "1m",
-            "target_origin_sha256": sources.source_publication.origin_sha256,
-            "allowed_symbols": list(sources.boundary.allowed_symbols),
+            "target_origin_sha256": source_publication.origin_sha256,
+            "allowed_symbols": list(boundary.allowed_symbols),
             "allowed_intervals": [
                 {"start": interval.start, "end": interval.end}
-                for interval in sources.boundary.allowed_intervals
+                for interval in boundary.allowed_intervals
             ],
             "final_scope_attempts": 0,
             "final_rows": 0,
@@ -932,6 +1192,8 @@ def _require_actual_demand_admitted_v2(
         "path_cells",
         "outer_folds",
         "inner_folds",
+        "artifacts",
+        "artifact_bytes",
     ):
         observed = getattr(actual, field_name)
         declared = getattr(admitted, field_name)
@@ -2792,9 +3054,11 @@ __all__ = [
     "ValidationProgrammeRunV2",
     "ValidationSlotComputationResultV2",
     "ValidationV2SourceBundle",
+    "ValidationV2SourceBundlePaths",
     "VerifiedPublicationOutcomeReaderV2",
     "apply_family_holm_v2",
     "development_access_ledger_identity_v2",
+    "load_validation_v2_source_bundle",
     "run_slot_roster_v2",
     "run_validation_programme_v2",
     "validation_slot_result_sha256_v2",

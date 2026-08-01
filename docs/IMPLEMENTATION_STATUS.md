@@ -704,6 +704,14 @@ The CLI currently implements the verified terminal-preflight route. The public
 `run_validation_programme` API remains the typed ready-path boundary, but there is no canonical
 real typed-source-bundle loader yet; Task 10 did not fabricate one or claim executable readiness.
 
+Subsequent Phase 5 V2 work now provides `load_validation_v2_source_bundle`, an explicit-path,
+development-only assembler for already-published boundary, availability, minute, aggregate,
+precision, archive, and cost authorities. It admits the frozen work budget before artifact access,
+checks declared physical demand before minute or aggregate partition iteration, binds the cost
+authority's archive parents before cache verification, and rejects any final-scope counters. This
+is an enabling authority boundary exercised with synthetic publications only; it is not new Gate D
+evidence, a validated behaviour, an edge, or permission to access the final holdout.
+
 Exact identities, exclusions, missing prerequisites, receipt hashes, replay evidence, and
 verification are recorded in
 [`PHASE5_VALIDATION_EVIDENCE.md`](PHASE5_VALIDATION_EVIDENCE.md). This is not validation failure

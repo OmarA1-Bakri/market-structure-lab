@@ -808,9 +808,7 @@ def verify_validation_aggregate_publication_metadata_v2(
         or type(publication.allowed_intervals) is not tuple
         or len(publication.allowed_intervals) > _HARD_BUDGET_CEILINGS["max_members"]
         or any(
-            type(item) is not tuple
-            or len(item) != 2
-            or any(type(part) is not str for part in item)
+            type(item) is not tuple or len(item) != 2 or any(type(part) is not str for part in item)
             for item in publication.allowed_intervals
         )
         or type(publication.target_timeframes) is not tuple
@@ -831,8 +829,7 @@ def verify_validation_aggregate_publication_metadata_v2(
         or any(
             type(member.partitions) is not tuple
             or type(member.source_partition_paths) is not tuple
-            or len(member.source_partition_paths)
-            > _HARD_BUDGET_CEILINGS["max_parent_partitions"]
+            or len(member.source_partition_paths) > _HARD_BUDGET_CEILINGS["max_parent_partitions"]
             or any(type(path) is not str for path in member.source_partition_paths)
             or len(member.partitions) > _HARD_BUDGET_CEILINGS["max_output_files"]
             or any(type(item) is not AggregatePartitionV2 for item in member.partitions)
@@ -853,11 +850,21 @@ def load_validation_aggregate_publication_v2(
     split: DevelopmentSplitPublicationV2,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
+    maximum_row_count: int | None = None,
+    maximum_byte_count: int | None = None,
 ) -> AggregatePublicationV2:
     """Load only a publication anchored by its previously frozen identity."""
 
     if not isinstance(expected_aggregate_identity, AggregatePublicationIdentityV2):
         raise TypeError("expected aggregate identity must be typed")
+    for value, label in (
+        (maximum_row_count, "maximum_row_count"),
+        (maximum_byte_count, "maximum_byte_count"),
+    ):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise ValueError(f"{label} must be a non-negative integer")
     verify_validation_source_publication_v2(
         minute_publication,
         coverage=coverage,
@@ -874,6 +881,10 @@ def load_validation_aggregate_publication_v2(
     )
     if publication.aggregate_identity != expected_aggregate_identity:
         raise ValueError("aggregate publication differs from expected frozen identity")
+    if maximum_row_count is not None and publication.row_count > maximum_row_count:
+        raise ValueError("aggregate publication row_count exceeds admitted maximum")
+    if maximum_byte_count is not None and publication.byte_count > maximum_byte_count:
+        raise ValueError("aggregate publication byte_count exceeds admitted maximum")
     _register(
         publication,
         minute_publication=minute_publication,
@@ -1000,9 +1011,7 @@ def open_verified_aggregate_series_v2(
         "phase5-validation-aggregate-series-row-order-v2",
         [row.row_sha256 for row in rows],
     )
-    aggregate_publication_sha256 = hashlib.sha256(
-        registered.publication_bytes
-    ).hexdigest()
+    aggregate_publication_sha256 = hashlib.sha256(registered.publication_bytes).hexdigest()
     identity = _aggregate_series_identity(publication, key, partitions, rows, ordered)
     series = VerifiedAggregateSeriesV2(
         key=key,
@@ -1053,9 +1062,7 @@ def verify_verified_aggregate_series_v2(
         "phase5-validation-aggregate-series-row-order-v2",
         [row.row_sha256 for row in rows],
     )
-    aggregate_publication_sha256 = hashlib.sha256(
-        registered.publication_bytes
-    ).hexdigest()
+    aggregate_publication_sha256 = hashlib.sha256(registered.publication_bytes).hexdigest()
     identity = _aggregate_series_identity(publication, key, partitions, rows, ordered)
     current = (
         series.key,
@@ -1225,9 +1232,7 @@ def _aggregate_series_identity(
     return hash_json(
         "phase5-validation-verified-aggregate-series-v2",
         {
-            "aggregate_publication_sha256": hashlib.sha256(
-                publication.canonical_bytes
-            ).hexdigest(),
+            "aggregate_publication_sha256": hashlib.sha256(publication.canonical_bytes).hexdigest(),
             "aggregate_identity": publication.aggregate_identity.value,
             "budget_sha256": publication.budget_sha256,
             "key": key._payload(),

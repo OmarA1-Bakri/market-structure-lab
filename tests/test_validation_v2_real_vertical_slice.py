@@ -677,9 +677,9 @@ def test_source_bundle_construction_is_passive_until_runner_budget_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from test_validation_v2_public_runner import _public_programme_inputs
+    from test_validation_v2_public_runner import public_programme_inputs
 
-    _config, sources, _budget, _demand = _public_programme_inputs(
+    _config, sources, _budget, _demand = public_programme_inputs(
         v2_chain,
         tmp_path,
         monkeypatch,
@@ -713,9 +713,9 @@ def test_public_runner_rejects_over_budget_path_demand_before_any_minute_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from market_structure_lab.research import validation_v2 as module
-    from test_validation_v2_public_runner import _public_programme_inputs
+    from test_validation_v2_public_runner import public_programme_inputs
 
-    config, sources, budget, demand = _public_programme_inputs(
+    config, sources, budget, demand = public_programme_inputs(
         v2_chain,
         tmp_path,
         monkeypatch,
@@ -1143,9 +1143,9 @@ def test_public_runner_rejects_mutated_aggregate_bytes_before_minute_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from market_structure_lab.research import validation_v2 as module
-    from test_validation_v2_public_runner import _public_programme_inputs
+    from test_validation_v2_public_runner import public_programme_inputs
 
-    config, sources, budget, demand = _public_programme_inputs(
+    config, sources, budget, demand = public_programme_inputs(
         v2_chain,
         tmp_path,
         monkeypatch,
@@ -1175,9 +1175,9 @@ def test_public_runner_rejects_final_scope_substitution_before_minute_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from market_structure_lab.research import validation_v2 as module
-    from test_validation_v2_public_runner import _public_programme_inputs
+    from test_validation_v2_public_runner import public_programme_inputs
 
-    config, sources, budget, demand = _public_programme_inputs(
+    config, sources, budget, demand = public_programme_inputs(
         v2_chain,
         tmp_path,
         monkeypatch,

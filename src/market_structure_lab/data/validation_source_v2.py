@@ -9,7 +9,7 @@ development boundary.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -1560,9 +1560,7 @@ def verify_validation_source_publication_metadata_v2(
         or type(publication.allowed_intervals) is not tuple
         or len(publication.allowed_intervals) > _MAX_MINUTE_PUBLICATION_ENTRIES
         or any(
-            type(item) is not tuple
-            or len(item) != 2
-            or any(type(part) is not str for part in item)
+            type(item) is not tuple or len(item) != 2 or any(type(part) is not str for part in item)
             for item in publication.allowed_intervals
         )
         or type(publication.partitions) is not tuple
@@ -1594,9 +1592,27 @@ def load_validation_source_publication_v2(
     split: DevelopmentSplitPublicationV2,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
+    expected_source_identity: SourcePublicationIdentityV2 | None = None,
+    maximum_row_count: int | None = None,
+    maximum_byte_count: int | None = None,
+    pre_observation_admission: Callable[[ValidationSourcePublicationV2], None] | None = None,
 ) -> ValidationSourcePublicationV2:
     """Load and seal a publication only after original-byte verification."""
 
+    if expected_source_identity is not None and not isinstance(
+        expected_source_identity, SourcePublicationIdentityV2
+    ):
+        raise TypeError("expected source identity must be typed")
+    for value, label in (
+        (maximum_row_count, "maximum_row_count"),
+        (maximum_byte_count, "maximum_byte_count"),
+    ):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise ValueError(f"{label} must be a non-negative integer")
+    if pre_observation_admission is not None and not callable(pre_observation_admission):
+        raise TypeError("pre_observation_admission must be callable")
     verify_development_read_boundary_v2(boundary, coverage, split)
     coverage_bytes = verified_source_coverage_bytes(coverage)
     availability_bytes = verified_scoped_source_availability_bytes_v2(
@@ -1627,6 +1643,17 @@ def load_validation_source_publication_v2(
         availability=availability,
     )
     _verify_minute_publication_origin(publication, expected_origin)
+    if (
+        expected_source_identity is not None
+        and publication.source_publication_identity != expected_source_identity
+    ):
+        raise ValueError("source publication differs from expected frozen identity")
+    if maximum_row_count is not None and publication.row_count > maximum_row_count:
+        raise ValueError("source publication row_count exceeds admitted maximum")
+    if maximum_byte_count is not None and publication.byte_count > maximum_byte_count:
+        raise ValueError("source publication byte_count exceeds admitted maximum")
+    if pre_observation_admission is not None:
+        pre_observation_admission(publication)
     audit = _verify_minute_publication_audit(
         audit_ledger_root / "publication.json",
         publication=publication,
