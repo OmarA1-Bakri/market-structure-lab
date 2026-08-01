@@ -138,6 +138,35 @@ def test_family_holm_requires_exact_64_primaries_and_keeps_unevaluable_visible()
         apply_family_holm_v2(results[:-1])
 
 
+def test_scientific_roster_apis_reject_hostile_sequences_before_iteration() -> None:
+    class HostileSequence:
+        def __len__(self) -> int:
+            return 1_104
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            raise AssertionError("scientific roster API iterated a hostile sequence")
+
+    hostile = HostileSequence()
+    with pytest.raises(TypeError, match="exact tuple or list"):
+        verify_slot_results_v2(hostile, runner_version="slot-runner-v2")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="exact tuple or list"):
+        apply_family_holm_v2(hostile)  # type: ignore[arg-type]
+
+    class HostileElement:
+        @property
+        def slot_id(self) -> str:
+            raise AssertionError("scientific roster API accessed a hostile element")
+
+    hostile_elements = [HostileElement()] * 1_104
+    with pytest.raises(TypeError, match="exact registered result"):
+        verify_slot_results_v2(  # type: ignore[arg-type]
+            hostile_elements,
+            runner_version="slot-runner-v2",
+        )
+    with pytest.raises(TypeError, match="exact registered result"):
+        apply_family_holm_v2(hostile_elements)  # type: ignore[arg-type]
+
+
 def test_verifier_rejects_fanout_and_wrong_runner() -> None:
     results = list(
         run_slot_roster_v2(_inputs(), budget=ValidationWorkBudget(), demand=ValidationWorkDemand())

@@ -151,17 +151,30 @@ def test_verifier_reports_receipts_separately_from_computations(
 
 def test_complete_frozen_roster_is_independently_receipted_and_accounted(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     issued_rosters: tuple[
         tuple[ValidationSlotComputationResultV2, ...],
         tuple[ValidationSlotComputationResultV2, ...],
     ],
 ) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
     first_results, _retry_results = issued_rosters
 
     receipts = publish_validation_v2_receipts(tmp_path, first_results)
+    mutable_receipts = list(receipts)
+    real_verify = module.verify_validation_v2_receipts
+
+    def verify_then_race(receipt_snapshot, **kwargs):  # type: ignore[no-untyped-def]
+        assert type(receipt_snapshot) is tuple
+        report = real_verify(receipt_snapshot, **kwargs)
+        mutable_receipts.clear()
+        return report
+
+    monkeypatch.setattr(module, "verify_validation_v2_receipts", verify_then_race)
     report = verify_validation_programme_v2(
         first_results,
-        receipts,
+        mutable_receipts,
         runner_version=first_results[0].runner_version,
     )
 

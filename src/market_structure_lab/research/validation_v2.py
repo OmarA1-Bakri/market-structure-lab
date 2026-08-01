@@ -1857,9 +1857,14 @@ def verify_slot_results_v2(
 ) -> None:
     """Reject missing, extra, reordered, fanned-out, or unbound slot results."""
 
+    if type(results) not in {tuple, list}:
+        raise TypeError("slot results must be an exact tuple or list")
     if len(results) != len(VALIDATION_SLOT_ROSTER):
         raise ValueError("slot results must cover the exact 1,104-slot roster")
-    if tuple(item.slot_id for item in results) != tuple(
+    frozen_results = tuple(results)
+    if any(type(item) is not ValidationSlotComputationResultV2 for item in frozen_results):
+        raise TypeError("slot results must contain exact registered result types")
+    if tuple(item.slot_id for item in frozen_results) != tuple(
         slot.slot_id for slot in VALIDATION_SLOT_ROSTER
     ):
         raise ValueError("slot results are missing, extra, or reordered")
@@ -1869,7 +1874,7 @@ def verify_slot_results_v2(
     by_slot: dict[str, ValidationSlotComputationResultV2] = {}
     verified_results: set[int] = set()
     verified_authorities: set[int] = set()
-    for slot, result in zip(VALIDATION_SLOT_ROSTER, results, strict=True):
+    for slot, result in zip(VALIDATION_SLOT_ROSTER, frozen_results, strict=True):
         _verify_validation_slot_computation_result_v2(
             result,
             verified_results=verified_results,
@@ -1931,14 +1936,19 @@ def apply_family_holm_v2(
 ) -> tuple[FamilyHolmResultV2, ...]:
     """Apply the frozen 0.01 Holm correction within each primary family."""
 
-    if not results:
+    if type(results) not in {tuple, list}:
+        raise TypeError("family Holm results must be an exact tuple or list")
+    if len(results) != len(VALIDATION_SLOT_ROSTER):
         raise ValueError("family Holm requires the complete roster and exactly 64 primaries")
+    frozen_results = tuple(results)
+    if any(type(item) is not ValidationSlotComputationResultV2 for item in frozen_results):
+        raise TypeError("family Holm requires exact registered result types")
     expected_all = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
-    observed = tuple(item.slot_id for item in results)
+    observed = tuple(item.slot_id for item in frozen_results)
     if observed != expected_all:
         raise ValueError("family Holm requires the complete roster and exactly 64 primaries")
-    verify_slot_results_v2(results, runner_version=results[0].runner_version)
-    return _apply_family_holm_verified_v2(results)
+    verify_slot_results_v2(frozen_results, runner_version=frozen_results[0].runner_version)
+    return _apply_family_holm_verified_v2(frozen_results)
 
 
 def _apply_family_holm_verified_v2(

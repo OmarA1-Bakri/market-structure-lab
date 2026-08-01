@@ -1293,17 +1293,18 @@ def verify_validation_programme_v2(
         raise TypeError("programme receipts must be an exact tuple or list")
     if len(receipts) > _MAX_LEDGER_RECEIPTS:
         raise ValueError("programme receipts exceed the frozen ledger bound")
+    frozen_receipts = tuple(receipts)
     if any(type(item) is not ValidationSlotComputationResultV2 for item in results):
         raise TypeError("programme results must be exact V2 slot computation results")
     typed_results = cast(tuple[ValidationSlotComputationResultV2, ...], tuple(results))
     verify_slot_results_v2(typed_results, runner_version=runner_version)
     expected = tuple(item.slot_id for item in typed_results)
     report = verify_validation_v2_receipts(
-        receipts,
+        frozen_receipts,
         expected_slot_ids=expected,
         runner_version=runner_version,
     )
-    selected = _select_terminal_attempts_verified_v2(receipts)
+    selected = _select_terminal_attempts_verified_v2(frozen_receipts)
     for result in typed_results:
         receipt = selected[result.slot_id]
         if (
