@@ -32,6 +32,7 @@ from market_structure_lab.research.validation_v2_costs import (
     publish_validation_cost_authority_v2,
 )
 from market_structure_lab.research.validation_v2_models import (
+    PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
     SourceCoverageIdentityV2,
     ValidationProgrammeConfigV2,
     ValidationRosterIdentityV2,
@@ -488,7 +489,7 @@ def _real_public_programme_inputs(
             [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
         ),
         access_ledger_identity=development_access_ledger_identity_v2(sources),
-        policy_identities=(),
+        policy_identities=(PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,),
         work_budget_sha256=budget.sha256,
     )
     assert minute.final_rows == aggregate.final_rows == 0
@@ -547,6 +548,33 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     assert run.verify_original() is run
     assert authority_verification_calls == 3
     reader = issued_readers[0]
+    forged_fields = run.results[0].to_dict()
+    for key in (
+        "parent_slot_id",
+        "result_sha256",
+        "slot_computation_result_sha256",
+    ):
+        forged_fields.pop(key)
+    forged_fields.update(
+        execution_status="completed",
+        decision="promoted",
+        computation_completed=True,
+        reason="caller-created promotion",
+        p_value=0.0,
+        metrics={"fabricated": 1},
+    )
+    forged_root = tmp_path / "forged-receipts"
+    forged_root.mkdir()
+    with pytest.raises(TypeError, match="concrete computation factory"):
+        module._issue_validation_slot_result_v2(  # type: ignore[arg-type]  # noqa: SLF001
+            evidence_verifier=lambda: reader,
+            retained_evidence=(config, reader),
+            evidence_authority=reader,
+            evidence_authority_verifier=reader.verify_original,  # type: ignore[attr-defined]
+            receipt_authority_config=config,
+            **forged_fields,  # pyright: ignore[reportArgumentType]
+        )
+    assert not tuple(forged_root.iterdir())
     outcomes = reader.read_slot(  # type: ignore[attr-defined]
         _vs0001(),
         programme_id=config.programme_id,

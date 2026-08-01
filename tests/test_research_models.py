@@ -106,7 +106,9 @@ def test_default_work_budget_freezes_exact_counts_and_draws() -> None:
     assert budget.perturbation_count == 184
     assert budget.exposure_count == 64
     assert budget.capacity_count == 64
-    assert budget.bootstrap_draws == 4_096
+    assert budget.bootstrap_draws == 4_800
+    assert budget.max_bootstrap_draws == 4_800
+    assert budget.max_bootstrap_cells == 307_200
     assert (
         budget.core_count
         + budget.baseline_count
@@ -117,6 +119,22 @@ def test_default_work_budget_freezes_exact_counts_and_draws() -> None:
         + budget.capacity_count
         == budget.evaluation_count
     )
+
+
+def test_legacy_bootstrap_budget_remains_reconstructable_but_cannot_mix_profiles() -> None:
+    legacy = replace(
+        ValidationWorkBudget(),
+        bootstrap_draws=4_096,
+        max_bootstrap_draws=4_096,
+        max_bootstrap_cells=262_144,
+    )
+
+    assert ValidationWorkBudget(**legacy.to_dict()) == legacy
+    assert legacy.bootstrap_draws == legacy.max_bootstrap_draws == 4_096
+    assert legacy.max_bootstrap_cells == 262_144
+
+    with pytest.raises(ValueError, match="bootstrap.*profile"):
+        replace(legacy, max_bootstrap_cells=307_200)
 
 
 def test_validation_programme_identity_requires_pinned_profile_artifact_hashes() -> None:
@@ -148,13 +166,23 @@ def test_validation_budget_freezes_profile_stream_and_serialization_limits() -> 
 def test_every_configurable_maximum_rejects_values_above_authoritative_ceiling(
     field_name: str,
 ) -> None:
-    with pytest.raises(ValueError, match=field_name):
+    expected_error = (
+        "bootstrap.*profile"
+        if field_name in {"max_bootstrap_draws", "max_bootstrap_cells"}
+        else field_name
+    )
+    with pytest.raises(ValueError, match=expected_error):
         replace(ValidationWorkBudget(), **{field_name: 10**18})
 
 
 @pytest.mark.parametrize(
     "field_name",
-    tuple(field.name for field in fields(ValidationWorkBudget) if field.name.startswith("max_")),
+    tuple(
+        field.name
+        for field in fields(ValidationWorkBudget)
+        if field.name.startswith("max_")
+        and field.name not in {"max_bootstrap_draws", "max_bootstrap_cells"}
+    ),
 )
 def test_every_configurable_maximum_allows_a_reduction(field_name: str) -> None:
     default = getattr(ValidationWorkBudget(), field_name)
@@ -184,7 +212,7 @@ def test_programme_config_rejects_a_mutated_budget_above_authoritative_ceiling()
         ("perturbation_count", 183),
         ("exposure_count", 63),
         ("capacity_count", 63),
-        ("bootstrap_draws", 4_095),
+        ("bootstrap_draws", 4_799),
         ("max_source_rows", -1),
         ("max_source_bytes", 1.5),
         ("max_profile_serialized_bytes", -1),
@@ -414,8 +442,8 @@ def test_each_independent_work_limit_rejects_before_iteration_or_allocation(
     (
         ("evaluations", 1_103),
         ("evaluations", 1_105),
-        ("bootstrap_draws", 4_095),
-        ("bootstrap_draws", 4_097),
+        ("bootstrap_draws", 4_799),
+        ("bootstrap_draws", 4_801),
     ),
 )
 def test_exact_evaluation_and_bootstrap_counts_reject_before_work(field: str, value: int) -> None:

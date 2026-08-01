@@ -28,8 +28,8 @@ from market_structure_lab.core.secure_windows import WindowsHandleFilesystem, Wi
 from market_structure_lab.research.models import VALIDATION_SLOT_ROSTER
 from market_structure_lab.research.validation_v2 import (
     ValidationSlotComputationResultV2,
-    verified_validation_slot_result_payload_v2,
-    verified_validation_slot_result_payloads_v2,
+    verified_receiptable_validation_slot_result_payload_v2,
+    verified_receiptable_validation_slot_result_payloads_v2,
 )
 
 _MAX_RECEIPT_BYTES = 256 * 1024
@@ -42,7 +42,7 @@ _SCHEMA = "validation-slot-receipt-v2"
 _BATCH_SCHEMA = "validation-receipt-batch-manifest-v2"
 _SLOT_ID = re.compile(r"^VS-[0-9]{4}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
-_PROGRAMME = re.compile(r"^VPV2-[a-f0-9]{64}$")
+_PROGRAMME = re.compile(r"^(?:VPV2|TVPV2)-[a-f0-9]{64}$")
 _RELATIVE_RECEIPT = re.compile(r"^(VS-[0-9]{4})/attempt-([0-9]{4,8})\.json$")
 _CANONICAL_SLOT_IDS = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
 _CANONICAL_SLOT_INDEX = {slot_id: index for index, slot_id in enumerate(_CANONICAL_SLOT_IDS)}
@@ -665,7 +665,7 @@ def publish_validation_v2_receipts(
     for result in frozen_results:
         if type(result) is not ValidationSlotComputationResultV2:
             raise TypeError("receipt result must be the exact factory-issued registered result")
-    verified_payloads = verified_validation_slot_result_payloads_v2(frozen_results)
+    verified_payloads = verified_receiptable_validation_slot_result_payloads_v2(frozen_results)
     verified_results = tuple(zip(frozen_results, verified_payloads, strict=True))
     if predecessor_receipts is None:
         predecessors: tuple[ValidationReceiptV2 | None, ...] = (None,) * len(verified_results)
@@ -998,7 +998,9 @@ def _verify_local_receipt_v2(
     registered_result = _registered_receipt_result_v2(receipt)
     registered = _VERIFIED_RECEIPTS[id(receipt)]
     if registered_result_payload is None:
-        registered_result_payload = verified_validation_slot_result_payload_v2(registered_result)
+        registered_result_payload = verified_receiptable_validation_slot_result_payload_v2(
+            registered_result
+        )
     current = read_bounded_regular(receipt.path, _MAX_RECEIPT_BYTES)
     if current != registered[4] or current != receipt.canonical_bytes:
         raise ValueError("validation V2 receipt bytes changed")
@@ -1094,7 +1096,9 @@ def select_terminal_attempts_v2(
     registered_results = tuple(
         _registered_receipt_result_v2(receipt) for receipt in frozen_receipts
     )
-    registered_payloads = verified_validation_slot_result_payloads_v2(registered_results)
+    registered_payloads = verified_receiptable_validation_slot_result_payloads_v2(
+        registered_results
+    )
     locals_by_receipt = tuple(
         _verify_local_receipt_v2(
             receipt,

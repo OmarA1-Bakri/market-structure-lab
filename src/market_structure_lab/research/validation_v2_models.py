@@ -6,6 +6,7 @@ from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 import json
 import re
+from types import MappingProxyType
 from typing import Any, ClassVar, Self
 import weakref
 
@@ -17,6 +18,32 @@ _SOURCE_COVERAGE_FACTORY = object()
 _VERIFIED_COVERAGE_OBJECTS: dict[
     int, tuple[weakref.ReferenceType[SourceCoveragePublicationV2], bytes]
 ] = {}
+
+PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID = "MSL-P5-SR-001"
+PHASE5_BOOTSTRAP_HOLM_AMENDMENT_PAYLOAD = MappingProxyType(
+    {
+        "schema_version": "phase5-bootstrap-holm-specification-amendment-v1",
+        "amendment_id": PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+        "bootstrap_draws": 4_800,
+        "add_one_denominator": 4_801,
+        "ci_indices": (119, 4_679),
+        "max_bootstrap_cells": 307_200,
+        "max_bootstrap_blocks": 64,
+        "family_alpha": "0.01",
+        "family_primary_counts": (("A", 24), ("B", 8), ("D", 16), ("E", 8), ("G", 8)),
+        "p_value_method": "two-sided-add-one",
+        "multiplicity_method": "family-local-holm",
+        "unevaluable_primary_p_value": "1",
+    }
+)
+PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256 = hash_json(
+    "phase5-bootstrap-holm-specification-amendment-v1",
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_PAYLOAD,
+)
+PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY = (
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
+)
 
 
 def _require_sha256(value: object, label: str) -> str:
@@ -668,6 +695,10 @@ __all__ = [
     "AggregatePublicationIdentityV2",
     "CostAuthorityIdentityV2",
     "DevelopmentSplitIdentityV2",
+    "PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID",
+    "PHASE5_BOOTSTRAP_HOLM_AMENDMENT_PAYLOAD",
+    "PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256",
+    "PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY",
     "PrecisionAuthorityIdentityV2",
     "RawDumpIdentityV2",
     "ReconciliationAuthorityV2",

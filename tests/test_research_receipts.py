@@ -301,6 +301,29 @@ def test_evaluation_receipt_is_one_vr_per_slot_and_retry_retains_distinct_attemp
         build_evaluation_receipt(config, slot=foreign_slot, terminal_state=terminal, attempt=1)
 
 
+def test_legacy_4096_budget_evaluation_receipt_remains_verifiable(
+    tmp_path: Path,
+) -> None:
+    legacy_budget = replace(
+        ValidationWorkBudget(),
+        bootstrap_draws=4_096,
+        max_bootstrap_draws=4_096,
+        max_bootstrap_cells=262_144,
+    )
+    config = _config(work_budget=legacy_budget)
+    terminal = ValidationTerminalState(ExecutionStatus.COMPLETED, ScientificDecision.REJECTED)
+    publication = publish_evaluation_receipt(
+        config,
+        slot=VALIDATION_SLOT_ROSTER[0],
+        terminal_state=terminal,
+        attempt=1,
+        output_root=tmp_path,
+    )
+
+    assert publication.receipt.hashes["work_budget_sha256"] == legacy_budget.sha256
+    assert verify_evaluation_receipt(publication.path, config=config) == publication.receipt
+
+
 def test_receipt_publication_is_immutable_no_follow_bounded_and_byte_replayable(
     tmp_path: Path,
 ) -> None:

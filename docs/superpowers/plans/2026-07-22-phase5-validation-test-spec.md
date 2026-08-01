@@ -176,3 +176,8 @@ Run `npm test` only when configured; otherwise record exactly `Not-tested: dashb
 | Bounded | every budget rejects before iteration/allocation |
 | Final holdout | frozen programme batch, one atomic attempt, concurrency/crash/replay denial |
 | Honest conclusion | execution status and scientific decision are separate and code-defined |
+# Numerical amendment
+
+The exact 4,096-draw bootstrap assertions in this specification are superseded for new computations
+by `2026-08-01-phase5-bootstrap-holm-specification-amendment.md` (`MSL-P5-SR-001`). Tests must
+preserve historical verification while enforcing the amended 4,800-draw identity for new work.

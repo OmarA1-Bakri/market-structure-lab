@@ -46,7 +46,7 @@ def _inputs(
         json.dumps(
             {"schema_version": "validation-v2-outcome-fixture-v1", "slots": by_slot}, sort_keys=True
         ).encode(),
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
         source_publication_sha256="e" * 64,
@@ -54,7 +54,7 @@ def _inputs(
         expected_slot_ids=tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER),
     )
     return SlotRunnerInputsV2(
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         outcome_reader=reader,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
@@ -71,12 +71,33 @@ def test_outcome_fixture_rejects_missing_and_extra_slot_keys() -> None:
     with pytest.raises(ValueError, match="missing|extra"):
         _issue_fixture_outcome_reader_v2(
             payload,
-            programme_id="VPV2-" + "1" * 64,
+            programme_id="TVPV2-" + "1" * 64,
             split_sha256="c" * 64,
             cost_authority_sha256="d" * 64,
             source_publication_sha256="e" * 64,
             aggregate_publication_sha256="f" * 64,
             expected_slot_ids=("VS-0001",),
+        )
+
+
+def test_fixture_reader_cannot_issue_into_a_production_programme_namespace() -> None:
+    payload = json.dumps(
+        {
+            "schema_version": "validation-v2-outcome-fixture-v1",
+            "slots": {slot.slot_id: [] for slot in VALIDATION_SLOT_ROSTER},
+        },
+        sort_keys=True,
+    ).encode()
+
+    with pytest.raises(ValueError, match="TVPV2|fixture.*identity"):
+        _issue_fixture_outcome_reader_v2(
+            payload,
+            programme_id="VPV2-" + "1" * 64,
+            split_sha256="c" * 64,
+            cost_authority_sha256="d" * 64,
+            source_publication_sha256="e" * 64,
+            aggregate_publication_sha256="f" * 64,
+            expected_slot_ids=tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER),
         )
 
 

@@ -175,7 +175,7 @@ class ValidationWorkDemand:
     outer_folds: int = 0
     inner_folds: int = 0
     evaluations: int = 1_104
-    bootstrap_draws: int = 4_096
+    bootstrap_draws: int = 4_800
     bootstrap_cells: int = 0
     bootstrap_blocks: int = 0
     controls: int = 384
@@ -219,7 +219,7 @@ class ValidationWorkBudget:
     perturbation_count: int = 184
     exposure_count: int = 64
     capacity_count: int = 64
-    bootstrap_draws: int = 4_096
+    bootstrap_draws: int = 4_800
     max_source_rows: int = 25_000_000
     max_source_bytes: int = 8 * 1024 * 1024 * 1024
     max_aggregate_bars: int = 1_000_000
@@ -238,8 +238,8 @@ class ValidationWorkBudget:
     max_outer_folds: int = 4
     max_inner_folds: int = 3
     max_evaluations: int = 1_104
-    max_bootstrap_draws: int = 4_096
-    max_bootstrap_cells: int = 262_144
+    max_bootstrap_draws: int = 4_800
+    max_bootstrap_cells: int = 307_200
     max_bootstrap_blocks: int = 64
     max_controls: int = 384
     max_placebos: int = 192
@@ -261,7 +261,6 @@ class ValidationWorkBudget:
             "perturbation_count": 184,
             "exposure_count": 64,
             "capacity_count": 64,
-            "bootstrap_draws": 4_096,
         }
         for field_name, required in exact.items():
             if getattr(self, field_name) != required:
@@ -283,6 +282,16 @@ class ValidationWorkBudget:
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{field_name} must be a non-negative integer")
+        bootstrap_profile = (
+            self.bootstrap_draws,
+            self.max_bootstrap_draws,
+            self.max_bootstrap_cells,
+        )
+        if bootstrap_profile not in {
+            (4_096, 4_096, 262_144),
+            (4_800, 4_800, 307_200),
+        }:
+            raise ValueError("bootstrap budget profile is not a frozen legacy or amended policy")
         self._validate_authoritative_ceilings()
 
     def _validate_authoritative_ceilings(self) -> None:
@@ -305,8 +314,8 @@ class ValidationWorkBudget:
             "max_outer_folds": 4,
             "max_inner_folds": 3,
             "max_evaluations": 1_104,
-            "max_bootstrap_draws": 4_096,
-            "max_bootstrap_cells": 262_144,
+            "max_bootstrap_draws": 4_800,
+            "max_bootstrap_cells": 307_200,
             "max_bootstrap_blocks": 64,
             "max_controls": 384,
             "max_placebos": 192,
@@ -937,9 +946,7 @@ def candidate_definition_for_slot(
         profile_bars = _candidate_parameter_bars(slot, "profile_hours")
         window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
         if type(profile_stream) is not VerifiedProfileStream:
-            raise TypeError(
-                "family B requires an exact factory-issued registered profile stream"
-            )
+            raise TypeError("family B requires an exact factory-issued registered profile stream")
         verify_profile_stream(profile_stream)
         if (
             profile_stream.aggregate_series_sha256 != series.series_sha256
@@ -1004,8 +1011,7 @@ def candidate_definition_for_verified_series(
 
     if type(series) is not VerifiedCandidateSeriesV2:
         raise TypeError(
-            "candidate definition requires a factory-issued "
-            "VerifiedCandidateSeriesV2 capability"
+            "candidate definition requires a factory-issued VerifiedCandidateSeriesV2 capability"
         )
     series.verify()
     if slot not in VALIDATION_SLOT_ROSTER:
@@ -1031,9 +1037,7 @@ def candidate_definition_for_verified_series(
         profile_bars = _candidate_parameter_bars(slot, "profile_hours")
         window_hours = profile_bars * (1 if slot.timeframe == "1h" else 4)
         if type(profile_stream) is not VerifiedProfileStream:
-            raise TypeError(
-                "family B requires an exact factory-issued registered profile stream"
-            )
+            raise TypeError("family B requires an exact factory-issued registered profile stream")
         verify_profile_stream(profile_stream)
         if (
             profile_stream.aggregate_series_sha256 != series.series_sha256

@@ -109,7 +109,7 @@ def _issued_result() -> tuple[
     ).encode()
     reader = _issue_fixture_outcome_reader_v2(
         fixture_bytes,
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
         source_publication_sha256="e" * 64,
@@ -118,7 +118,7 @@ def _issued_result() -> tuple[
     )
     results = run_slot_roster_v2(
         SlotRunnerInputsV2(
-            programme_id="VPV2-" + "1" * 64,
+            programme_id="TVPV2-" + "1" * 64,
             outcome_reader=reader,
             split_sha256="c" * 64,
             cost_authority_sha256="d" * 64,
@@ -153,7 +153,7 @@ def issued_rosters() -> tuple[
     ).encode()
     reader = _issue_fixture_outcome_reader_v2(
         fixture_bytes,
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
         source_publication_sha256="e" * 64,
@@ -161,7 +161,7 @@ def issued_rosters() -> tuple[
         expected_slot_ids=slot_ids,
     )
     inputs = SlotRunnerInputsV2(
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         outcome_reader=reader,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
@@ -382,7 +382,7 @@ def test_receipt_publication_revalidates_exact_admission_parents_before_filesyst
     ).encode()
     reader = _issue_fixture_outcome_reader_v2(
         fixture_bytes,
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
         source_publication_sha256="e" * 64,
@@ -390,7 +390,7 @@ def test_receipt_publication_revalidates_exact_admission_parents_before_filesyst
         expected_slot_ids=slot_ids,
     )
     inputs = SlotRunnerInputsV2(
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         outcome_reader=reader,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
@@ -437,7 +437,7 @@ def test_fixture_reader_verifier_rejects_scalar_and_nested_outcome_mutation() ->
             {"schema_version": "validation-v2-outcome-fixture-v1", "slots": rows},
             sort_keys=True,
         ).encode(),
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
         source_publication_sha256="e" * 64,
@@ -446,7 +446,7 @@ def test_fixture_reader_verifier_rejects_scalar_and_nested_outcome_mutation() ->
     )
 
     original_programme = reader.programme_id
-    object.__setattr__(reader, "programme_id", "VPV2-" + "2" * 64)
+    object.__setattr__(reader, "programme_id", "TVPV2-" + "2" * 64)
     try:
         with pytest.raises(ValueError, match="registered original|changed|differs"):
             reader.verify_original()
@@ -472,19 +472,18 @@ def test_fixture_reader_verifier_rejects_scalar_and_nested_outcome_mutation() ->
 
 
 @pytest.mark.parametrize(
-    ("field_name", "replacement", "match"),
+    ("field_name", "replacement"),
     [
-        ("programme_id", "not-a-programme", "programme"),
-        ("slot_id", "VS-9999", "roster|slot"),
-        ("runner_kind", "capacity", "runner kind"),
-        ("parent_result_sha256", "a" * 64, "root.*parent"),
+        ("programme_id", "not-a-programme"),
+        ("slot_id", "VS-9999"),
+        ("runner_kind", "capacity"),
+        ("parent_result_sha256", "a" * 64),
     ],
 )
 def test_result_factory_rejects_noncanonical_individual_contract(
     issued_result: tuple[ValidationSlotComputationResultV2, VerifiedDevelopmentOutcomeReaderV2],
     field_name: str,
     replacement: object,
-    match: str,
 ) -> None:
     original, _ = issued_result
     fields_by_name = {
@@ -493,7 +492,7 @@ def test_result_factory_rejects_noncanonical_individual_contract(
     }
     fields_by_name[field_name] = replacement
 
-    with pytest.raises((TypeError, ValueError), match=match):
+    with pytest.raises(TypeError, match="concrete computation factory"):
         _issue_validation_slot_result_v2(
             evidence_verifier=lambda: None,
             retained_evidence=None,
@@ -520,7 +519,7 @@ def test_result_factory_rejects_unbounded_metrics_before_hashing(
     }
     fields_by_name["metrics"] = metrics
 
-    with pytest.raises((TypeError, ValueError), match="metric.*bound"):
+    with pytest.raises(TypeError, match="concrete computation factory"):
         _issue_validation_slot_result_v2(
             evidence_verifier=lambda: None,
             retained_evidence=None,
@@ -542,7 +541,7 @@ def test_result_factory_rejects_hostile_mapping_before_iteration(
     }
     fields_by_name["metrics"] = ExplodingMapping()
 
-    with pytest.raises(TypeError, match="exact bounded mapping"):
+    with pytest.raises(TypeError, match="concrete computation factory"):
         _issue_validation_slot_result_v2(
             evidence_verifier=lambda: None,
             retained_evidence=None,
@@ -573,7 +572,7 @@ def test_child_verifier_replays_exact_parent_evidence_chain() -> None:
             {"schema_version": "validation-v2-outcome-fixture-v1", "slots": rows},
             sort_keys=True,
         ).encode(),
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
         source_publication_sha256="e" * 64,
@@ -582,7 +581,7 @@ def test_child_verifier_replays_exact_parent_evidence_chain() -> None:
     )
     results = run_slot_roster_v2(
         SlotRunnerInputsV2(
-            programme_id="VPV2-" + "1" * 64,
+            programme_id="TVPV2-" + "1" * 64,
             outcome_reader=reader,
             split_sha256="c" * 64,
             cost_authority_sha256="d" * 64,
@@ -776,7 +775,7 @@ def test_canonical_programme_ledger_rejects_retry_fork_from_stale_head(
     slot_ids = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
     retry_b = run_slot_roster_v2(
         SlotRunnerInputsV2(
-            programme_id="VPV2-" + "1" * 64,
+            programme_id="TVPV2-" + "1" * 64,
             outcome_reader=reader,
             split_sha256="c" * 64,
             cost_authority_sha256="d" * 64,
@@ -820,7 +819,7 @@ def test_canonical_programme_ledger_rejects_runner_version_drift_before_filesyst
     slot_ids = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
     drifted_retry = run_slot_roster_v2(
         SlotRunnerInputsV2(
-            programme_id="VPV2-" + "1" * 64,
+            programme_id="TVPV2-" + "1" * 64,
             outcome_reader=reader,
             split_sha256="c" * 64,
             cost_authority_sha256="d" * 64,
@@ -861,7 +860,7 @@ def test_concurrent_distinct_retries_from_one_head_have_one_canonical_winner(
     slot_ids = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
     retry_b = run_slot_roster_v2(
         SlotRunnerInputsV2(
-            programme_id="VPV2-" + "1" * 64,
+            programme_id="TVPV2-" + "1" * 64,
             outcome_reader=reader,
             split_sha256="c" * 64,
             cost_authority_sha256="d" * 64,
@@ -1028,6 +1027,51 @@ def test_receipt_batch_rejects_noncanonical_frozen_roster_order_before_filesyste
     assert _tree_snapshot(tmp_path) == before
 
 
+def test_historical_receipt_remains_verifiable_but_cannot_mix_with_amended_programme(
+    tmp_path: Path,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+        VerifiedDevelopmentOutcomeReaderV2,
+    ],
+) -> None:
+    historical_results, _retry_results, historical_reader = issued_rosters
+    historical = historical_results[0]
+    receipt = publish_validation_v2_receipt(tmp_path, historical)
+    original_bytes = receipt.path.read_bytes()
+    programme_id = "TVPV2-" + "2" * 64
+    amended_reader = _issue_fixture_outcome_reader_v2(
+        historical_reader.canonical_bytes,
+        programme_id=programme_id,
+        split_sha256=historical_reader.split_sha256,
+        cost_authority_sha256=historical_reader.cost_authority_sha256,
+        source_publication_sha256=historical_reader.source_publication_sha256,
+        aggregate_publication_sha256=historical_reader.aggregate_publication_sha256,
+        expected_slot_ids=historical_reader.slot_ids,
+    )
+    amended = run_slot_roster_v2(
+        SlotRunnerInputsV2(
+            programme_id=programme_id,
+            outcome_reader=amended_reader,
+            split_sha256=amended_reader.split_sha256,
+            cost_authority_sha256=amended_reader.cost_authority_sha256,
+            promotion_grade_costs_complete=False,
+            precision_available=True,
+        ),
+        budget=ValidationWorkBudget(),
+        demand=ValidationWorkDemand(),
+    )[1]
+
+    with pytest.raises(ValueError, match="crosses programme"):
+        publish_validation_v2_receipts(
+            tmp_path / "mixed",
+            (historical, amended),
+        )
+
+    assert verify_validation_v2_receipt(receipt) is receipt
+    assert receipt.path.read_bytes() == original_bytes
+
+
 def test_programme_verifier_rejects_hostile_sequence_before_iteration() -> None:
     class HostileSequence:
         def __len__(self) -> int:
@@ -1091,6 +1135,32 @@ def test_batch_rejects_uninitialized_result_before_field_or_filesystem_access(
     assert _tree_snapshot(tmp_path) == before
 
 
+def test_registered_result_without_publication_config_authority_cannot_publish_as_production(
+    tmp_path: Path,
+    issued_result: tuple[ValidationSlotComputationResultV2, VerifiedDevelopmentOutcomeReaderV2],
+) -> None:
+    template, _reader = issued_result
+    fields = template.to_dict()
+    for key in (
+        "parent_slot_id",
+        "result_sha256",
+        "slot_computation_result_sha256",
+    ):
+        fields.pop(key)
+    fields["programme_id"] = "VPV2-" + "2" * 64
+    evidence = object()
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(TypeError, match="concrete computation factory"):
+        _issue_validation_slot_result_v2(
+            evidence_verifier=lambda: evidence,
+            retained_evidence=evidence,
+            **fields,  # pyright: ignore[reportArgumentType]
+        )
+
+    assert _tree_snapshot(tmp_path) == before
+
+
 def test_result_rejects_equal_but_distinct_outcome_reader_substitution_before_filesystem(
     tmp_path: Path,
 ) -> None:
@@ -1106,7 +1176,7 @@ def test_result_rejects_equal_but_distinct_outcome_reader_substitution_before_fi
     def issue_reader() -> VerifiedDevelopmentOutcomeReaderV2:
         return _issue_fixture_outcome_reader_v2(
             fixture_bytes,
-            programme_id="VPV2-" + "1" * 64,
+            programme_id="TVPV2-" + "1" * 64,
             split_sha256="c" * 64,
             cost_authority_sha256="d" * 64,
             source_publication_sha256="e" * 64,
@@ -1118,7 +1188,7 @@ def test_result_rejects_equal_but_distinct_outcome_reader_substitution_before_fi
     lookalike_reader = issue_reader()
     assert original_reader == lookalike_reader and original_reader is not lookalike_reader
     inputs = SlotRunnerInputsV2(
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         outcome_reader=original_reader,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,

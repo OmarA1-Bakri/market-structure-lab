@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from market_structure_lab.core.identity import hash_json
 from market_structure_lab.research.models import (
     ExecutionStatus,
     ScientificDecision,
@@ -12,7 +13,6 @@ from market_structure_lab.research.models import (
     ValidationSlotKind,
     ValidationTerminalState,
     ValidationWorkBudget,
-    ValidationWorkBudgetViolation,
 )
 from market_structure_lab.research.statistics import (
     ControlStatistic,
@@ -110,7 +110,7 @@ def test_weekly_means_drop_incomplete_or_mismatched_publication_weeks() -> None:
     assert "missing asset" in evidence.excluded_weeks[_dt("2026-01-12T00:00:00")]
 
 
-def test_bootstrap_uses_exact_4096_sha_seeded_draws_and_indices() -> None:
+def test_bootstrap_uses_exact_4800_sha_seeded_draws_and_indices() -> None:
     seed = deterministic_validation_seed(
         programme_id="VP-" + "1" * 64,
         candidate_id="CS-TEST-000001",
@@ -137,15 +137,86 @@ def test_bootstrap_uses_exact_4096_sha_seeded_draws_and_indices() -> None:
 
     assert evidence.status is ExecutionStatus.COMPLETED
     assert evidence.decision is ScientificDecision.REJECTED
-    assert evidence.draw_count == 4096
-    assert evidence.ci_lower_index == 102
-    assert evidence.ci_upper_index == 3993
+    assert evidence.draw_count == 4800
+    assert evidence.ci_lower_index == 119
+    assert evidence.ci_upper_index == 4679
     assert evidence.seed == seed
     assert evidence.sample_algorithm == "sha-index-bootstrap-v1"
     assert evidence.samples_sha256 == replay.samples_sha256
     assert evidence.p_value is not None
     assert 0.0 <= evidence.p_value <= 1.0
     assert evidence.sigma_block is not None and evidence.sigma_block > 0.0
+
+
+def test_bootstrap_amendment_matches_independent_p_value_ci_and_sample_hash_oracle() -> None:
+    values = (0.01, 0.02, 0.03, 0.04)
+    seed = 17
+    independent_samples = tuple(
+        sum(
+            values[
+                int(
+                    hash_json(
+                        "bootstrap-sample-index-v1",
+                        {
+                            "algorithm": "sha-index-bootstrap-v1",
+                            "seed": seed,
+                            "draw_index": draw,
+                            "cell_index": cell,
+                            "support": len(values),
+                        },
+                    )[:16],
+                    16,
+                )
+                % len(values)
+            ]
+            for cell in range(len(values))
+        )
+        / len(values)
+        for draw in range(4_800)
+    )
+    ordered = tuple(sorted(independent_samples))
+    expected_hash = hash_json(
+        "bootstrap-samples-v1",
+        {"seed": seed, "samples": list(independent_samples)},
+    )
+
+    evidence = bootstrap_weekly_mean(
+        weekly_values=values,
+        seed=seed,
+        budget=ValidationWorkBudget(),
+        mde=1.0,
+        family="A",
+        slot_id="VS-0001",
+    )
+
+    assert evidence.p_value == 2.0 / 4_801
+    assert evidence.ci_lower == ordered[119] == 0.015
+    assert evidence.ci_upper == ordered[4_679] == 0.035
+    assert evidence.samples_sha256 == expected_hash
+    assert expected_hash == "5304ae22f297853bc1af39baeb00a90136f8c3adf53df643dd350d44d4f5b3b8"
+
+
+def test_legacy_bootstrap_policy_replays_4096_draw_indices_and_denominator() -> None:
+    budget = replace(
+        ValidationWorkBudget(),
+        bootstrap_draws=4_096,
+        max_bootstrap_draws=4_096,
+        max_bootstrap_cells=262_144,
+    )
+
+    evidence = bootstrap_weekly_mean(
+        weekly_values=(0.01, 0.02, 0.03, 0.04),
+        seed=17,
+        budget=budget,
+        mde=1.0,
+        family="A",
+        slot_id="VS-0001",
+    )
+
+    assert evidence.draw_count == 4_096
+    assert evidence.ci_lower_index == 102
+    assert evidence.ci_upper_index == 3_993
+    assert evidence.p_value == 2.0 / 4_097
 
 
 @pytest.mark.parametrize(
@@ -176,11 +247,13 @@ def test_bootstrap_rejects_empty_lt2_zero_variance_and_nonfinite_as_inconclusive
 
 
 def test_bootstrap_budget_and_mde_preflight_fail_before_sampling() -> None:
-    with pytest.raises(ValidationWorkBudgetViolation, match="bootstrap_draws must equal"):
+    invalid_budget = replace(ValidationWorkBudget())
+    object.__setattr__(invalid_budget, "max_bootstrap_draws", 4_799)
+    with pytest.raises(ValueError, match="bootstrap.*profile"):
         bootstrap_weekly_mean(
             weekly_values=(0.01, 0.02),
             seed=1,
-            budget=replace(ValidationWorkBudget(), max_bootstrap_draws=4095),
+            budget=invalid_budget,
             mde=0.001,
             family="A",
             slot_id="VS-0001",
@@ -196,6 +269,43 @@ def test_bootstrap_budget_and_mde_preflight_fail_before_sampling() -> None:
     assert invalid.terminal_state == ValidationTerminalState(
         ExecutionStatus.FAILED, ScientificDecision.NOT_EVALUATED
     )
+
+
+@pytest.mark.parametrize(
+    ("family", "expected_count"),
+    (("A", 24), ("B", 8), ("G", 8), ("E", 8), ("D", 16)),
+)
+def test_amended_draw_floor_preserves_each_frozen_family_holm_attainability(
+    family: str,
+    expected_count: int,
+) -> None:
+    slots = tuple(
+        slot
+        for slot in VALIDATION_SLOT_ROSTER
+        if slot.family == family and slot.kind is ValidationSlotKind.CORE and slot.primary
+    )
+    assert len(slots) == expected_count
+
+    def corrected(draws: int) -> tuple[bool, ...]:
+        minimum_p = 2.0 / (draws + 1)
+        statistics = tuple(
+            EvaluationStatistic(
+                slot_id=slot.slot_id,
+                family=family,
+                p_value=minimum_p if index == 0 else None,
+                status=ExecutionStatus.COMPLETED,
+                decision=(
+                    ScientificDecision.REJECTED if index == 0 else ScientificDecision.INCONCLUSIVE
+                ),
+            )
+            for index, slot in enumerate(slots)
+        )
+        return tuple(item.rejected for item in holm_family_correction(statistics, family=family))
+
+    if family == "A":
+        assert not any(corrected(4_096))
+        assert not any(corrected(4_798))
+    assert corrected(4_800) == (True,) + (False,) * (expected_count - 1)
 
 
 def test_mde_uses_identity_bound_max_finite_positive_inner_training_base_cost() -> None:

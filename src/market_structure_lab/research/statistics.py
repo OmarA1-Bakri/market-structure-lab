@@ -18,15 +18,15 @@ from market_structure_lab.research.models import (
     VALIDATION_SLOT_ROSTER,
     ValidationSlotKind,
     ValidationWorkBudget,
-    ValidationWorkBudgetViolation,
     ValidationWorkDemand,
 )
 
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PROGRAMME_ID = re.compile(r"^VP-[a-f0-9]{64}$")
-_BOOTSTRAP_DRAWS = 4_096
-_CI_LOWER_INDEX = 102
-_CI_UPPER_INDEX = 3_993
+_BOOTSTRAP_POLICIES = {
+    (4_096, 4_096, 262_144): (102, 3_993),
+    (4_800, 4_800, 307_200): (119, 4_679),
+}
 _FAMILY_ALPHA = 0.01
 _EXPECTED_PRIMARY_COUNTS = {"A": 24, "B": 8, "G": 8, "E": 8, "D": 16}
 _REQUIRED_CONTROLS = {
@@ -475,7 +475,13 @@ def aggregate_weekly_vectors(
 
 
 def _inconclusive_bootstrap(
-    *, reason: str, support: int, seed: int, draw_count: int = _BOOTSTRAP_DRAWS
+    *,
+    reason: str,
+    support: int,
+    seed: int,
+    draw_count: int,
+    ci_lower_index: int,
+    ci_upper_index: int,
 ) -> BootstrapEvidence:
     return BootstrapEvidence(
         status=ExecutionStatus.COMPLETED,
@@ -489,8 +495,8 @@ def _inconclusive_bootstrap(
         p_value=None,
         required_support=None,
         draw_count=draw_count,
-        ci_lower_index=_CI_LOWER_INDEX,
-        ci_upper_index=_CI_UPPER_INDEX,
+        ci_lower_index=ci_lower_index,
+        ci_upper_index=ci_upper_index,
         seed=seed,
         samples_sha256=None,
     )
@@ -541,13 +547,16 @@ def bootstrap_weekly_mean(
         raise ValueError("seed must be a non-negative integer")
     if not isinstance(budget, ValidationWorkBudget):
         raise TypeError("budget must be ValidationWorkBudget")
-    if budget.max_bootstrap_draws != _BOOTSTRAP_DRAWS or budget.bootstrap_draws != _BOOTSTRAP_DRAWS:
-        raise ValidationWorkBudgetViolation(
-            "bootstrap_draws",
-            min(budget.max_bootstrap_draws, budget.bootstrap_draws),
-            _BOOTSTRAP_DRAWS,
-            exact=True,
-        )
+    bootstrap_profile = (
+        budget.bootstrap_draws,
+        budget.max_bootstrap_draws,
+        budget.max_bootstrap_cells,
+    )
+    try:
+        ci_lower_index, ci_upper_index = _BOOTSTRAP_POLICIES[bootstrap_profile]
+    except KeyError as error:
+        raise ValueError("bootstrap budget profile is not a frozen policy") from error
+    draw_count = budget.bootstrap_draws
     if (
         isinstance(mde, bool)
         or not isinstance(mde, (int, float))
@@ -565,9 +574,9 @@ def bootstrap_weekly_mean(
             ci_upper=None,
             p_value=None,
             required_support=None,
-            draw_count=_BOOTSTRAP_DRAWS,
-            ci_lower_index=_CI_LOWER_INDEX,
-            ci_upper_index=_CI_UPPER_INDEX,
+            draw_count=draw_count,
+            ci_lower_index=ci_lower_index,
+            ci_upper_index=ci_upper_index,
             seed=seed,
             samples_sha256=None,
         )
@@ -576,27 +585,42 @@ def bootstrap_weekly_mean(
     support = len(weekly_values)
     budget.preflight(
         ValidationWorkDemand(
-            bootstrap_draws=_BOOTSTRAP_DRAWS,
-            bootstrap_cells=_BOOTSTRAP_DRAWS * support,
+            bootstrap_draws=draw_count,
+            bootstrap_cells=draw_count * support,
             bootstrap_blocks=support,
         )
     )
     if support < 2:
         return _inconclusive_bootstrap(
-            reason="fewer than two admissible weeks", support=support, seed=seed
+            reason="fewer than two admissible weeks",
+            support=support,
+            seed=seed,
+            draw_count=draw_count,
+            ci_lower_index=ci_lower_index,
+            ci_upper_index=ci_upper_index,
         )
     observed_values: list[float] = []
     for value in weekly_values:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
             return _inconclusive_bootstrap(
-                reason="non-finite weekly value", support=support, seed=seed
+                reason="non-finite weekly value",
+                support=support,
+                seed=seed,
+                draw_count=draw_count,
+                ci_lower_index=ci_lower_index,
+                ci_upper_index=ci_upper_index,
             )
         observed_values.append(float(value))
     observed = tuple(observed_values)
     sigma = stdev(observed)
     if sigma == 0.0:
         return _inconclusive_bootstrap(
-            reason="zero variance weekly means", support=support, seed=seed
+            reason="zero variance weekly means",
+            support=support,
+            seed=seed,
+            draw_count=draw_count,
+            ci_lower_index=ci_lower_index,
+            ci_upper_index=ci_upper_index,
         )
 
     alpha_power = _FAMILY_ALPHA / m_family
@@ -611,14 +635,18 @@ def bootstrap_weekly_mean(
             for cell in range(support)
         )
         / support
-        for draw in range(_BOOTSTRAP_DRAWS)
+        for draw in range(draw_count)
     )
     ordered = tuple(sorted(samples))
-    ci_lower = ordered[_CI_LOWER_INDEX]
-    ci_upper = ordered[_CI_UPPER_INDEX]
+    ci_lower = ordered[ci_lower_index]
+    ci_upper = ordered[ci_upper_index]
     n_le_zero = sum(1 for value in samples if value <= 0.0)
     n_ge_zero = sum(1 for value in samples if value >= 0.0)
-    p_value = min(1.0, 2.0 * min((1 + n_le_zero) / 4097, (1 + n_ge_zero) / 4097))
+    denominator = draw_count + 1
+    p_value = min(
+        1.0,
+        2.0 * min((1 + n_le_zero) / denominator, (1 + n_ge_zero) / denominator),
+    )
     samples_sha = hash_json("bootstrap-samples-v1", {"seed": seed, "samples": list(samples)})
 
     if support < required_support:
@@ -641,9 +669,9 @@ def bootstrap_weekly_mean(
         ci_upper=ci_upper,
         p_value=p_value,
         required_support=required_support,
-        draw_count=_BOOTSTRAP_DRAWS,
-        ci_lower_index=_CI_LOWER_INDEX,
-        ci_upper_index=_CI_UPPER_INDEX,
+        draw_count=draw_count,
+        ci_lower_index=ci_lower_index,
+        ci_upper_index=ci_upper_index,
         seed=seed,
         samples_sha256=samples_sha,
     )

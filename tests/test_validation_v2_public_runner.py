@@ -24,6 +24,7 @@ from market_structure_lab.research.validation_v2_costs import (
     publish_validation_cost_authority_v2,
 )
 from market_structure_lab.research.validation_v2_models import (
+    PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
     ValidationProgrammeConfigV2,
     ValidationRosterIdentityV2,
 )
@@ -143,7 +144,7 @@ def _public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.Monke
             [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
         ),
         access_ledger_identity=development_access_ledger_identity_v2(sources),
-        policy_identities=(),
+        policy_identities=(PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,),
         work_budget_sha256=budget.sha256,
     )
     assert minute.row_count > 0
@@ -206,4 +207,54 @@ def test_public_runner_rejects_over_budget_before_source_revalidation(
             sources=sources,
             budget=budget,
             demand=over_budget,
+        )
+
+
+def test_public_runner_rejects_missing_or_ambiguous_bootstrap_holm_amendment_before_reads(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid_policy_identities = (
+        (),
+        (("MSL-P5-SR-001", "0" * 64),),
+        (
+            ("MSL-P5-SR-001", "0" * 64),
+            PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+        ),
+    )
+    config, sources, budget, demand = _public_programme_inputs(
+        v2_chain,
+        tmp_path,
+        monkeypatch,
+    )
+    monkeypatch.setattr(
+        ValidationV2SourceBundle,
+        "revalidate",
+        lambda _self: pytest.fail("unbound amendment reached protected source revalidation"),
+    )
+
+    for policy_identities in invalid_policy_identities:
+        unbound_config = replace(config, policy_identities=policy_identities)
+        with pytest.raises(ValueError, match="MSL-P5-SR-001"):
+            run_validation_programme_v2(
+                config=unbound_config,
+                sources=sources,
+                budget=budget,
+                demand=demand,
+            )
+
+    legacy_budget = replace(
+        budget,
+        bootstrap_draws=4_096,
+        max_bootstrap_draws=4_096,
+        max_bootstrap_cells=262_144,
+    )
+    legacy_config = replace(config, work_budget_sha256=legacy_budget.sha256)
+    with pytest.raises(ValueError, match="amended.*bootstrap|4,800"):
+        run_validation_programme_v2(
+            config=legacy_config,
+            sources=sources,
+            budget=legacy_budget,
+            demand=replace(demand, bootstrap_draws=4_096),
         )

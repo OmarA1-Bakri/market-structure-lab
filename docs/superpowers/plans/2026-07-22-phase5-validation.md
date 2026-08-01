@@ -429,3 +429,9 @@ only one asset, one UTC year, one narrow parameter, or unrealistic cost/delay as
 - The causal clock, interval purging, nested selector, costs, multiplicity, budgets, controls, robustness, immutable receipts, and final-holdout batch are machine verified.
 - At least one complete bounded VP/VR lifecycle terminates truthfully even if rejected/inconclusive.
 - No live/paper trading, history rewrite, or unauthorised final-holdout access occurs.
+# Numerical amendment
+
+The exact 4,096-draw bootstrap clauses in this plan are superseded for new computations by
+`2026-08-01-phase5-bootstrap-holm-specification-amendment.md` (`MSL-P5-SR-001`). Historical
+4,096-draw evidence remains immutable and verifiable under its original identity. All other clauses
+remain in force.

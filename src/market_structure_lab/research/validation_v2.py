@@ -16,7 +16,7 @@ import json
 from math import isfinite
 from types import MappingProxyType
 import re
-from typing import cast
+from typing import Any, cast
 import weakref
 
 from market_structure_lab.core.identity import hash_json
@@ -82,6 +82,8 @@ from market_structure_lab.research.validation_v2_models import (
     AggregatePublicationIdentityV2,
     CostAuthorityIdentityV2,
     DevelopmentSplitIdentityV2,
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
     PrecisionAuthorityIdentityV2,
     SourceCoverageIdentityV2,
     SourceCoveragePublicationV2,
@@ -105,6 +107,7 @@ from market_structure_lab.research.validation_v2_splits import (
 
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PROGRAMME_ID = re.compile(r"^VPV2-[a-f0-9]{64}$")
+_FIXTURE_PROGRAMME_ID = re.compile(r"^TVPV2-[a-f0-9]{64}$")
 _RUNNER_VERSION = "phase5-validation-slot-runner-v2"
 _PRIMARY_COUNT = 64
 _FAMILY_ALPHA = 0.01
@@ -131,6 +134,20 @@ def _require_sha256(value: object, label: str) -> str:
 def _require_programme(value: object) -> str:
     if not isinstance(value, str) or _PROGRAMME_ID.fullmatch(value) is None:
         raise ValueError("programme_id must be a VPV2 identity")
+    return value
+
+
+def _require_fixture_programme(value: object) -> str:
+    if not isinstance(value, str) or _FIXTURE_PROGRAMME_ID.fullmatch(value) is None:
+        raise ValueError("fixture programme_id must be a TVPV2 identity")
+    return value
+
+
+def _require_result_programme(value: object) -> str:
+    if not isinstance(value, str) or (
+        _PROGRAMME_ID.fullmatch(value) is None and _FIXTURE_PROGRAMME_ID.fullmatch(value) is None
+    ):
+        raise ValueError("result programme_id must be a VPV2 or TVPV2 identity")
     return value
 
 
@@ -434,7 +451,7 @@ def _fixture_reader_outer_snapshot_v2(
 ) -> tuple[object, ...]:
     if type(reader.programme_id) is not str:
         raise TypeError("fixture outcome reader programme_id must be an exact string")
-    _require_programme(reader.programme_id)
+    _require_fixture_programme(reader.programme_id)
     for value, label in (
         (reader.split_sha256, "split_sha256"),
         (reader.cost_authority_sha256, "cost_authority_sha256"),
@@ -505,7 +522,7 @@ def _issue_fixture_outcome_reader_v2(
 ) -> VerifiedDevelopmentOutcomeReaderV2:
     """Issue a synthetic reader from strict original fixture bytes only."""
 
-    _require_programme(programme_id)
+    _require_fixture_programme(programme_id)
     for value, label in (
         (split_sha256, "split_sha256"),
         (cost_authority_sha256, "cost_authority_sha256"),
@@ -1198,7 +1215,7 @@ class SlotRunnerInputsV2:
     source_available: bool = True
 
     def __post_init__(self) -> None:
-        _require_programme(self.programme_id)
+        _require_fixture_programme(self.programme_id)
         _require_sha256(self.split_sha256, "split_sha256")
         _require_sha256(self.cost_authority_sha256, "cost_authority_sha256")
         if not isinstance(self.promotion_grade_costs_complete, bool):
@@ -1212,6 +1229,7 @@ class SlotRunnerInputsV2:
 
 
 _RESULT_ISSUANCE: dict[int, object] = {}
+_RESULT_FACTORY_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
 _VERIFIED_RESULTS: dict[
     int,
     tuple[
@@ -1223,6 +1241,7 @@ _VERIFIED_RESULTS: dict[
         object | None,
         Callable[[], object] | None,
         Mapping[str, object],
+        ValidationProgrammeConfigV2 | None,
     ],
 ] = {}
 
@@ -1230,6 +1249,27 @@ _MAX_RESULT_METRICS = 64
 _MAX_RESULT_METRIC_TEXT = 4_096
 _MAX_RESULT_METRICS_BYTES = 64 * 1024
 _MAX_RESULT_METRIC_INTEGER = 2**63 - 1
+
+
+def _result_factory_issuance_snapshot_v2(
+    *,
+    evidence_verifier: Callable[[], object],
+    retained_evidence: object,
+    computational_parent: ValidationSlotComputationResultV2 | None,
+    evidence_authority: object | None,
+    evidence_authority_verifier: Callable[[], object] | None,
+    receipt_authority_config: ValidationProgrammeConfigV2 | None,
+    fields: Mapping[str, object],
+) -> tuple[object, ...]:
+    return (
+        id(evidence_verifier),
+        id(retained_evidence),
+        id(computational_parent),
+        id(evidence_authority),
+        id(evidence_authority_verifier),
+        id(receipt_authority_config),
+        hash_json("phase5-validation-slot-result-factory-fields-v2", fields),
+    )
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -1421,7 +1461,7 @@ def _validate_individual_result_contract_v2(
     _validate_result_shape(result)
     if result.schema_version != "validation-slot-computation-result-v2":
         raise ValueError("slot computation result schema is invalid")
-    _require_programme(result.programme_id)
+    _require_result_programme(result.programme_id)
     slot = _result_slot_v2(result)
     if result.runner_kind != slot.kind.value:
         raise ValueError("slot computation result runner kind differs from the frozen roster")
@@ -1496,8 +1536,27 @@ def _issue_validation_slot_result_v2(
     computational_parent: ValidationSlotComputationResultV2 | None = None,
     evidence_authority: object | None = None,
     evidence_authority_verifier: Callable[[], object] | None = None,
+    receipt_authority_config: ValidationProgrammeConfigV2 | None = None,
+    _computation_factory_token: object | None = None,
     **fields: object,
 ) -> ValidationSlotComputationResultV2:
+    authorization = _RESULT_FACTORY_ISSUANCE.pop(id(_computation_factory_token), None)
+    if (
+        _computation_factory_token is None
+        or authorization is None
+        or authorization[0] is not _computation_factory_token
+        or authorization[1]
+        != _result_factory_issuance_snapshot_v2(
+            evidence_verifier=evidence_verifier,
+            retained_evidence=retained_evidence,
+            computational_parent=computational_parent,
+            evidence_authority=evidence_authority,
+            evidence_authority_verifier=evidence_authority_verifier,
+            receipt_authority_config=receipt_authority_config,
+            fields=fields,
+        )
+    ):
+        raise TypeError("slot result issuance requires its concrete computation factory")
     if (evidence_authority is None) != (evidence_authority_verifier is None):
         raise ValueError("result evidence authority and verifier must be supplied together")
     fields["metrics"] = _bounded_result_metrics_v2(fields.get("metrics"))
@@ -1537,6 +1596,7 @@ def _issue_validation_slot_result_v2(
         evidence_authority,
         evidence_authority_verifier,
         registered_payload,
+        receipt_authority_config,
     )
     return result
 
@@ -1552,6 +1612,7 @@ def _verify_registered_result_identity_v2(
     object | None,
     Callable[[], object] | None,
     Mapping[str, object],
+    ValidationProgrammeConfigV2 | None,
 ]:
     if type(result) is not ValidationSlotComputationResultV2:
         raise TypeError("slot computation result must be the exact factory-issued type")
@@ -1645,6 +1706,57 @@ def verified_validation_slot_result_payloads_v2(
         )
         payloads.append(_VERIFIED_RESULTS[id(result)][7])
     return tuple(payloads)
+
+
+def _verify_result_receipt_authority_v2(result: ValidationSlotComputationResultV2) -> None:
+    registered = _VERIFIED_RESULTS[id(result)]
+    if result.programme_id.startswith("TVPV2-"):
+        if registered[8] is not None:
+            raise ValueError("fixture result cannot retain production receipt config authority")
+        return
+    config = registered[8]
+    authority = registered[5]
+    if type(config) is not ValidationProgrammeConfigV2:
+        raise ValueError("production receipt result lacks exact programme config authority")
+    if config.programme_id != result.programme_id:
+        raise ValueError("production receipt result programme differs from config authority")
+    amendment_digests = tuple(
+        digest
+        for policy_id, digest in config.policy_identities
+        if policy_id == PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID
+    )
+    if amendment_digests != (PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,):
+        raise ValueError("production receipt config lacks exact amendment authority")
+    if type(authority) is not VerifiedPublicationOutcomeReaderV2:
+        raise ValueError("production receipt result lacks publication outcome authority")
+    reader_registration = _VERIFIED_PUBLICATION_OUTCOME_READERS.get(id(authority))
+    if (
+        reader_registration is None
+        or reader_registration.reader() is not authority
+        or reader_registration.config is not config
+    ):
+        raise ValueError("production receipt publication authority differs from config")
+
+
+def verified_receiptable_validation_slot_result_payload_v2(
+    result: ValidationSlotComputationResultV2,
+) -> Mapping[str, object]:
+    """Return one issuer snapshot only when its production or test receipt scope is valid."""
+
+    payload = verified_validation_slot_result_payload_v2(result)
+    _verify_result_receipt_authority_v2(result)
+    return payload
+
+
+def verified_receiptable_validation_slot_result_payloads_v2(
+    results: Sequence[ValidationSlotComputationResultV2],
+) -> tuple[Mapping[str, object], ...]:
+    """Return issuer snapshots only when every receipt scope is valid and unmixed."""
+
+    payloads = verified_validation_slot_result_payloads_v2(results)
+    for result in results:
+        _verify_result_receipt_authority_v2(result)
+    return payloads
 
 
 @dataclass(frozen=True, slots=True)
@@ -1829,19 +1941,37 @@ def run_slot_roster_v2(
                 raise ValueError("slot computation replay differs from its issued result")
             return inputs
 
+        retained_evidence = (inputs, budget, demand, parent, material)
+        result_fields: dict[str, Any] = {
+            "schema_version": "validation-slot-computation-result-v2",
+            "programme_id": inputs.programme_id,
+            "slot_id": slot.slot_id,
+            "attempt_number": attempt_number,
+            "runner_kind": slot.kind.value,
+            "runner_version": inputs.runner_version,
+            "parent_attempt_sha256": parent.attempt_sha256 if parent else None,
+            "parent_result_sha256": parent.result_sha256 if parent else None,
+            **material.result_fields(),
+        }
+        factory_token = object()
+        _RESULT_FACTORY_ISSUANCE[id(factory_token)] = (
+            factory_token,
+            _result_factory_issuance_snapshot_v2(
+                evidence_verifier=verify_computation_evidence,
+                retained_evidence=retained_evidence,
+                computational_parent=parent,
+                evidence_authority=None,
+                evidence_authority_verifier=None,
+                receipt_authority_config=None,
+                fields=result_fields,
+            ),
+        )
         result = _issue_validation_slot_result_v2(
             evidence_verifier=verify_computation_evidence,
-            retained_evidence=(inputs, budget, demand, parent, material),
+            retained_evidence=retained_evidence,
             computational_parent=parent,
-            schema_version="validation-slot-computation-result-v2",
-            programme_id=inputs.programme_id,
-            slot_id=slot.slot_id,
-            attempt_number=attempt_number,
-            runner_kind=slot.kind.value,
-            runner_version=inputs.runner_version,
-            parent_attempt_sha256=parent.attempt_sha256 if parent else None,
-            parent_result_sha256=parent.result_sha256 if parent else None,
-            **material.result_fields(),  # type: ignore[arg-type]
+            _computation_factory_token=factory_token,
+            **result_fields,
         )
         by_slot[slot.slot_id] = result
         results.append(result)
@@ -2272,21 +2402,41 @@ def _real_vs0001_result_v2(
             raise ValueError("VS-0001 computation replay differs from its issued result")
         return reader
 
+    retained_evidence = (config, reader, material)
+    authority_verifier = reader.verify_original
+    result_fields: dict[str, Any] = {
+        "schema_version": "validation-slot-computation-result-v2",
+        "programme_id": config.programme_id,
+        "slot_id": slot.slot_id,
+        "attempt_number": 1,
+        "runner_kind": slot.kind.value,
+        "runner_version": runner_version,
+        "parent_attempt_sha256": None,
+        "parent_result_sha256": None,
+        **material.result_fields(),
+    }
+    factory_token = object()
+    _RESULT_FACTORY_ISSUANCE[id(factory_token)] = (
+        factory_token,
+        _result_factory_issuance_snapshot_v2(
+            evidence_verifier=verify_computation_evidence,
+            retained_evidence=retained_evidence,
+            computational_parent=None,
+            evidence_authority=reader,
+            evidence_authority_verifier=authority_verifier,
+            receipt_authority_config=config,
+            fields=result_fields,
+        ),
+    )
     return _issue_validation_slot_result_v2(
         evidence_verifier=verify_computation_evidence,
-        retained_evidence=(config, reader, material),
+        retained_evidence=retained_evidence,
         computational_parent=None,
         evidence_authority=reader,
-        evidence_authority_verifier=reader.verify_original,
-        schema_version="validation-slot-computation-result-v2",
-        programme_id=config.programme_id,
-        slot_id=slot.slot_id,
-        attempt_number=1,
-        runner_kind=slot.kind.value,
-        runner_version=runner_version,
-        parent_attempt_sha256=None,
-        parent_result_sha256=None,
-        **material.result_fields(),  # type: ignore[arg-type]
+        evidence_authority_verifier=authority_verifier,
+        receipt_authority_config=config,
+        _computation_factory_token=factory_token,
+        **result_fields,
     )
 
 
@@ -2389,21 +2539,41 @@ def _unavailable_real_slot_result_v2(
             raise ValueError("unavailable slot computation replay differs from its issued result")
         return reader
 
+    retained_evidence = (config, reader, slot, parent, material)
+    authority_verifier = reader.verify_original
+    result_fields: dict[str, Any] = {
+        "schema_version": "validation-slot-computation-result-v2",
+        "programme_id": config.programme_id,
+        "slot_id": slot.slot_id,
+        "attempt_number": 1,
+        "runner_kind": slot.kind.value,
+        "runner_version": runner_version,
+        "parent_attempt_sha256": parent.attempt_sha256 if parent else None,
+        "parent_result_sha256": parent.result_sha256 if parent else None,
+        **material.result_fields(),
+    }
+    factory_token = object()
+    _RESULT_FACTORY_ISSUANCE[id(factory_token)] = (
+        factory_token,
+        _result_factory_issuance_snapshot_v2(
+            evidence_verifier=verify_computation_evidence,
+            retained_evidence=retained_evidence,
+            computational_parent=parent,
+            evidence_authority=reader,
+            evidence_authority_verifier=authority_verifier,
+            receipt_authority_config=config,
+            fields=result_fields,
+        ),
+    )
     return _issue_validation_slot_result_v2(
         evidence_verifier=verify_computation_evidence,
-        retained_evidence=(config, reader, slot, parent, material),
+        retained_evidence=retained_evidence,
         computational_parent=parent,
         evidence_authority=reader,
-        evidence_authority_verifier=reader.verify_original,
-        schema_version="validation-slot-computation-result-v2",
-        programme_id=config.programme_id,
-        slot_id=slot.slot_id,
-        attempt_number=1,
-        runner_kind=slot.kind.value,
-        runner_version=runner_version,
-        parent_attempt_sha256=parent.attempt_sha256 if parent else None,
-        parent_result_sha256=parent.result_sha256 if parent else None,
-        **material.result_fields(),
+        evidence_authority_verifier=authority_verifier,
+        receipt_authority_config=config,
+        _computation_factory_token=factory_token,
+        **result_fields,
     )
 
 
@@ -2511,6 +2681,21 @@ def run_validation_programme_v2(
     ValidationWorkBudget.preflight(budget, demand)
     if config.work_budget_sha256 != budget.sha256:
         raise ValueError("programme work budget identity differs")
+    if (
+        budget.bootstrap_draws,
+        budget.max_bootstrap_draws,
+        budget.max_bootstrap_cells,
+    ) != (4_800, 4_800, 307_200):
+        raise ValueError("V2 execution requires the amended 4,800-draw bootstrap policy")
+    amendment_digests = tuple(
+        digest
+        for policy_id, digest in config.policy_identities
+        if policy_id == PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID
+    )
+    if amendment_digests != (PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,):
+        raise ValueError(
+            f"programme must bind exactly one {PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID} policy identity"
+        )
     verify_validation_source_publication_metadata_v2(sources.source_publication)
     verify_validation_aggregate_publication_metadata_v2(sources.aggregate_publication)
     verify_validation_precision_authority_metadata_v2(sources.precision_authority)
@@ -2617,5 +2802,7 @@ __all__ = [
     "verify_original_validation_programme_run_v2",
     "verified_validation_slot_result_payload_v2",
     "verified_validation_slot_result_payloads_v2",
+    "verified_receiptable_validation_slot_result_payload_v2",
+    "verified_receiptable_validation_slot_result_payloads_v2",
     "verify_slot_results_v2",
 ]

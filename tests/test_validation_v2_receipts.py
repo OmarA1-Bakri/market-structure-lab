@@ -75,7 +75,7 @@ def issued_rosters() -> tuple[
     ).encode()
     reader = _issue_fixture_outcome_reader_v2(
         fixture_bytes,
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,
         source_publication_sha256="e" * 64,
@@ -83,7 +83,7 @@ def issued_rosters() -> tuple[
         expected_slot_ids=slot_ids,
     )
     inputs = SlotRunnerInputsV2(
-        programme_id="VPV2-" + "1" * 64,
+        programme_id="TVPV2-" + "1" * 64,
         outcome_reader=reader,
         split_sha256="c" * 64,
         cost_authority_sha256="d" * 64,

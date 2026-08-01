@@ -621,3 +621,8 @@ Create one coherent Lore close-out commit, push without force, verify remote bra
 - The bounded real non-final programme either terminates with evidence or produces a truthful immutable preflight failure.
 - Complete repository/dashboard verification and three-part plus adversarial review are recorded.
 - No strategy, portfolio, paper/live trading, exchange, leverage, or history rewriting occurs.
+# Numerical amendment
+
+The exact 4,096-draw implementation constants in this plan are superseded for new computations by
+`2026-08-01-phase5-bootstrap-holm-specification-amendment.md` (`MSL-P5-SR-001`). Historical evidence
+must not be rewritten or mixed into amended programme identities.

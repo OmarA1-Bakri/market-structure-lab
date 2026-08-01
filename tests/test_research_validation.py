@@ -233,7 +233,7 @@ def _metadata() -> ProgrammePreflightMetadata:
             outer_folds=4,
             inner_folds=3,
             evaluations=1_104,
-            bootstrap_draws=4_096,
+            bootstrap_draws=4_800,
             controls=384,
             placebos=192,
             perturbations=184,

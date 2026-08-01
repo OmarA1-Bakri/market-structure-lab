@@ -9,6 +9,10 @@ from market_structure_lab.research.validation_v2_models import (
     AggregatePublicationIdentityV2,
     CostAuthorityIdentityV2,
     DevelopmentSplitIdentityV2,
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_PAYLOAD,
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
+    PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
     PrecisionAuthorityIdentityV2,
     SourceCoverageIdentityV2,
     SourcePublicationIdentityV2,
@@ -50,6 +54,47 @@ def test_split_identity_changes_config_and_programme_identity() -> None:
 
     assert first.config_sha256 != second.config_sha256
     assert first.programme_id != second.programme_id
+
+
+def test_bootstrap_holm_amendment_changes_config_and_programme_identity() -> None:
+    historical = _config(policy_identities=())
+    amended = replace(
+        historical,
+        policy_identities=(PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,),
+    )
+
+    assert historical.config_sha256 != amended.config_sha256
+    assert historical.programme_id != amended.programme_id
+
+    historical_publication = historical.to_publication_dict()
+    assert load_validation_programme_config_v2(historical_publication) == historical
+    assert historical_publication["programme_id"] == historical.programme_id
+
+
+def test_bootstrap_holm_amendment_identity_has_a_canonical_auditable_preimage() -> None:
+    assert PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID == "MSL-P5-SR-001"
+    assert PHASE5_BOOTSTRAP_HOLM_AMENDMENT_PAYLOAD == {
+        "schema_version": "phase5-bootstrap-holm-specification-amendment-v1",
+        "amendment_id": "MSL-P5-SR-001",
+        "bootstrap_draws": 4_800,
+        "add_one_denominator": 4_801,
+        "ci_indices": (119, 4_679),
+        "max_bootstrap_cells": 307_200,
+        "max_bootstrap_blocks": 64,
+        "family_alpha": "0.01",
+        "family_primary_counts": (("A", 24), ("B", 8), ("D", 16), ("E", 8), ("G", 8)),
+        "p_value_method": "two-sided-add-one",
+        "multiplicity_method": "family-local-holm",
+        "unevaluable_primary_p_value": "1",
+    }
+    assert (
+        PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256
+        == "72c42270e237403a2c098f4599e6e09ff032d15009d64dd525dda987a8fff2c3"
+    )
+    assert PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY == (
+        PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+        PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
+    )
 
 
 def test_programme_id_is_derived_after_config_canonicalization() -> None:
