@@ -26,6 +26,7 @@ from market_structure_lab.research.validation_v2 import (
     ValidationV2SourceBundle,
     development_access_ledger_identity_v2,
     run_validation_programme_v2,
+    verify_original_validation_slot_result_v2,
 )
 from market_structure_lab.research.validation_v2_costs import (
     publish_validation_cost_authority_v2,
@@ -566,6 +567,15 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     assert result.decision == "inconclusive"
     assert result.p_value is None
     assert result.metrics["event_count"] == 1
+    assert verify_original_validation_slot_result_v2(result) is result
+    real_compute = module._compute_real_vs0001_material_v2  # noqa: SLF001
+
+    def fabricated_replay(**kwargs: object) -> object:
+        return replace(real_compute(**kwargs), reason="fabricated replay")  # type: ignore[arg-type]
+
+    monkeypatch.setattr(module, "_compute_real_vs0001_material_v2", fabricated_replay)
+    with pytest.raises(ValueError, match="computation replay differs"):
+        verify_original_validation_slot_result_v2(result)
 
 
 def test_source_bundle_construction_is_passive_until_runner_budget_admission(
