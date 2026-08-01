@@ -1,12 +1,27 @@
+from __future__ import annotations
+
+import json
 from pathlib import Path
 import shutil
 
 import pytest
 
-from market_structure_lab.core.identity import hash_json
+from market_structure_lab.research.models import (
+    VALIDATION_SLOT_ROSTER,
+    ValidationWorkBudget,
+    ValidationWorkDemand,
+)
+from market_structure_lab.research.validation_v2 import (
+    SlotRunnerInputsV2,
+    ValidationSlotComputationResultV2,
+    _issue_fixture_outcome_reader_v2,
+    run_slot_roster_v2,
+)
 from market_structure_lab.research.validation_v2_receipts import (
     publish_validation_v2_receipt,
+    publish_validation_v2_receipts,
     select_terminal_attempts_v2,
+    verify_validation_v2_receipt,
     verify_validation_v2_receipts,
 )
 
@@ -16,7 +31,6 @@ class _PathReceiptClaim:
         self.path = path
         self.identity = path.stat().st_ino
         self.move_hook = move_hook
-        self.published_member: Path | None = None
 
     def __enter__(self):  # type: ignore[no-untyped-def]
         return self
@@ -26,30 +40,12 @@ class _PathReceiptClaim:
 
     def move_to(self, destination: Path) -> None:
         if self.move_hook is not None:
-            self.move_hook(self, destination, True)
+            self.move_hook(self, destination)
         owned = self._locate_owned()
         if owned is None:
             raise RuntimeError("owned receipt stage was replaced")
         owned.rename(destination)
         self.path = destination
-
-    def move_member_to(
-        self,
-        relative: str,
-        destination: Path,
-        *,
-        destination_directory_handle: object | None = None,
-    ) -> None:
-        del destination_directory_handle
-        if self.move_hook is not None:
-            self.move_hook(self, destination, False)
-        owned = self._locate_owned()
-        if owned is None:
-            raise RuntimeError("owned receipt stage was replaced")
-        source = owned / relative
-        source.rename(destination)
-        self.path = owned
-        self.published_member = destination
 
     def delete_exact(self) -> None:
         owned = self._locate_owned()
@@ -63,120 +59,185 @@ class _PathReceiptClaim:
         return None
 
 
-class _PathReceiptFilesystem:
-    def pin_rename_directory(self, path: Path):  # type: ignore[no-untyped-def]
-        from contextlib import nullcontext
-
-        return nullcontext(path)
-
-    def regular_exists_relative(self, directory: Path, name: str) -> bool:
-        return (directory / name).is_file()
-
-
-def _payload(slot: str, attempt: int) -> dict[str, object]:
-    input_sha256 = "b" * 64
-    attempt_sha256 = hash_json(
-        "phase5-validation-slot-attempt-v2",
-        {"slot_id": slot, "input_sha256": input_sha256, "attempt_number": attempt},
-    )
-    payload = {
-        "schema_version": "validation-slot-computation-result-v2",
-        "programme_id": "VPV2-" + "1" * 64,
-        "slot_id": slot,
-        "attempt_number": attempt,
-        "runner_kind": "core",
-        "runner_version": "slot-runner-v2",
-        "attempt_sha256": attempt_sha256,
-        "input_sha256": input_sha256,
-        "evidence_sha256": "c" * 64,
-        "result_sha256": "",
-        "parent_slot_id": None,
-        "parent_attempt_sha256": None,
-        "parent_result_sha256": None,
-        "execution_status": "completed",
-        "decision": "inconclusive",
-        "computation_completed": True,
-        "reason": "fixture result",
-        "p_value": None,
-        "metrics": {"estimate": 0.0},
-    }
-    payload["result_sha256"] = hash_json(
-        "phase5-validation-slot-computation-result-v2",
+@pytest.fixture(scope="module")
+def issued_rosters() -> tuple[
+    tuple[ValidationSlotComputationResultV2, ...],
+    tuple[ValidationSlotComputationResultV2, ...],
+]:
+    slot_ids = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
+    fixture_bytes = json.dumps(
         {
-            "programme_id": payload["programme_id"],
-            "slot_id": slot,
-            "attempt_sha256": attempt_sha256,
-            "input_sha256": input_sha256,
-            "evidence_sha256": payload["evidence_sha256"],
-            "execution_status": payload["execution_status"],
-            "decision": payload["decision"],
-            "computation_completed": payload["computation_completed"],
-            "p_value": payload["p_value"],
-            "metrics": payload["metrics"],
+            "schema_version": "validation-v2-outcome-fixture-v1",
+            "slots": {slot_id: [] for slot_id in slot_ids},
         },
+        sort_keys=True,
+    ).encode()
+    reader = _issue_fixture_outcome_reader_v2(
+        fixture_bytes,
+        programme_id="VPV2-" + "1" * 64,
+        split_sha256="c" * 64,
+        cost_authority_sha256="d" * 64,
+        source_publication_sha256="e" * 64,
+        aggregate_publication_sha256="f" * 64,
+        expected_slot_ids=slot_ids,
     )
-    return payload
+    inputs = SlotRunnerInputsV2(
+        programme_id="VPV2-" + "1" * 64,
+        outcome_reader=reader,
+        split_sha256="c" * 64,
+        cost_authority_sha256="d" * 64,
+        promotion_grade_costs_complete=False,
+        precision_available=True,
+        source_available=False,
+    )
+    budget = ValidationWorkBudget()
+    demand = ValidationWorkDemand()
+    first = run_slot_roster_v2(inputs, budget=budget, demand=demand)
+    retry = run_slot_roster_v2(
+        inputs,
+        budget=budget,
+        demand=demand,
+        attempt_numbers={slot_id: 2 for slot_id in slot_ids},
+    )
+    return first, retry
 
 
-def test_receipts_are_immutable_and_retry_is_additive(tmp_path: Path) -> None:
-    first = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
-    second = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+def test_receipts_are_immutable_and_retry_is_additive(
+    tmp_path: Path,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
+) -> None:
+    first_results, retry_results = issued_rosters
+    first = publish_validation_v2_receipt(tmp_path, first_results[0])
+    second = publish_validation_v2_receipt(
+        tmp_path,
+        retry_results[0],
+        predecessor_receipt=first,
+    )
     assert first.path != second.path
+    assert first.path.parents[1] != second.path.parents[1]
     with pytest.raises(FileExistsError):
-        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+        publish_validation_v2_receipt(tmp_path, first_results[0])
     selected = select_terminal_attempts_v2((first, second))
-    assert selected["VS-0001"].attempt_number == 2
+    assert selected["VS-0001"] is second
 
 
-def test_verifier_reports_receipts_separately_from_computations(tmp_path: Path) -> None:
-    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+def test_verifier_reports_receipts_separately_from_computations(
+    tmp_path: Path,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
+) -> None:
+    first_results, _ = issued_rosters
+    receipt = publish_validation_v2_receipt(tmp_path, first_results[0])
     report = verify_validation_v2_receipts(
-        (receipt,), expected_slot_ids=("VS-0001",), runner_version="slot-runner-v2"
+        (receipt,),
+        expected_slot_ids=("VS-0001",),
+        runner_version=first_results[0].runner_version,
     )
     assert report.planned_slots == 1
     assert report.attempted_slots == 1
-    assert report.completed_slot_computations == 1
-    assert report.inconclusive_slot_computations == 1
+    assert report.completed_slot_computations == 0
+    assert report.not_evaluated_slots == 1
+    assert report.failed_slots == 1
     assert report.receipt_count == 1
+    assert report.attempted_attempts == 1
+    assert report.failed_attempts == 1
 
 
-def test_receipt_rejects_retry_gaps_and_unsafe_slot_paths(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="slot"):
-        publish_validation_v2_receipt(tmp_path, _payload("../escape", 1))
-    with pytest.raises(ValueError, match="attempt"):
-        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
+def test_receipt_rejects_retry_gaps_and_wrong_predecessor(
+    tmp_path: Path,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
+) -> None:
+    first_results, retry_results = issued_rosters
+    first_receipts = publish_validation_v2_receipts(tmp_path, first_results[:2])
+    wrong = first_receipts[1]
+    with pytest.raises(ValueError, match="predecessor"):
+        publish_validation_v2_receipt(tmp_path, retry_results[0])
+    with pytest.raises(ValueError, match="predecessor"):
+        publish_validation_v2_receipt(
+            tmp_path,
+            retry_results[0],
+            predecessor_receipt=wrong,
+        )
 
 
-def test_receipt_publication_failure_leaves_no_receipt_or_temporary(
+def test_report_retains_all_failed_retry_attempts(
+    tmp_path: Path,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
+) -> None:
+    first_results, retry_results = issued_rosters
+    first = publish_validation_v2_receipt(tmp_path, first_results[0])
+    second = publish_validation_v2_receipt(
+        tmp_path,
+        retry_results[0],
+        predecessor_receipt=first,
+    )
+    report = verify_validation_v2_receipts(
+        (first, second),
+        expected_slot_ids=("VS-0001",),
+        runner_version=first_results[0].runner_version,
+    )
+
+    assert report.attempted_slots == 1
+    assert report.failed_slots == 1
+    assert report.attempted_attempts == 2
+    assert report.failed_attempts == 2
+    assert report.receipt_count == 2
+
+
+def test_receipt_batch_failure_leaves_no_receipt_or_temporary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
 ) -> None:
     from market_structure_lab.research import validation_v2_receipts as module
 
-    def fail_move(_source: Path, _destination: Path) -> None:
-        raise OSError("durable publication failed")
-
-    monkeypatch.setattr(module, "durable_move_no_replace", fail_move)
+    first_results, _ = issued_rosters
+    monkeypatch.setattr(
+        module,
+        "_commit_staged_receipt_batch_v2",
+        lambda *_args: (_ for _ in ()).throw(OSError("durable publication failed")),
+    )
 
     with pytest.raises(OSError, match="durable publication failed"):
-        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+        publish_validation_v2_receipts(tmp_path, first_results[:2])
 
-    assert not (tmp_path / "VS-0001").exists()
     assert tuple(tmp_path.iterdir()) == ()
 
 
-def test_receipt_commits_new_slot_directory_before_durable_file_move(
+def test_posix_receipt_commits_complete_stage_before_one_durable_move(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
 ) -> None:
     from market_structure_lab.research import validation_v2_receipts as module
 
+    first_results, _ = issued_rosters
     calls: list[tuple[str, Path]] = []
 
     def move(source: Path, destination: Path) -> None:
         calls.append(("move", destination))
+        assert (source / "manifest.json").is_file()
+        assert len(tuple(source.glob("VS-*/attempt-*.json"))) == 2
         source.rename(destination)
 
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: False)
     monkeypatch.setattr(
         module,
         "fsync_directory_posix",
@@ -184,30 +245,31 @@ def test_receipt_commits_new_slot_directory_before_durable_file_move(
     )
     monkeypatch.setattr(module, "durable_move_no_replace", move)
 
-    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+    receipts = publish_validation_v2_receipts(tmp_path, first_results[:2])
 
-    assert receipt.path.is_file()
-    assert calls == [
-        ("fsync", tmp_path),
-        ("move", receipt.path),
-    ]
+    assert len(receipts) == 2
+    assert [kind for kind, _ in calls].count("move") == 1
+    assert calls[-1][0] == "move"
 
 
-def test_windows_receipt_uses_write_through_move_without_directory_fsync(
+def test_windows_receipt_uses_one_owned_tree_move_without_directory_fsync(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
 ) -> None:
     from market_structure_lab.research import validation_v2_receipts as module
 
-    moves: list[tuple[Path, Path, bool, tuple[str, ...]]] = []
+    first_results, _ = issued_rosters
+    moves: list[tuple[Path, Path, tuple[str, ...]]] = []
 
-    def move(claim: _PathReceiptClaim, destination: Path, is_directory: bool) -> None:
-        assert not destination.exists()
+    def move(claim: _PathReceiptClaim, destination: Path) -> None:
         moves.append(
             (
                 claim.path,
                 destination,
-                is_directory,
                 tuple(sorted(path.name for path in claim.path.iterdir())),
             )
         )
@@ -226,35 +288,32 @@ def test_windows_receipt_uses_write_through_move_without_directory_fsync(
         lambda path: _PathReceiptClaim(path, move),
     )
 
-    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+    receipts = publish_validation_v2_receipts(tmp_path, first_results[:2])
 
     assert len(moves) == 1
-    source, destination, source_was_directory, members = moves[0]
-    assert destination == receipt.path.parent
+    source, destination, members = moves[0]
+    assert destination == receipts[0].path.parents[1]
     assert source.parent == tmp_path
-    assert source_was_directory is True
-    assert members == (receipt.path.name,)
+    assert members == ("VS-0001", "VS-0002", "manifest.json")
     assert not source.exists()
 
 
-def test_windows_first_receipt_move_failure_leaves_no_slot_or_stage(
+def test_windows_batch_move_failure_leaves_no_owned_stage_or_batch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
 ) -> None:
     from market_structure_lab.research import validation_v2_receipts as module
 
-    def fail_move(claim: _PathReceiptClaim, destination: Path, is_directory: bool) -> None:
-        assert claim.path.is_dir()
-        assert is_directory
-        assert not destination.exists()
+    first_results, _ = issued_rosters
+
+    def fail_move(_claim: _PathReceiptClaim, _destination: Path) -> None:
         raise OSError("Windows write-through move failed")
 
     monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(
-        module,
-        "_windows_handle_filesystem",
-        _PathReceiptFilesystem,
-    )
     monkeypatch.setattr(
         module,
         "_claim_windows_owned_tree",
@@ -262,56 +321,26 @@ def test_windows_first_receipt_move_failure_leaves_no_slot_or_stage(
     )
 
     with pytest.raises(OSError, match="write-through"):
-        publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+        publish_validation_v2_receipts(tmp_path, first_results[:2])
 
     assert tuple(tmp_path.iterdir()) == ()
 
 
-def test_windows_receipt_first_slot_directory_and_retry_file_are_additive(
+def test_windows_stage_swap_preserves_foreign_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
 ) -> None:
     from market_structure_lab.research import validation_v2_receipts as module
 
-    moves: list[tuple[Path, Path, bool]] = []
-
-    def move(claim: _PathReceiptClaim, destination: Path, is_directory: bool) -> None:
-        moves.append((claim.path, destination, is_directory))
-
-    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(
-        module,
-        "_windows_handle_filesystem",
-        _PathReceiptFilesystem,
-    )
-    monkeypatch.setattr(
-        module,
-        "_claim_windows_owned_tree",
-        lambda path: _PathReceiptClaim(path, move),
-    )
-
-    first = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
-    second = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
-
-    assert first.path.is_file()
-    assert second.path.is_file()
-    assert [(destination, was_directory) for _, destination, was_directory in moves] == [
-        (tmp_path / "VS-0001", True),
-        (second.path, False),
-    ]
-
-
-def test_windows_first_receipt_stage_swap_preserves_foreign_tree(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from market_structure_lab.research import validation_v2_receipts as module
-
+    first_results, _ = issued_rosters
     foreign_stage: Path | None = None
 
-    def swap(claim: _PathReceiptClaim, _destination: Path, is_directory: bool) -> None:
+    def swap(claim: _PathReceiptClaim, _destination: Path) -> None:
         nonlocal foreign_stage
-        assert is_directory
         owned_away = claim.path.with_name(claim.path.name + ".owned")
         claim.path.rename(owned_away)
         claim.path.mkdir()
@@ -325,50 +354,36 @@ def test_windows_first_receipt_stage_swap_preserves_foreign_tree(
         lambda path: _PathReceiptClaim(path, swap),
     )
 
-    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
+    receipts = publish_validation_v2_receipts(tmp_path, first_results[:2])
 
-    assert receipt.path.is_file()
+    assert all(verify_validation_v2_receipt(receipt) is receipt for receipt in receipts)
     assert foreign_stage is not None
     assert (foreign_stage / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"
 
 
-def test_windows_retry_receipt_stage_swap_preserves_foreign_tree(
+def test_concurrent_identical_batch_commit_has_one_winner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
 ) -> None:
     from market_structure_lab.research import validation_v2_receipts as module
 
-    monkeypatch.setattr(module, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(
-        module,
-        "_windows_handle_filesystem",
-        _PathReceiptFilesystem,
-    )
-    monkeypatch.setattr(
-        module,
-        "_claim_windows_owned_tree",
-        lambda path: _PathReceiptClaim(path),
-    )
-    publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 1))
-    foreign_stage: Path | None = None
+    first_results, _ = issued_rosters
+    real_move = module.durable_move_no_replace
+    destinations: set[Path] = set()
 
-    def swap(claim: _PathReceiptClaim, _destination: Path, is_directory: bool) -> None:
-        nonlocal foreign_stage
-        assert not is_directory
-        owned_away = claim.path.with_name(claim.path.name + ".owned")
-        claim.path.rename(owned_away)
-        claim.path.mkdir()
-        (claim.path / "foreign-sentinel").write_text("preserve", encoding="utf-8")
-        foreign_stage = claim.path
+    def one_winner(source: Path, destination: Path) -> None:
+        if destination in destinations:
+            raise FileExistsError(destination)
+        destinations.add(destination)
+        real_move(source, destination)
 
-    monkeypatch.setattr(
-        module,
-        "_claim_windows_owned_tree",
-        lambda path: _PathReceiptClaim(path, swap),
-    )
-
-    receipt = publish_validation_v2_receipt(tmp_path, _payload("VS-0001", 2))
-
-    assert receipt.path.is_file()
-    assert foreign_stage is not None
-    assert (foreign_stage / "foreign-sentinel").read_text(encoding="utf-8") == "preserve"
+    monkeypatch.setattr(module, "_is_windows_platform", lambda: False)
+    monkeypatch.setattr(module, "durable_move_no_replace", one_winner)
+    first = publish_validation_v2_receipts(tmp_path, first_results[:2])
+    with pytest.raises(FileExistsError):
+        publish_validation_v2_receipts(tmp_path, first_results[:2])
+    assert all(verify_validation_v2_receipt(receipt) is receipt for receipt in first)

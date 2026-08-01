@@ -15,6 +15,7 @@ from market_structure_lab.research.validation_v2 import (
     apply_global_holm_v2,
     global_holm_pvalues_v2,
     run_slot_roster_v2,
+    verify_original_validation_slot_result_v2,
     verify_slot_results_v2,
 )
 
@@ -116,9 +117,29 @@ def test_verifier_rejects_fanout_and_wrong_runner() -> None:
     results = list(
         run_slot_roster_v2(_inputs(), budget=ValidationWorkBudget(), demand=ValidationWorkDemand())
     )
-    results[1] = replace(results[1], attempt_sha256=results[0].attempt_sha256)
-    with pytest.raises(ValueError, match="attempt"):
-        verify_slot_results_v2(tuple(results), runner_version="slot-runner-v2")
+    original_attempt = results[1].attempt_sha256
+    object.__setattr__(results[1], "attempt_sha256", results[0].attempt_sha256)
+    try:
+        with pytest.raises(ValueError, match="immutable|attempt"):
+            verify_slot_results_v2(tuple(results), runner_version="slot-runner-v2")
+    finally:
+        object.__setattr__(results[1], "attempt_sha256", original_attempt)
+
+    original_runner = results[1].runner_version
+    object.__setattr__(results[1], "runner_version", "wrong-runner-v2")
+    try:
+        with pytest.raises(ValueError, match="immutable|runner"):
+            verify_slot_results_v2(tuple(results), runner_version="slot-runner-v2")
+    finally:
+        object.__setattr__(results[1], "runner_version", original_runner)
+
+
+def test_result_factory_rejects_replacement_before_fanout_verification() -> None:
+    results = run_slot_roster_v2(
+        _inputs(), budget=ValidationWorkBudget(), demand=ValidationWorkDemand()
+    )
+    with pytest.raises(TypeError, match="factory"):
+        replace(results[1], attempt_sha256=results[0].attempt_sha256)
 
 
 def test_exact_counts_role_dispatch_and_additive_retry_identities() -> None:
@@ -163,3 +184,21 @@ def test_global_holm_known_boundary_ties_and_invalid_values() -> None:
         attacked[primary_ids[0]] = invalid
         with pytest.raises(ValueError, match="finite|\\[0, 1\\]"):
             global_holm_pvalues_v2(attacked)
+
+
+def test_result_verifier_replays_slot_computation_instead_of_trusting_registered_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    result = run_slot_roster_v2(
+        _inputs(), budget=ValidationWorkBudget(), demand=ValidationWorkDemand()
+    )[0]
+    monkeypatch.setattr(
+        module,
+        "_role_metrics",
+        lambda *_args, **_kwargs: ({"attacker_fabricated": 1}, 0.0),
+    )
+
+    with pytest.raises(ValueError, match="replay differs"):
+        verify_original_validation_slot_result_v2(result)

@@ -9,7 +9,7 @@ result is bound to one frozen roster slot.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -17,6 +17,7 @@ import json
 from math import isfinite
 from types import MappingProxyType
 import re
+from typing import cast
 import weakref
 
 from market_structure_lab.core.identity import hash_json
@@ -108,7 +109,12 @@ _OUTCOME_FACTORY = object()
 _OUTCOME_READER_FACTORY = object()
 _PUBLICATION_OUTCOME_READER_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
 _VERIFIED_OUTCOME_READERS: dict[
-    int, tuple[weakref.ReferenceType[VerifiedDevelopmentOutcomeReaderV2], bytes]
+    int,
+    tuple[
+        weakref.ReferenceType[VerifiedDevelopmentOutcomeReaderV2],
+        tuple[object, ...],
+        Mapping[str, tuple[tuple[object, ...], ...]],
+    ],
 ] = {}
 
 
@@ -345,12 +351,10 @@ class VerifiedDevelopmentOutcomeReaderV2:
         cost_authority_sha256: str,
     ) -> tuple[AttachedDevelopmentOutcomeV2, ...]:
         registration = _VERIFIED_OUTCOME_READERS.get(id(self))
-        if (
-            registration is None
-            or registration[0]() is not self
-            or registration[1] != self.canonical_bytes
-        ):
+        if registration is None or registration[0]() is not self:
             raise ValueError("outcome reader is not the registered original")
+        if _fixture_reader_outer_snapshot_v2(self) != registration[1]:
+            raise ValueError("outcome reader differs from its registered original")
         if (
             self.programme_id != programme_id
             or self.split_sha256 != split_sha256
@@ -359,7 +363,136 @@ class VerifiedDevelopmentOutcomeReaderV2:
             raise ValueError("outcome reader authority binding differs")
         if slot.slot_id not in self._outcomes_by_slot:
             raise ValueError("outcome reader is missing the requested slot")
-        return self._outcomes_by_slot[slot.slot_id]
+        outcomes = self._outcomes_by_slot[slot.slot_id]
+        if _fixture_outcome_rows_snapshot_v2(outcomes) != registration[2][slot.slot_id]:
+            raise ValueError("outcome reader slot rows differ from their registered original")
+        return outcomes
+
+    def verify_original(self) -> VerifiedDevelopmentOutcomeReaderV2:
+        """Revalidate this exact fixture reader against its registered bytes."""
+
+        return _verify_fixture_outcome_reader_v2(self)
+
+
+def _fixture_outcome_snapshot_v2(outcome: AttachedDevelopmentOutcomeV2) -> tuple[object, ...]:
+    if type(outcome) is not AttachedDevelopmentOutcomeV2:
+        raise TypeError("fixture outcome row must be the exact verifier-issued type")
+    for name in ("event_id", "slot_id", "fold_id", "symbol", "timeframe", "partition_role"):
+        value = getattr(outcome, name)
+        if type(value) is not str or not value:
+            raise TypeError("fixture outcome row string field has an invalid exact type")
+    if type(outcome.timestamp) is not datetime:
+        raise TypeError("fixture outcome timestamp must be an exact datetime")
+    _require_utc(outcome.timestamp, "fixture outcome timestamp")
+    for name in ("net_return", "detector_metric", "volume"):
+        value = getattr(outcome, name)
+        if type(value) is not float or not isfinite(value):
+            raise TypeError("fixture outcome numeric field has an invalid exact type")
+    if outcome.volume < 0:
+        raise ValueError("fixture outcome volume must be non-negative")
+    for name in (
+        "source_partition_sha256",
+        "aggregate_row_sha256",
+        "split_sha256",
+        "cost_authority_sha256",
+        "source_publication_sha256",
+        "aggregate_publication_sha256",
+    ):
+        value = getattr(outcome, name)
+        if type(value) is not str:
+            raise TypeError("fixture outcome hash field has an invalid exact type")
+        _require_sha256(value, name)
+    return (
+        outcome.event_id,
+        outcome.slot_id,
+        outcome.fold_id,
+        outcome.symbol,
+        outcome.timeframe,
+        outcome.timestamp,
+        outcome.net_return,
+        outcome.source_partition_sha256,
+        outcome.aggregate_row_sha256,
+        outcome.split_sha256,
+        outcome.cost_authority_sha256,
+        outcome.source_publication_sha256,
+        outcome.aggregate_publication_sha256,
+        outcome.detector_metric,
+        outcome.volume,
+        outcome.partition_role,
+        outcome.outcome_sha256,
+    )
+
+
+def _fixture_outcome_rows_snapshot_v2(
+    outcomes: tuple[AttachedDevelopmentOutcomeV2, ...],
+) -> tuple[tuple[object, ...], ...]:
+    if type(outcomes) is not tuple:
+        raise TypeError("fixture outcome rows must be an exact tuple")
+    return tuple(_fixture_outcome_snapshot_v2(outcome) for outcome in outcomes)
+
+
+def _fixture_reader_outer_snapshot_v2(
+    reader: VerifiedDevelopmentOutcomeReaderV2,
+) -> tuple[object, ...]:
+    if type(reader.programme_id) is not str:
+        raise TypeError("fixture outcome reader programme_id must be an exact string")
+    _require_programme(reader.programme_id)
+    for value, label in (
+        (reader.split_sha256, "split_sha256"),
+        (reader.cost_authority_sha256, "cost_authority_sha256"),
+        (reader.source_publication_sha256, "source_publication_sha256"),
+        (reader.aggregate_publication_sha256, "aggregate_publication_sha256"),
+        (reader.fixture_sha256, "fixture_sha256"),
+    ):
+        if type(value) is not str:
+            raise TypeError(f"fixture outcome reader {label} must be an exact string")
+        _require_sha256(value, label)
+    if type(reader.slot_ids) is not tuple or any(
+        type(slot_id) is not str for slot_id in reader.slot_ids
+    ):
+        raise TypeError("fixture outcome reader slot_ids must be an exact string tuple")
+    if type(reader.canonical_bytes) is not bytes:
+        raise TypeError("fixture outcome reader canonical bytes must be exact bytes")
+    if type(reader._outcomes_by_slot) is not MappingProxyType:
+        raise TypeError("fixture outcome reader slot mapping must be sealed")
+    if tuple(reader._outcomes_by_slot) != reader.slot_ids:
+        raise ValueError("fixture outcome reader slot order changed")
+    return (
+        reader.programme_id,
+        reader.split_sha256,
+        reader.cost_authority_sha256,
+        reader.source_publication_sha256,
+        reader.aggregate_publication_sha256,
+        reader.slot_ids,
+        reader.fixture_sha256,
+        reader.canonical_bytes,
+    )
+
+
+def _fixture_reader_outcomes_snapshot_v2(
+    reader: VerifiedDevelopmentOutcomeReaderV2,
+) -> tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]:
+    return tuple(
+        (slot_id, _fixture_outcome_rows_snapshot_v2(reader._outcomes_by_slot[slot_id]))
+        for slot_id in reader.slot_ids
+    )
+
+
+def _verify_fixture_outcome_reader_v2(
+    reader: VerifiedDevelopmentOutcomeReaderV2,
+) -> VerifiedDevelopmentOutcomeReaderV2:
+    if type(reader) is not VerifiedDevelopmentOutcomeReaderV2:
+        raise TypeError("fixture outcome reader must be the exact verifier-issued type")
+    registration = _VERIFIED_OUTCOME_READERS.get(id(reader))
+    if registration is None or registration[0]() is not reader:
+        raise ValueError("fixture outcome reader is not the registered original")
+    if registration[1] != _fixture_reader_outer_snapshot_v2(reader):
+        raise ValueError("fixture outcome reader differs from its registered original")
+    if tuple(registration[2].items()) != _fixture_reader_outcomes_snapshot_v2(reader):
+        raise ValueError("fixture outcome reader rows changed from their registered originals")
+    if hashlib.sha256(reader.canonical_bytes).hexdigest() != reader.fixture_sha256:
+        raise ValueError("fixture outcome reader computation evidence changed")
+    return reader
 
 
 def _issue_fixture_outcome_reader_v2(
@@ -483,7 +616,11 @@ def _issue_fixture_outcome_reader_v2(
             _VERIFIED_OUTCOME_READERS.pop(identifier, None)
 
     reference = weakref.ref(reader, cleanup)
-    _VERIFIED_OUTCOME_READERS[identifier] = (reference, fixture_bytes)
+    _VERIFIED_OUTCOME_READERS[identifier] = (
+        reference,
+        _fixture_reader_outer_snapshot_v2(reader),
+        MappingProxyType(dict(_fixture_reader_outcomes_snapshot_v2(reader))),
+    )
     return reader
 
 
@@ -1405,7 +1542,26 @@ class SlotRunnerInputsV2:
             raise TypeError("outcome_reader must be verifier-issued")
 
 
-@dataclass(frozen=True, slots=True)
+_RESULT_ISSUANCE: dict[int, object] = {}
+_VERIFIED_RESULTS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[ValidationSlotComputationResultV2],
+        tuple[object, ...],
+        Callable[[], object],
+        object,
+        ValidationSlotComputationResultV2 | None,
+        Mapping[str, object],
+    ],
+] = {}
+
+_MAX_RESULT_METRICS = 64
+_MAX_RESULT_METRIC_TEXT = 4_096
+_MAX_RESULT_METRICS_BYTES = 64 * 1024
+_MAX_RESULT_METRIC_INTEGER = 2**63 - 1
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ValidationSlotComputationResultV2:
     schema_version: str
     programme_id: str
@@ -1425,8 +1581,12 @@ class ValidationSlotComputationResultV2:
     reason: str
     p_value: float | None
     metrics: Mapping[str, float | int | str]
+    _factory_token: InitVar[object | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _factory_token: object | None) -> None:
+        token = _RESULT_ISSUANCE.pop(id(_factory_token), None)
+        if _factory_token is None or token is not _factory_token:
+            raise TypeError("ValidationSlotComputationResultV2 requires its computation factory")
         if self.schema_version != "validation-slot-computation-result-v2":
             raise ValueError("slot result schema is invalid")
         for value, label in (
@@ -1457,7 +1617,9 @@ class ValidationSlotComputationResultV2:
             raise ValueError("completed slot computation requires metrics")
         if not self.computation_completed and self.p_value is not None:
             raise ValueError("not-evaluated slot cannot carry a p-value")
-        object.__setattr__(self, "metrics", MappingProxyType(dict(self.metrics)))
+        object.__setattr__(
+            self, "metrics", MappingProxyType(_bounded_result_metrics_v2(self.metrics))
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -1489,6 +1651,290 @@ class ValidationSlotComputationResultV2:
             "metrics": dict(self.metrics),
             "slot_computation_result_sha256": self.result_sha256,
         }
+
+
+def _result_snapshot(result: ValidationSlotComputationResultV2) -> tuple[object, ...]:
+    _validate_result_shape(result)
+    return (
+        result.schema_version,
+        result.programme_id,
+        result.slot_id,
+        result.attempt_number,
+        result.runner_kind,
+        result.runner_version,
+        result.attempt_sha256,
+        result.input_sha256,
+        result.evidence_sha256,
+        result.result_sha256,
+        result.parent_attempt_sha256,
+        result.parent_result_sha256,
+        result.execution_status,
+        result.decision,
+        result.computation_completed,
+        result.reason,
+        result.p_value,
+        tuple(sorted(result.metrics.items())),
+    )
+
+
+def _bounded_result_metrics_v2(metrics: object) -> dict[str, float | int | str]:
+    if type(metrics) not in {dict, MappingProxyType}:
+        raise TypeError("slot computation result metrics must be an exact bounded mapping")
+    typed_metrics = cast(Mapping[object, object], metrics)
+    if len(typed_metrics) > _MAX_RESULT_METRICS:
+        raise ValueError("slot computation result metrics exceed the frozen cardinality bound")
+    bounded: dict[str, float | int | str] = {}
+    for key, value in typed_metrics.items():
+        if type(key) is not str or type(value) not in {float, int, str}:
+            raise TypeError("slot computation result metric has an invalid exact shape")
+        if not key or len(key) > 128:
+            raise ValueError("slot computation result metric name exceeds the frozen bound")
+        if type(value) is str and len(value) > _MAX_RESULT_METRIC_TEXT:
+            raise ValueError("slot computation result metric text exceeds the frozen bound")
+        if type(value) is float and not isfinite(value):
+            raise ValueError("slot computation result metric must be finite")
+        if type(value) is int and abs(value) > _MAX_RESULT_METRIC_INTEGER:
+            raise ValueError("slot computation result metric integer exceeds the frozen bound")
+        bounded[key] = cast(float | int | str, value)
+    encoded = json.dumps(
+        bounded, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    if len(encoded) > _MAX_RESULT_METRICS_BYTES:
+        raise ValueError("slot computation result metrics exceed the frozen byte bound")
+    return bounded
+
+
+def _validate_result_shape(result: ValidationSlotComputationResultV2) -> None:
+    string_fields = (
+        "schema_version",
+        "programme_id",
+        "slot_id",
+        "runner_kind",
+        "runner_version",
+        "attempt_sha256",
+        "input_sha256",
+        "evidence_sha256",
+        "result_sha256",
+        "execution_status",
+        "decision",
+        "reason",
+    )
+    if any(type(getattr(result, name)) is not str for name in string_fields):
+        raise TypeError("slot computation result string field has an invalid exact type")
+    if type(result.attempt_number) is not int:
+        raise TypeError("slot computation result attempt_number must be an exact integer")
+    if type(result.computation_completed) is not bool:
+        raise TypeError("slot computation result completion flag must be an exact bool")
+    for value in (result.parent_attempt_sha256, result.parent_result_sha256):
+        if value is not None and type(value) is not str:
+            raise TypeError("slot computation result parent identity has an invalid exact type")
+    if result.p_value is not None and type(result.p_value) is not float:
+        raise TypeError("slot computation result p_value must be an exact float or null")
+    if type(result.metrics) is not MappingProxyType:
+        raise TypeError("slot computation result metrics must be the sealed exact mapping")
+    _bounded_result_metrics_v2(result.metrics)
+
+
+def _result_slot_v2(result: ValidationSlotComputationResultV2) -> ValidationSlot:
+    matches = tuple(slot for slot in VALIDATION_SLOT_ROSTER if slot.slot_id == result.slot_id)
+    if len(matches) != 1:
+        raise ValueError("slot computation result is outside the frozen roster")
+    return matches[0]
+
+
+def _validate_individual_result_contract_v2(
+    result: ValidationSlotComputationResultV2,
+    *,
+    computational_parent: ValidationSlotComputationResultV2 | None,
+) -> ValidationSlot:
+    _validate_result_shape(result)
+    if result.schema_version != "validation-slot-computation-result-v2":
+        raise ValueError("slot computation result schema is invalid")
+    _require_programme(result.programme_id)
+    slot = _result_slot_v2(result)
+    if result.runner_kind != slot.kind.value:
+        raise ValueError("slot computation result runner kind differs from the frozen roster")
+    if not result.runner_version:
+        raise ValueError("slot computation result runner version must be non-empty")
+    if slot.parent_slot_id is None:
+        if computational_parent is not None:
+            raise ValueError("root slot cannot retain a computational parent")
+        if result.parent_attempt_sha256 is not None or result.parent_result_sha256 is not None:
+            raise ValueError("root slot cannot bind a parent result")
+    else:
+        if computational_parent is None:
+            raise ValueError("child slot requires its exact computational parent")
+        if type(computational_parent) is not ValidationSlotComputationResultV2:
+            raise TypeError("child slot computational parent must be the exact result type")
+        if computational_parent.slot_id != slot.parent_slot_id:
+            raise ValueError("child slot retained the wrong computational parent")
+        if (
+            result.parent_attempt_sha256 != computational_parent.attempt_sha256
+            or result.parent_result_sha256 != computational_parent.result_sha256
+        ):
+            raise ValueError("child slot parent attempt/result binding differs")
+    return slot
+
+
+def _result_identity_payload(
+    result: ValidationSlotComputationResultV2 | Mapping[str, object],
+) -> dict[str, object]:
+    get = result.__getitem__ if isinstance(result, Mapping) else lambda name: getattr(result, name)
+    slot_id = get("slot_id")
+    parent_slot_id = next(
+        (slot.parent_slot_id for slot in VALIDATION_SLOT_ROSTER if slot.slot_id == slot_id),
+        None,
+    )
+    return {
+        "schema_version": get("schema_version"),
+        "programme_id": get("programme_id"),
+        "slot_id": slot_id,
+        "attempt_number": get("attempt_number"),
+        "runner_kind": get("runner_kind"),
+        "runner_version": get("runner_version"),
+        "attempt_sha256": get("attempt_sha256"),
+        "input_sha256": get("input_sha256"),
+        "evidence_sha256": get("evidence_sha256"),
+        "parent_slot_id": parent_slot_id,
+        "parent_attempt_sha256": get("parent_attempt_sha256"),
+        "parent_result_sha256": get("parent_result_sha256"),
+        "execution_status": get("execution_status"),
+        "decision": get("decision"),
+        "computation_completed": get("computation_completed"),
+        "reason": get("reason"),
+        "p_value": get("p_value"),
+        "metrics": _bounded_result_metrics_v2(get("metrics")),
+    }
+
+
+def validation_slot_result_sha256_v2(
+    result: ValidationSlotComputationResultV2 | Mapping[str, object],
+) -> str:
+    """Return the complete canonical identity for a V2 slot result payload."""
+
+    return hash_json(
+        "phase5-validation-slot-computation-result-v2",
+        _result_identity_payload(result),
+    )
+
+
+def _issue_validation_slot_result_v2(
+    *,
+    evidence_verifier: Callable[[], object],
+    retained_evidence: object,
+    computational_parent: ValidationSlotComputationResultV2 | None = None,
+    **fields: object,
+) -> ValidationSlotComputationResultV2:
+    fields["metrics"] = _bounded_result_metrics_v2(fields.get("metrics"))
+    fields.pop("result_sha256", None)
+    fields["result_sha256"] = validation_slot_result_sha256_v2(fields)
+    token = object()
+    _RESULT_ISSUANCE[id(token)] = token
+    try:
+        result = ValidationSlotComputationResultV2(
+            **fields,  # type: ignore[arg-type]
+            _factory_token=token,
+        )
+    finally:
+        _RESULT_ISSUANCE.pop(id(token), None)
+    _validate_individual_result_contract_v2(
+        result,
+        computational_parent=computational_parent,
+    )
+    if computational_parent is not None:
+        _verify_registered_result_identity_v2(computational_parent)
+    identifier = id(result)
+
+    def cleanup(reference: weakref.ReferenceType[ValidationSlotComputationResultV2]) -> None:
+        current = _VERIFIED_RESULTS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_RESULTS.pop(identifier, None)
+
+    registered_payload_dict = result.to_dict()
+    registered_payload_dict["metrics"] = MappingProxyType(dict(result.metrics))
+    registered_payload = MappingProxyType(registered_payload_dict)
+    _VERIFIED_RESULTS[identifier] = (
+        weakref.ref(result, cleanup),
+        _result_snapshot(result),
+        evidence_verifier,
+        retained_evidence,
+        computational_parent,
+        registered_payload,
+    )
+    return result
+
+
+def _verify_registered_result_identity_v2(
+    result: ValidationSlotComputationResultV2,
+) -> tuple[
+    weakref.ReferenceType[ValidationSlotComputationResultV2],
+    tuple[object, ...],
+    Callable[[], object],
+    object,
+    ValidationSlotComputationResultV2 | None,
+    Mapping[str, object],
+]:
+    if type(result) is not ValidationSlotComputationResultV2:
+        raise TypeError("slot computation result must be the exact factory-issued type")
+    registered = _VERIFIED_RESULTS.get(id(result))
+    if registered is None or registered[0]() is not result:
+        raise ValueError("slot computation result is not the registered original")
+    _validate_individual_result_contract_v2(result, computational_parent=registered[4])
+    if _result_snapshot(result) != registered[1]:
+        raise ValueError("slot computation result differs from its immutable computation")
+    expected_attempt = hash_json(
+        "phase5-validation-slot-attempt-v2",
+        {
+            "slot_id": result.slot_id,
+            "input_sha256": result.input_sha256,
+            "attempt_number": result.attempt_number,
+        },
+    )
+    if result.attempt_sha256 != expected_attempt:
+        raise ValueError("slot computation result attempt identity differs")
+    expected_result = validation_slot_result_sha256_v2(result)
+    if result.result_sha256 != expected_result:
+        raise ValueError("slot computation result identity differs")
+    if registered[4] is not None:
+        _verify_registered_result_identity_v2(registered[4])
+    return registered
+
+
+def _verify_validation_slot_computation_result_v2(
+    result: ValidationSlotComputationResultV2,
+    *,
+    verified_results: set[int] | None = None,
+) -> ValidationSlotComputationResultV2:
+    registered = _verify_registered_result_identity_v2(result)
+    verified = verified_results if verified_results is not None else set()
+    if id(result) in verified:
+        return result
+    if registered[4] is not None:
+        _verify_validation_slot_computation_result_v2(
+            registered[4],
+            verified_results=verified,
+        )
+    registered[2]()
+    verified.add(id(result))
+    return result
+
+
+def verify_original_validation_slot_result_v2(
+    result: ValidationSlotComputationResultV2,
+) -> ValidationSlotComputationResultV2:
+    """Public exact-original verifier for a factory-issued computation result."""
+
+    return _verify_validation_slot_computation_result_v2(result)
+
+
+def verified_validation_slot_result_payload_v2(
+    result: ValidationSlotComputationResultV2,
+) -> Mapping[str, object]:
+    """Return the immutable issuer snapshot only after full computation replay."""
+
+    _verify_validation_slot_computation_result_v2(result)
+    registered = _VERIFIED_RESULTS[id(result)]
+    return registered[5]
 
 
 def _seed(programme_id: str, slot: ValidationSlot) -> int:
@@ -1658,6 +2104,135 @@ def _role_metrics(
     return common, p_value if slot.primary else None
 
 
+@dataclass(frozen=True, slots=True)
+class _SlotResultMaterialV2:
+    input_sha256: str
+    attempt_sha256: str
+    evidence_sha256: str
+    execution_status: str
+    decision: str
+    computation_completed: bool
+    reason: str
+    p_value: float | None
+    metrics: tuple[tuple[str, float | int | str], ...]
+
+    def result_fields(self) -> dict[str, object]:
+        return {
+            "input_sha256": self.input_sha256,
+            "attempt_sha256": self.attempt_sha256,
+            "evidence_sha256": self.evidence_sha256,
+            "execution_status": self.execution_status,
+            "decision": self.decision,
+            "computation_completed": self.computation_completed,
+            "reason": self.reason,
+            "p_value": self.p_value,
+            "metrics": dict(self.metrics),
+        }
+
+
+def _compute_slot_result_material_v2(
+    *,
+    inputs: SlotRunnerInputsV2,
+    budget: ValidationWorkBudget,
+    slot: ValidationSlot,
+    attempt_number: int,
+    parent: ValidationSlotComputationResultV2 | None,
+) -> _SlotResultMaterialV2:
+    rows = inputs.outcome_reader.read_slot(
+        slot,
+        programme_id=inputs.programme_id,
+        split_sha256=inputs.split_sha256,
+        cost_authority_sha256=inputs.cost_authority_sha256,
+    )
+    input_sha = hash_json(
+        "phase5-validation-slot-input-v2",
+        {
+            "programme_id": inputs.programme_id,
+            "slot": slot.to_dict(),
+            "attempt_number": attempt_number,
+            "outcome_sha256s": [row.outcome_sha256 for row in rows],
+            "split_sha256": inputs.split_sha256,
+            "cost_authority_sha256": inputs.cost_authority_sha256,
+            "precision_available": inputs.precision_available,
+            "source_available": inputs.source_available,
+            "runner_version": inputs.runner_version,
+            "parent_attempt_sha256": parent.attempt_sha256 if parent else None,
+            "parent_result_sha256": parent.result_sha256 if parent else None,
+        },
+    )
+    attempt_sha = hash_json(
+        "phase5-validation-slot-attempt-v2",
+        {
+            "slot_id": slot.slot_id,
+            "input_sha256": input_sha,
+            "attempt_number": attempt_number,
+        },
+    )
+    missing_reason: str | None = None
+    if not inputs.source_available:
+        missing_reason = "verified development source is unavailable"
+    elif slot.family in _PRECISION_REQUIRED_FAMILIES and not inputs.precision_available:
+        missing_reason = "required historical precision is unavailable"
+    elif slot.parent_slot_id is not None and (
+        parent is None or parent.execution_status != "completed"
+    ):
+        missing_reason = "required parent slot did not complete"
+    if missing_reason is not None:
+        execution = "failed"
+        decision = "not_evaluated"
+        completed = False
+        metrics: dict[str, float | int | str] = {}
+        p_value = None
+        evidence_sha = hash_json(
+            "phase5-validation-slot-precondition-v2",
+            {"slot_id": slot.slot_id, "reason": missing_reason, "input_sha256": input_sha},
+        )
+    else:
+        evidence = derive_slot_evidence_v2(
+            programme_id=inputs.programme_id,
+            slot=slot,
+            outcome_reader=inputs.outcome_reader,
+            seed=_seed(inputs.programme_id, slot),
+            runner_version=inputs.runner_version,
+        )
+        evidence.verify_for(
+            programme_id=inputs.programme_id,
+            slot=slot,
+            split_sha256=inputs.split_sha256,
+            cost_authority_sha256=inputs.cost_authority_sha256,
+            runner_version=inputs.runner_version,
+        )
+        metrics, p_value = _role_metrics(slot, evidence, budget)
+        evidence_sha = evidence.artifact_sha256
+        execution = "completed"
+        statistically_inconclusive = slot.primary and p_value is None
+        decision = (
+            "inconclusive"
+            if not slot.primary
+            or statistically_inconclusive
+            or not inputs.promotion_grade_costs_complete
+            else "rejected"
+        )
+        completed = True
+        if statistically_inconclusive:
+            missing_reason = str(metrics["bootstrap_reason"])
+        elif not inputs.promotion_grade_costs_complete:
+            missing_reason = "promotion-grade cost evidence is incomplete"
+        else:
+            missing_reason = "slot computation completed"
+    return _SlotResultMaterialV2(
+        input_sha256=input_sha,
+        attempt_sha256=attempt_sha,
+        evidence_sha256=evidence_sha,
+        execution_status=execution,
+        decision=decision,
+        computation_completed=completed,
+        reason=missing_reason,
+        p_value=p_value,
+        metrics=tuple(sorted(metrics.items())),
+    )
+
+
 def run_slot_roster_v2(
     inputs: SlotRunnerInputsV2,
     *,
@@ -1674,6 +2249,19 @@ def run_slot_roster_v2(
     # This is intentionally the first operation: no mapping iteration or result
     # allocation precedes the complete work-budget admission.
     budget.preflight(demand)
+    inputs.outcome_reader.verify_original()
+    original_outcome_reader = inputs.outcome_reader
+    input_snapshot = (
+        inputs.programme_id,
+        inputs.split_sha256,
+        inputs.cost_authority_sha256,
+        inputs.promotion_grade_costs_complete,
+        inputs.precision_available,
+        inputs.runner_version,
+        inputs.source_available,
+    )
+    budget_snapshot = budget.to_dict()
+    demand_snapshot = {name: getattr(demand, name) for name in demand.__dataclass_fields__}
     attempts = dict(attempt_numbers or {})
     if attempt_numbers is not None and tuple(attempts) != tuple(
         slot.slot_id for slot in VALIDATION_SLOT_ROSTER
@@ -1686,119 +2274,66 @@ def run_slot_roster_v2(
         if attempt_number < 1:
             raise ValueError("attempt numbers must be positive")
         parent = by_slot.get(slot.parent_slot_id) if slot.parent_slot_id else None
-        rows = inputs.outcome_reader.read_slot(
-            slot,
-            programme_id=inputs.programme_id,
-            split_sha256=inputs.split_sha256,
-            cost_authority_sha256=inputs.cost_authority_sha256,
+        material = _compute_slot_result_material_v2(
+            inputs=inputs,
+            budget=budget,
+            slot=slot,
+            attempt_number=attempt_number,
+            parent=parent,
         )
-        input_payload = {
-            "programme_id": inputs.programme_id,
-            "slot": slot.to_dict(),
-            "attempt_number": attempt_number,
-            "outcome_sha256s": [row.outcome_sha256 for row in rows],
-            "split_sha256": inputs.split_sha256,
-            "cost_authority_sha256": inputs.cost_authority_sha256,
-            "precision_available": inputs.precision_available,
-            "source_available": inputs.source_available,
-            "runner_version": inputs.runner_version,
-            "parent_attempt_sha256": parent.attempt_sha256 if parent else None,
-            "parent_result_sha256": parent.result_sha256 if parent else None,
-        }
-        input_sha = hash_json("phase5-validation-slot-input-v2", input_payload)
-        attempt_sha = hash_json(
-            "phase5-validation-slot-attempt-v2",
-            {
-                "slot_id": slot.slot_id,
-                "input_sha256": input_sha,
-                "attempt_number": attempt_number,
-            },
-        )
-        missing_reason: str | None = None
-        if not inputs.source_available:
-            missing_reason = "verified development source is unavailable"
-        elif slot.family in _PRECISION_REQUIRED_FAMILIES and not inputs.precision_available:
-            missing_reason = "required historical precision is unavailable"
-        elif slot.parent_slot_id is not None and (
-            parent is None or parent.execution_status != "completed"
-        ):
-            missing_reason = "required parent slot did not complete"
-        if missing_reason is not None:
-            execution = "completed" if parent is not None else "failed"
-            execution = "failed"
-            decision = "not_evaluated"
-            completed = False
-            metrics: dict[str, float | int | str] = {}
-            p_value = None
-            evidence_sha = hash_json(
-                "phase5-validation-slot-precondition-v2",
-                {"slot_id": slot.slot_id, "reason": missing_reason, "input_sha256": input_sha},
+
+        def verify_computation_evidence(
+            computational_parent: ValidationSlotComputationResultV2 | None = parent,
+            expected_material: _SlotResultMaterialV2 = material,
+            computation_slot: ValidationSlot = slot,
+            computation_attempt_number: int = attempt_number,
+        ) -> object:
+            if type(inputs) is not SlotRunnerInputsV2:
+                raise TypeError("slot computation input parent is not exact")
+            if (
+                inputs.outcome_reader is not original_outcome_reader
+                or (
+                    inputs.programme_id,
+                    inputs.split_sha256,
+                    inputs.cost_authority_sha256,
+                    inputs.promotion_grade_costs_complete,
+                    inputs.precision_available,
+                    inputs.runner_version,
+                    inputs.source_available,
+                )
+                != input_snapshot
+            ):
+                raise ValueError("slot computation input parent changed")
+            if budget.to_dict() != budget_snapshot:
+                raise ValueError("slot computation budget admission parent changed")
+            current_demand = {name: getattr(demand, name) for name in demand.__dataclass_fields__}
+            if current_demand != demand_snapshot:
+                raise ValueError("slot computation demand admission parent changed")
+            budget.preflight(demand)
+            replayed = _compute_slot_result_material_v2(
+                inputs=inputs,
+                budget=budget,
+                slot=computation_slot,
+                attempt_number=computation_attempt_number,
+                parent=computational_parent,
             )
-        else:
-            evidence = derive_slot_evidence_v2(
-                programme_id=inputs.programme_id,
-                slot=slot,
-                outcome_reader=inputs.outcome_reader,
-                seed=_seed(inputs.programme_id, slot),
-                runner_version=inputs.runner_version,
-            )
-            evidence.verify_for(
-                programme_id=inputs.programme_id,
-                slot=slot,
-                split_sha256=inputs.split_sha256,
-                cost_authority_sha256=inputs.cost_authority_sha256,
-                runner_version=inputs.runner_version,
-            )
-            metrics, p_value = _role_metrics(slot, evidence, budget)
-            evidence_sha = evidence.artifact_sha256
-            execution = "completed"
-            statistically_inconclusive = slot.primary and p_value is None
-            decision = (
-                "inconclusive"
-                if not slot.primary
-                or statistically_inconclusive
-                or not inputs.promotion_grade_costs_complete
-                else "rejected"
-            )
-            completed = True
-            if statistically_inconclusive:
-                missing_reason = str(metrics["bootstrap_reason"])
-            elif not inputs.promotion_grade_costs_complete:
-                missing_reason = "promotion-grade cost evidence is incomplete"
-            else:
-                missing_reason = "slot computation completed"
-        result_payload = {
-            "programme_id": inputs.programme_id,
-            "slot_id": slot.slot_id,
-            "attempt_sha256": attempt_sha,
-            "input_sha256": input_sha,
-            "evidence_sha256": evidence_sha,
-            "execution_status": execution,
-            "decision": decision,
-            "computation_completed": completed,
-            "p_value": p_value,
-            "metrics": metrics,
-        }
-        result_sha = hash_json("phase5-validation-slot-computation-result-v2", result_payload)
-        result = ValidationSlotComputationResultV2(
+            if replayed != expected_material:
+                raise ValueError("slot computation replay differs from its issued result")
+            return inputs
+
+        result = _issue_validation_slot_result_v2(
+            evidence_verifier=verify_computation_evidence,
+            retained_evidence=(inputs, budget, demand, parent, material),
+            computational_parent=parent,
             schema_version="validation-slot-computation-result-v2",
             programme_id=inputs.programme_id,
             slot_id=slot.slot_id,
             attempt_number=attempt_number,
             runner_kind=slot.kind.value,
             runner_version=inputs.runner_version,
-            attempt_sha256=attempt_sha,
-            input_sha256=input_sha,
-            evidence_sha256=evidence_sha,
-            result_sha256=result_sha,
             parent_attempt_sha256=parent.attempt_sha256 if parent else None,
             parent_result_sha256=parent.result_sha256 if parent else None,
-            execution_status=execution,
-            decision=decision,
-            computation_completed=completed,
-            reason=missing_reason,
-            p_value=p_value,
-            metrics=metrics,
+            **material.result_fields(),
         )
         by_slot[slot.slot_id] = result
         results.append(result)
@@ -1824,7 +2359,12 @@ def verify_slot_results_v2(
     inputs: set[str] = set()
     result_ids: set[str] = set()
     by_slot: dict[str, ValidationSlotComputationResultV2] = {}
+    verified_results: set[int] = set()
     for slot, result in zip(VALIDATION_SLOT_ROSTER, results, strict=True):
+        _verify_validation_slot_computation_result_v2(
+            result,
+            verified_results=verified_results,
+        )
         if result.runner_version != runner_version:
             raise ValueError("slot result uses the wrong runner version")
         if result.runner_kind != slot.kind.value:
@@ -1839,23 +2379,6 @@ def verify_slot_results_v2(
         )
         if result.attempt_sha256 != expected_attempt:
             raise ValueError("slot attempt identity differs")
-        expected_result = hash_json(
-            "phase5-validation-slot-computation-result-v2",
-            {
-                "programme_id": result.programme_id,
-                "slot_id": result.slot_id,
-                "attempt_sha256": result.attempt_sha256,
-                "input_sha256": result.input_sha256,
-                "evidence_sha256": result.evidence_sha256,
-                "execution_status": result.execution_status,
-                "decision": result.decision,
-                "computation_completed": result.computation_completed,
-                "p_value": result.p_value,
-                "metrics": dict(result.metrics),
-            },
-        )
-        if result.result_sha256 != expected_result:
-            raise ValueError("slot result identity differs")
         if result.attempt_sha256 in attempts:
             raise ValueError("slot attempt identity fanout is forbidden")
         if result.input_sha256 in inputs:
@@ -2000,12 +2523,12 @@ class ValidationProgrammeRunV2:
             raise ValueError("Gate B run must remain an explicit nonterminal VS-0001 slice")
 
 
-def _real_vs0001_result_v2(
+def _compute_real_vs0001_material_v2(
     *,
     config: ValidationProgrammeConfigV2,
     reader: VerifiedPublicationOutcomeReaderV2,
     runner_version: str,
-) -> ValidationSlotComputationResultV2:
+) -> _SlotResultMaterialV2:
     slot = next(item for item in VALIDATION_SLOT_ROSTER if item.slot_id == "VS-0001")
     outcome = reader.read_slot(
         slot,
@@ -2049,31 +2572,10 @@ def _real_vs0001_result_v2(
             "aggregate_series_identity": outcome.aggregate_series_identity,
         },
     )
-    result_payload = {
-        "programme_id": config.programme_id,
-        "slot_id": slot.slot_id,
-        "attempt_sha256": attempt_sha,
-        "input_sha256": input_sha,
-        "evidence_sha256": evidence_sha,
-        "execution_status": "completed",
-        "decision": "inconclusive",
-        "computation_completed": True,
-        "p_value": None,
-        "metrics": metrics,
-    }
-    return ValidationSlotComputationResultV2(
-        schema_version="validation-slot-computation-result-v2",
-        programme_id=config.programme_id,
-        slot_id=slot.slot_id,
-        attempt_number=1,
-        runner_kind=slot.kind.value,
-        runner_version=runner_version,
-        attempt_sha256=attempt_sha,
+    return _SlotResultMaterialV2(
         input_sha256=input_sha,
+        attempt_sha256=attempt_sha,
         evidence_sha256=evidence_sha,
-        result_sha256=hash_json("phase5-validation-slot-computation-result-v2", result_payload),
-        parent_attempt_sha256=None,
-        parent_result_sha256=None,
         execution_status="completed",
         decision="inconclusive",
         computation_completed=True,
@@ -2082,7 +2584,61 @@ def _real_vs0001_result_v2(
             + ",".join(outcome.incomplete_cost_dimensions)
         ),
         p_value=None,
-        metrics=metrics,
+        metrics=tuple(sorted(metrics.items())),
+    )
+
+
+def _real_vs0001_result_v2(
+    *,
+    config: ValidationProgrammeConfigV2,
+    reader: VerifiedPublicationOutcomeReaderV2,
+    runner_version: str,
+) -> ValidationSlotComputationResultV2:
+    slot = next(item for item in VALIDATION_SLOT_ROSTER if item.slot_id == "VS-0001")
+    material = _compute_real_vs0001_material_v2(
+        config=config,
+        reader=reader,
+        runner_version=runner_version,
+    )
+    config_snapshot = hash_json(
+        "phase5-validation-programme-config-result-parent-v2",
+        config.to_config_dict(),
+    )
+
+    def verify_computation_evidence() -> object:
+        if type(config) is not ValidationProgrammeConfigV2:
+            raise TypeError("VS-0001 programme config parent is not exact")
+        if (
+            hash_json(
+                "phase5-validation-programme-config-result-parent-v2",
+                config.to_config_dict(),
+            )
+            != config_snapshot
+        ):
+            raise ValueError("VS-0001 programme config parent changed")
+        reader.verify_original()
+        replayed = _compute_real_vs0001_material_v2(
+            config=config,
+            reader=reader,
+            runner_version=runner_version,
+        )
+        if replayed != material:
+            raise ValueError("VS-0001 computation replay differs from its issued result")
+        return reader
+
+    return _issue_validation_slot_result_v2(
+        evidence_verifier=verify_computation_evidence,
+        retained_evidence=(config, reader, material),
+        computational_parent=None,
+        schema_version="validation-slot-computation-result-v2",
+        programme_id=config.programme_id,
+        slot_id=slot.slot_id,
+        attempt_number=1,
+        runner_kind=slot.kind.value,
+        runner_version=runner_version,
+        parent_attempt_sha256=None,
+        parent_result_sha256=None,
+        **material.result_fields(),
     )
 
 
@@ -2264,5 +2820,8 @@ __all__ = [
     "global_holm_pvalues_v2",
     "run_slot_roster_v2",
     "run_validation_programme_v2",
+    "validation_slot_result_sha256_v2",
+    "verify_original_validation_slot_result_v2",
+    "verified_validation_slot_result_payload_v2",
     "verify_slot_results_v2",
 ]
