@@ -726,6 +726,44 @@ def test_surviving_receipt_rejects_mutated_sibling_from_authenticated_batch(
         verify_validation_v2_receipt(receipts[0])
 
 
+def test_terminal_selection_verifies_each_batch_and_ledger_once_per_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+        VerifiedDevelopmentOutcomeReaderV2,
+    ],
+) -> None:
+    from market_structure_lab.research import validation_v2_receipts as module
+
+    first_results, _retry_results, _reader = issued_rosters
+    receipts = publish_validation_v2_receipts(tmp_path, first_results[:2])
+    batch_calls = 0
+    ledger_calls = 0
+    real_batch = module._verify_complete_batch_v2
+    real_ledger = module._load_programme_ledger_v2
+
+    def counted_batch(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal batch_calls
+        batch_calls += 1
+        return real_batch(*args, **kwargs)
+
+    def counted_ledger(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal ledger_calls
+        ledger_calls += 1
+        return real_ledger(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_verify_complete_batch_v2", counted_batch)
+    monkeypatch.setattr(module, "_load_programme_ledger_v2", counted_ledger)
+
+    selected = select_terminal_attempts_v2(receipts)
+
+    assert tuple(selected) == ("VS-0001", "VS-0002")
+    assert ledger_calls == 1
+    assert batch_calls == 2  # one direct batch pass plus one ledger-chain pass
+
+
 def test_canonical_programme_ledger_rejects_retry_fork_from_stale_head(
     tmp_path: Path,
     issued_rosters: tuple[

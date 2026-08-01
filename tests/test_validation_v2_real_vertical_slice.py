@@ -36,6 +36,10 @@ from market_structure_lab.research.validation_v2_models import (
     ValidationProgrammeConfigV2,
     ValidationRosterIdentityV2,
 )
+from market_structure_lab.research.validation_v2_receipts import (
+    publish_validation_v2_receipts,
+    verify_validation_programme_v2,
+)
 
 pytest_plugins = ("test_aggregate_publication_v2",)
 
@@ -503,14 +507,26 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
         monkeypatch,
     )
     issued_readers: list[object] = []
+    authority_verification_calls = 0
     real_issuer = module._issue_publication_outcome_reader_v2  # noqa: SLF001
+    real_authority_verifier = module.VerifiedPublicationOutcomeReaderV2.verify_original
 
     def capture_reader(**kwargs: object) -> object:
         reader = real_issuer(**kwargs)  # type: ignore[arg-type]
         issued_readers.append(reader)
         return reader
 
+    def count_authority_verification(self: object) -> object:
+        nonlocal authority_verification_calls
+        authority_verification_calls += 1
+        return real_authority_verifier(self)  # type: ignore[arg-type]
+
     monkeypatch.setattr(module, "_issue_publication_outcome_reader_v2", capture_reader)
+    monkeypatch.setattr(
+        module.VerifiedPublicationOutcomeReaderV2,
+        "verify_original",
+        count_authority_verification,
+    )
     monkeypatch.setattr(
         module,
         "_issue_fixture_outcome_reader_v2",
@@ -527,6 +543,9 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     )
 
     assert len(issued_readers) == 1
+    assert authority_verification_calls == 2
+    assert run.verify_original() is run
+    assert authority_verification_calls == 3
     reader = issued_readers[0]
     outcomes = reader.read_slot(  # type: ignore[attr-defined]
         _vs0001(),
@@ -555,12 +574,59 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     assert outcome.final_access_records == 0
     assert sources.source_publication.final_access_records == 0
     assert sources.aggregate_publication.final_access_records == 0
-    assert run.execution_scope == "gate-b-vs0001-development-slice"
+    assert run.execution_scope == "development-only-full-roster"
     assert run.planned_slot_count == 1_104
-    assert run.executed_slot_count == 1
-    assert run.roster_complete is False
-    assert run.scientific_terminal is False
-    assert run.holm == ()
+    assert run.executed_slot_count == 1_104
+    assert run.roster_complete is True
+    assert run.scientific_terminal is True
+    assert run.execution_status == "failed"
+    assert run.decision == "not_evaluated"
+    assert run.final_holdout_access_count == 0
+    with pytest.raises(TypeError, match="computation factory"):
+        replace(run, holm=run.holm)
+    assert len(run.results) == 1_104
+    assert len(run.holm) == 64
+    assert {item.alpha for item in run.holm} == {0.01}
+    assert all(item.effective_p_value == 1.0 for item in run.holm)
+    assert sum(item.execution_status == "completed" for item in run.results) == 1
+    assert sum(item.execution_status == "failed" for item in run.results) == 1_103
+
+    unavailable_root = run.results[1]
+    assert unavailable_root.parent_result_sha256 is None
+    original_gross_return = outcome.gross_signed_return
+    object.__setattr__(outcome, "gross_signed_return", Decimal("1"))
+    try:
+        with pytest.raises(ValueError):
+            reader.verify_original()  # type: ignore[attr-defined]
+        with pytest.raises(ValueError):
+            verify_original_validation_slot_result_v2(unavailable_root)
+    finally:
+        object.__setattr__(outcome, "gross_signed_return", original_gross_return)
+    original_source_bytes = sources.source_publication.canonical_bytes
+    object.__setattr__(sources.source_publication, "canonical_bytes", b"forged")
+    try:
+        with pytest.raises(ValueError):
+            verify_original_validation_slot_result_v2(unavailable_root)
+    finally:
+        object.__setattr__(
+            sources.source_publication,
+            "canonical_bytes",
+            original_source_bytes,
+        )
+
+    receipt_root = tmp_path / "validation-receipts"
+    receipt_root.mkdir()
+    receipts = publish_validation_v2_receipts(receipt_root, run.results)
+    report = verify_validation_programme_v2(
+        run.results,
+        receipts,
+        runner_version=run.results[0].runner_version,
+    )
+    assert report.planned_slots == report.attempted_slots == 1_104
+    assert report.completed_slot_computations == 1
+    assert report.inconclusive_slot_computations == 1
+    assert report.not_evaluated_slots == report.failed_slots == 1_103
+    assert report.receipt_count == report.attempted_attempts == 1_104
 
     result = next(item for item in run.results if item.slot_id == "VS-0001")
     assert result.execution_status == "completed"

@@ -23,6 +23,7 @@ from market_structure_lab.research.validation_v2_receipts import (
     select_terminal_attempts_v2,
     verify_validation_v2_receipt,
     verify_validation_v2_receipts,
+    verify_validation_programme_v2,
 )
 
 
@@ -146,6 +147,32 @@ def test_verifier_reports_receipts_separately_from_computations(
     assert report.receipt_count == 1
     assert report.attempted_attempts == 1
     assert report.failed_attempts == 1
+
+
+def test_complete_frozen_roster_is_independently_receipted_and_accounted(
+    tmp_path: Path,
+    issued_rosters: tuple[
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+    ],
+) -> None:
+    first_results, _retry_results = issued_rosters
+
+    receipts = publish_validation_v2_receipts(tmp_path, first_results)
+    report = verify_validation_programme_v2(
+        first_results,
+        receipts,
+        runner_version=first_results[0].runner_version,
+    )
+
+    assert report.planned_slots == 1_104
+    assert report.attempted_slots == 1_104
+    assert report.completed_slot_computations == 0
+    assert report.not_evaluated_slots == 1_104
+    assert report.failed_slots == 1_104
+    assert report.receipt_count == 1_104
+    assert report.attempted_attempts == 1_104
+    assert report.failed_attempts == 1_104
 
 
 def test_receipt_rejects_retry_gaps_and_wrong_predecessor(

@@ -29,6 +29,7 @@ from market_structure_lab.research.models import VALIDATION_SLOT_ROSTER
 from market_structure_lab.research.validation_v2 import (
     ValidationSlotComputationResultV2,
     verified_validation_slot_result_payload_v2,
+    verified_validation_slot_result_payloads_v2,
 )
 
 _MAX_RECEIPT_BYTES = 256 * 1024
@@ -423,6 +424,15 @@ class _ProgrammeLedgerV2:
     commit_roots: tuple[Path, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _LocalReceiptVerificationV2:
+    receipt: ValidationReceiptV2
+    result_payload: Mapping[str, object]
+    receipt_payload: Mapping[str, object]
+    manifest_bytes: bytes
+    commit_root: Path
+
+
 def _slot_for_receipt_v2(receipt: ValidationReceiptV2):  # type: ignore[no-untyped-def]
     slot = next((item for item in VALIDATION_SLOT_ROSTER if item.slot_id == receipt.slot_id), None)
     if slot is None:
@@ -652,11 +662,11 @@ def publish_validation_v2_receipts(
     if not 1 <= result_count <= _MAX_BATCH_RECEIPTS:
         raise ValueError("receipt batch cardinality is outside the frozen bound")
     frozen_results = tuple(results)
-    verified_results: list[tuple[ValidationSlotComputationResultV2, Mapping[str, object]]] = []
     for result in frozen_results:
         if type(result) is not ValidationSlotComputationResultV2:
             raise TypeError("receipt result must be the exact factory-issued registered result")
-        verified_results.append((result, verified_validation_slot_result_payload_v2(result)))
+    verified_payloads = verified_validation_slot_result_payloads_v2(frozen_results)
+    verified_results = tuple(zip(frozen_results, verified_payloads, strict=True))
     if predecessor_receipts is None:
         predecessors: tuple[ValidationReceiptV2 | None, ...] = (None,) * len(verified_results)
     else:
@@ -967,9 +977,9 @@ def _issue_validation_receipt_v2(
     return receipt
 
 
-def verify_validation_v2_receipt(receipt: ValidationReceiptV2) -> ValidationReceiptV2:
-    """Reopen and validate one exact issuer-bound receipt and batch manifest."""
-
+def _registered_receipt_result_v2(
+    receipt: ValidationReceiptV2,
+) -> ValidationSlotComputationResultV2:
     if type(receipt) is not ValidationReceiptV2:
         raise TypeError("receipt must be the exact factory-issued type")
     registered = _VERIFIED_RECEIPTS.get(id(receipt))
@@ -977,20 +987,23 @@ def verify_validation_v2_receipt(receipt: ValidationReceiptV2) -> ValidationRece
         raise ValueError("receipt is not the registered original factory-issued receipt")
     if _receipt_snapshot_v2(receipt) != registered[1]:
         raise ValueError("receipt differs from its registered original")
-    registered_result_payload = verified_validation_slot_result_payload_v2(registered[2])
-    predecessor = registered[3]
-    _verify_predecessor_v2(
-        result_payload=registered_result_payload,
-        predecessor=predecessor,
-    )
+    return registered[2]
+
+
+def _verify_local_receipt_v2(
+    receipt: ValidationReceiptV2,
+    *,
+    registered_result_payload: Mapping[str, object] | None = None,
+) -> _LocalReceiptVerificationV2:
+    registered_result = _registered_receipt_result_v2(receipt)
+    registered = _VERIFIED_RECEIPTS[id(receipt)]
+    if registered_result_payload is None:
+        registered_result_payload = verified_validation_slot_result_payload_v2(registered_result)
     current = read_bounded_regular(receipt.path, _MAX_RECEIPT_BYTES)
     if current != registered[4] or current != receipt.canonical_bytes:
         raise ValueError("validation V2 receipt bytes changed")
-    payload = json.loads(current)
-    if not isinstance(payload, dict) or payload.get("schema_version") != _SCHEMA:
-        raise ValueError("validation V2 receipt schema is invalid")
-    digest = payload.pop("receipt_sha256", None)
-    if digest != _sha256(_canonical(payload)) or digest != receipt.receipt_sha256:
+    payload = _receipt_payload_from_bytes_v2(current)
+    if payload.get("receipt_sha256") != receipt.receipt_sha256:
         raise ValueError("validation V2 receipt identity differs")
     receipt_result_fields = {
         "programme_id",
@@ -1017,10 +1030,20 @@ def verify_validation_v2_receipt(receipt: ValidationReceiptV2) -> ValidationRece
     ):
         raise ValueError("validation V2 receipt result provenance differs")
     commit_root = receipt.batch_manifest_path.parent
-    manifest, _batch_payloads = _verify_complete_batch_v2(
-        commit_root,
-        expected_manifest_bytes=registered[5],
+    return _LocalReceiptVerificationV2(
+        receipt=receipt,
+        result_payload=registered_result_payload,
+        receipt_payload=MappingProxyType(payload),
+        manifest_bytes=registered[5],
+        commit_root=commit_root,
     )
+
+
+def _verify_receipt_manifest_membership_v2(
+    local: _LocalReceiptVerificationV2,
+    manifest: Mapping[str, object],
+) -> None:
+    receipt = local.receipt
     if manifest["batch_manifest_sha256"] != receipt.batch_manifest_sha256:
         raise ValueError("validation V2 receipt batch manifest identity differs")
     relative = receipt.path.relative_to(receipt.batch_manifest_path.parent).as_posix()
@@ -1034,7 +1057,23 @@ def verify_validation_v2_receipt(receipt: ValidationReceiptV2) -> ValidationRece
     ]
     if len(matching) != 1 or matching[0].get("receipt_sha256") != receipt.receipt_sha256:
         raise ValueError("receipt is not uniquely bound into its authenticated batch manifest")
-    ledger = _load_programme_ledger_v2(commit_root.parent, receipt.programme_id)
+
+
+def verify_validation_v2_receipt(receipt: ValidationReceiptV2) -> ValidationReceiptV2:
+    """Reopen and validate one exact issuer-bound receipt and batch manifest."""
+
+    local = _verify_local_receipt_v2(receipt)
+    registered = _VERIFIED_RECEIPTS[id(receipt)]
+    _verify_predecessor_v2(
+        result_payload=local.result_payload,
+        predecessor=registered[3],
+    )
+    manifest, _batch_payloads = _verify_complete_batch_v2(
+        local.commit_root,
+        expected_manifest_bytes=local.manifest_bytes,
+    )
+    _verify_receipt_manifest_membership_v2(local, manifest)
+    ledger = _load_programme_ledger_v2(local.commit_root.parent, receipt.programme_id)
     if not any(
         payload["receipt_sha256"] == receipt.receipt_sha256 for payload in ledger.attempt_payloads
     ):
@@ -1051,11 +1090,56 @@ def select_terminal_attempts_v2(
         raise TypeError("receipt selection requires an exact tuple or list")
     if len(receipts) > _MAX_LEDGER_RECEIPTS:
         raise ValueError("receipt selection exceeds the frozen receipt bound")
+    frozen_receipts = tuple(receipts)
+    registered_results = tuple(
+        _registered_receipt_result_v2(receipt) for receipt in frozen_receipts
+    )
+    registered_payloads = verified_validation_slot_result_payloads_v2(registered_results)
+    locals_by_receipt = tuple(
+        _verify_local_receipt_v2(
+            receipt,
+            registered_result_payload=result_payload,
+        )
+        for receipt, result_payload in zip(
+            frozen_receipts,
+            registered_payloads,
+            strict=True,
+        )
+    )
+    manifests: dict[Path, Mapping[str, object]] = {}
+    manifest_bytes_by_root: dict[Path, bytes] = {}
+    for local in locals_by_receipt:
+        existing = manifest_bytes_by_root.get(local.commit_root)
+        if existing is not None and existing != local.manifest_bytes:
+            raise ValueError("receipts disagree about their immutable batch manifest")
+        manifest_bytes_by_root[local.commit_root] = local.manifest_bytes
+    for commit_root, manifest_bytes in manifest_bytes_by_root.items():
+        manifest, _payloads = _verify_complete_batch_v2(
+            commit_root,
+            expected_manifest_bytes=manifest_bytes,
+        )
+        manifests[commit_root] = manifest
+    ledgers: dict[tuple[Path, str], _ProgrammeLedgerV2] = {}
+    for local in locals_by_receipt:
+        _verify_receipt_manifest_membership_v2(local, manifests[local.commit_root])
+        ledger_key = (local.commit_root.parent, local.receipt.programme_id)
+        if ledger_key not in ledgers:
+            ledgers[ledger_key] = _load_programme_ledger_v2(*ledger_key)
+        if not any(
+            payload["receipt_sha256"] == local.receipt.receipt_sha256
+            for payload in ledgers[ledger_key].attempt_payloads
+        ):
+            raise ValueError("receipt is outside the canonical programme ledger")
+    return _select_terminal_attempts_verified_v2(frozen_receipts)
+
+
+def _select_terminal_attempts_verified_v2(
+    receipts: Sequence[ValidationReceiptV2],
+) -> Mapping[str, ValidationReceiptV2]:
     selected: dict[str, ValidationReceiptV2] = {}
     seen_attempts: set[tuple[str, int]] = set()
     by_receipt_sha: dict[str, ValidationReceiptV2] = {}
     for receipt in receipts:
-        verify_validation_v2_receipt(receipt)
         key = (receipt.slot_id, receipt.attempt_number)
         if key in seen_attempts:
             raise ValueError("duplicate validation V2 receipt attempt")
@@ -1219,7 +1303,7 @@ def verify_validation_programme_v2(
         expected_slot_ids=expected,
         runner_version=runner_version,
     )
-    selected = select_terminal_attempts_v2(receipts)
+    selected = _select_terminal_attempts_verified_v2(receipts)
     for result in typed_results:
         receipt = selected[result.slot_id]
         if (
