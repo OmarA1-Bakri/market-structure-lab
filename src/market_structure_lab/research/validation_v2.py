@@ -8,7 +8,6 @@ result is bound to one frozen roster slot.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -56,12 +55,18 @@ from market_structure_lab.research.candidates import (
     verify_candidate_signal,
 )
 from market_structure_lab.research.models import (
+    ExecutionStatus,
+    ScientificDecision,
     VALIDATION_SLOT_ROSTER,
     ValidationSlot,
     ValidationSlotKind,
     ValidationWorkBudget,
     ValidationWorkDemand,
     candidate_definition_for_verified_series,
+)
+from market_structure_lab.research.statistics import (
+    EvaluationStatistic,
+    holm_family_correction,
 )
 from market_structure_lab.research.outcomes import (
     DevelopmentOutcomeRowV2,
@@ -97,13 +102,12 @@ from market_structure_lab.research.validation_v2_splits import (
     freeze_development_folds_v2,
     verify_development_read_boundary_v2,
 )
-from market_structure_lab.research.statistics import bootstrap_weekly_mean
 
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PROGRAMME_ID = re.compile(r"^VPV2-[a-f0-9]{64}$")
 _RUNNER_VERSION = "phase5-validation-slot-runner-v2"
 _PRIMARY_COUNT = 64
-_GLOBAL_ALPHA = 0.05
+_FAMILY_ALPHA = 0.01
 _PRECISION_REQUIRED_FAMILIES = frozenset({"B"})
 _OUTCOME_FACTORY = object()
 _OUTCOME_READER_FACTORY = object()
@@ -134,12 +138,6 @@ def _require_utc(value: object, label: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{label} must be UTC-aware")
     return value.astimezone(UTC)
-
-
-def _monday(timestamp: datetime) -> datetime:
-    value = _require_utc(timestamp, "timestamp")
-    day = datetime(value.year, value.month, value.day, tzinfo=UTC)
-    return day - timedelta(days=day.weekday())
 
 
 @dataclass(frozen=True, slots=True)
@@ -1187,335 +1185,6 @@ def _issue_publication_outcome_reader_v2(
 
 
 @dataclass(frozen=True, slots=True)
-class SelectorEvidenceV2:
-    selected_event_ids: tuple[str, ...]
-    inner_fold_event_ids: tuple[str, ...]
-    outer_diagnostic_event_ids: tuple[str, ...]
-    selector_metric: float | None
-    selector_sha256: str
-
-
-@dataclass(frozen=True, slots=True)
-class WeeklySlotVectorV2:
-    week_start: datetime
-    week_end: datetime
-    fold_id: str
-    symbols: tuple[str, ...]
-    value: float
-    event_ids: tuple[str, ...]
-    vector_sha256: str
-
-
-@dataclass(frozen=True, slots=True)
-class ExposureRowV2:
-    event_id: str
-    slot_id: str
-    fold_id: str
-    partition_role: str
-    symbol: str
-    timeframe: str
-    timestamp: datetime
-    realized_return: float
-    detector_metric: float
-    volume: float
-    source_partition_sha256: str
-    split_sha256: str
-    cost_authority_sha256: str
-    seed: int
-    runner_version: str
-    exposure_row_sha256: str
-
-
-@dataclass(frozen=True, slots=True)
-class RobustnessRerunEvidenceV2:
-    variant: str
-    event_ids: tuple[str, ...]
-    weekly_vector_sha256s: tuple[str, ...]
-    lower_bound: float | None
-    rerun_sha256: str
-
-
-@dataclass(frozen=True, slots=True)
-class DerivedSlotEvidenceV2:
-    programme_id: str
-    slot_id: str
-    family: str
-    fold_ids: tuple[str, ...]
-    symbols: tuple[str, ...]
-    timeframe: str
-    event_ids: tuple[str, ...]
-    outcome_sha256s: tuple[str, ...]
-    source_partition_sha256s: tuple[str, ...]
-    split_sha256: str
-    cost_authority_sha256: str
-    seed: int
-    runner_version: str
-    selector_evidence: SelectorEvidenceV2
-    weekly_vectors: tuple[WeeklySlotVectorV2, ...]
-    exposure_rows: tuple[ExposureRowV2, ...]
-    robustness_rerun: RobustnessRerunEvidenceV2 | None
-    artifact_sha256: str
-
-    def verify_for(
-        self,
-        *,
-        programme_id: str,
-        slot: ValidationSlot,
-        split_sha256: str,
-        cost_authority_sha256: str,
-        runner_version: str,
-    ) -> None:
-        if self.programme_id != programme_id:
-            raise ValueError("derived artifact programme binding differs")
-        if self.slot_id != slot.slot_id or self.family != slot.family:
-            raise ValueError("derived artifact slot binding differs")
-        if self.timeframe != slot.timeframe:
-            raise ValueError("derived artifact timeframe binding differs")
-        if self.split_sha256 != split_sha256:
-            raise ValueError("derived artifact split binding differs")
-        if self.cost_authority_sha256 != cost_authority_sha256:
-            raise ValueError("derived artifact cost authority binding differs")
-        if self.runner_version != runner_version:
-            raise ValueError("derived artifact runner binding differs")
-        expected = _derived_artifact_sha256(self)
-        if self.artifact_sha256 != expected:
-            raise ValueError("derived artifact identity differs")
-
-
-def derive_slot_evidence_v2(
-    *,
-    programme_id: str,
-    slot: ValidationSlot,
-    outcome_reader: VerifiedDevelopmentOutcomeReaderV2,
-    seed: int,
-    runner_version: str = _RUNNER_VERSION,
-) -> DerivedSlotEvidenceV2:
-    """Derive selector and Monday-UTC vectors from slot-specific outcomes."""
-
-    _require_programme(programme_id)
-    if slot not in VALIDATION_SLOT_ROSTER:
-        raise ValueError("slot is outside the frozen roster")
-    if not isinstance(seed, int) or seed < 0:
-        raise ValueError("seed must be a non-negative integer")
-    if not isinstance(outcome_reader, VerifiedDevelopmentOutcomeReaderV2):
-        raise TypeError("outcome_reader must be verifier-issued")
-    ordered = tuple(
-        sorted(
-            outcome_reader.read_slot(
-                slot,
-                programme_id=programme_id,
-                split_sha256=outcome_reader.split_sha256,
-                cost_authority_sha256=outcome_reader.cost_authority_sha256,
-            ),
-            key=lambda row: (row.timestamp, row.symbol, row.event_id),
-        )
-    )
-    for row in ordered:
-        if row.slot_id != slot.slot_id:
-            raise ValueError("outcome slot differs from requested slot")
-        if row.timeframe != slot.timeframe:
-            raise ValueError("outcome timeframe differs from requested slot")
-    split_values = {row.split_sha256 for row in ordered}
-    cost_values = {row.cost_authority_sha256 for row in ordered}
-    if len(split_values) > 1 or len(cost_values) > 1:
-        raise ValueError("outcomes mix split or cost authority publications")
-    split_sha = next(iter(split_values), "0" * 64)
-    cost_sha = next(iter(cost_values), "0" * 64)
-    inner = tuple(
-        row for row in ordered if row.partition_role in {"inner_train", "inner_validation"}
-    )
-    outer = tuple(row for row in ordered if row.partition_role == "outer_diagnostic")
-    selector_metric = (
-        sum(float(row.detector_metric) for row in inner) / len(inner) if inner else None
-    )
-    selected = tuple(
-        row.event_id
-        for row in inner
-        if selector_metric is not None
-        and (
-            float(row.detector_metric) >= selector_metric
-            if slot.direction == "long"
-            else float(row.detector_metric) <= selector_metric
-        )
-    )
-    selector_payload = {
-        "slot_id": slot.slot_id,
-        "seed": seed,
-        "inner_fold_event_ids": [row.event_id for row in inner],
-        "outer_diagnostic_event_ids": [row.event_id for row in outer],
-        "selected_event_ids": list(selected),
-        "selector_metric": selector_metric,
-    }
-    selector = SelectorEvidenceV2(
-        selected_event_ids=selected,
-        inner_fold_event_ids=tuple(row.event_id for row in inner),
-        outer_diagnostic_event_ids=tuple(row.event_id for row in outer),
-        selector_metric=selector_metric,
-        selector_sha256=hash_json("phase5-validation-selector-evidence-v2", selector_payload),
-    )
-    grouped: dict[tuple[datetime, str], list[AttachedDevelopmentOutcomeV2]] = defaultdict(list)
-    for row in ordered:
-        grouped[(_monday(row.timestamp), row.fold_id)].append(row)
-    vectors: list[WeeklySlotVectorV2] = []
-    for (week, fold_id), rows in sorted(grouped.items()):
-        event_ids = tuple(sorted(row.event_id for row in rows))
-        by_asset: dict[str, list[float]] = defaultdict(list)
-        for row in rows:
-            by_asset[row.symbol].append(float(row.net_return))
-        asset_means = tuple(sum(values) / len(values) for _, values in sorted(by_asset.items()))
-        value = sum(asset_means) / len(asset_means)
-        symbols = tuple(sorted(by_asset))
-        payload = {
-            "programme_id": programme_id,
-            "slot_id": slot.slot_id,
-            "week_start": week.isoformat(),
-            "week_end": (week + timedelta(days=7)).isoformat(),
-            "fold_id": fold_id,
-            "symbols": list(symbols),
-            "timeframe": slot.timeframe,
-            "value": value,
-            "event_ids": list(event_ids),
-            "source_partition_sha256s": sorted({row.source_partition_sha256 for row in rows}),
-            "split_sha256": split_sha,
-            "cost_authority_sha256": cost_sha,
-            "seed": seed,
-            "runner_version": runner_version,
-        }
-        vectors.append(
-            WeeklySlotVectorV2(
-                week_start=week,
-                week_end=week + timedelta(days=7),
-                fold_id=fold_id,
-                symbols=symbols,
-                value=value,
-                event_ids=event_ids,
-                vector_sha256=hash_json("phase5-validation-weekly-slot-vector-v2", payload),
-            )
-        )
-    exposure_rows = tuple(
-        ExposureRowV2(
-            event_id=row.event_id,
-            slot_id=slot.slot_id,
-            fold_id=row.fold_id,
-            partition_role=row.partition_role,
-            symbol=row.symbol,
-            timeframe=row.timeframe,
-            timestamp=row.timestamp,
-            realized_return=float(row.net_return),
-            detector_metric=float(row.detector_metric),
-            volume=float(row.volume),
-            source_partition_sha256=row.source_partition_sha256,
-            split_sha256=row.split_sha256,
-            cost_authority_sha256=row.cost_authority_sha256,
-            seed=seed,
-            runner_version=runner_version,
-            exposure_row_sha256=hash_json(
-                "phase5-validation-exposure-row-v2",
-                {
-                    "event_id": row.event_id,
-                    "slot_id": slot.slot_id,
-                    "fold_id": row.fold_id,
-                    "partition_role": row.partition_role,
-                    "symbol": row.symbol,
-                    "timeframe": row.timeframe,
-                    "timestamp": row.timestamp.isoformat(),
-                    "realized_return": float(row.net_return),
-                    "detector_metric": float(row.detector_metric),
-                    "volume": float(row.volume),
-                    "source_partition_sha256": row.source_partition_sha256,
-                    "split_sha256": row.split_sha256,
-                    "cost_authority_sha256": row.cost_authority_sha256,
-                    "seed": seed,
-                    "runner_version": runner_version,
-                },
-            ),
-        )
-        for row in ordered
-    )
-    robustness_rerun: RobustnessRerunEvidenceV2 | None = None
-    if slot.kind in {ValidationSlotKind.ROBUSTNESS, ValidationSlotKind.PERTURBATION}:
-        vector_ids = tuple(item.vector_sha256 for item in vectors)
-        lower_bound = min((item.value for item in vectors), default=None)
-        robustness_rerun = RobustnessRerunEvidenceV2(
-            variant=slot.role,
-            event_ids=tuple(row.event_id for row in ordered),
-            weekly_vector_sha256s=vector_ids,
-            lower_bound=lower_bound,
-            rerun_sha256=hash_json(
-                "phase5-validation-robustness-rerun-v2",
-                {
-                    "programme_id": programme_id,
-                    "slot": slot.to_dict(),
-                    "event_ids": [row.event_id for row in ordered],
-                    "weekly_vector_sha256s": list(vector_ids),
-                    "lower_bound": lower_bound,
-                    "split_sha256": split_sha,
-                    "cost_authority_sha256": cost_sha,
-                    "seed": seed,
-                    "runner_version": runner_version,
-                },
-            ),
-        )
-    base = DerivedSlotEvidenceV2(
-        programme_id=programme_id,
-        slot_id=slot.slot_id,
-        family=slot.family,
-        fold_ids=tuple(sorted({row.fold_id for row in ordered})),
-        symbols=tuple(sorted({row.symbol for row in ordered})),
-        timeframe=slot.timeframe,
-        event_ids=tuple(row.event_id for row in ordered),
-        outcome_sha256s=tuple(row.outcome_sha256 for row in ordered),
-        source_partition_sha256s=tuple(sorted({row.source_partition_sha256 for row in ordered})),
-        split_sha256=split_sha,
-        cost_authority_sha256=cost_sha,
-        seed=seed,
-        runner_version=runner_version,
-        selector_evidence=selector,
-        weekly_vectors=tuple(vectors),
-        exposure_rows=exposure_rows,
-        robustness_rerun=robustness_rerun,
-        artifact_sha256="0" * 64,
-    )
-    return DerivedSlotEvidenceV2(
-        **{
-            field_name: getattr(base, field_name)
-            for field_name in base.__dataclass_fields__
-            if field_name != "artifact_sha256"
-        },
-        artifact_sha256=_derived_artifact_sha256(base),
-    )
-
-
-def _derived_artifact_sha256(evidence: DerivedSlotEvidenceV2) -> str:
-    return hash_json(
-        "phase5-validation-derived-slot-evidence-v2",
-        {
-            "programme_id": evidence.programme_id,
-            "slot_id": evidence.slot_id,
-            "family": evidence.family,
-            "fold_ids": list(evidence.fold_ids),
-            "symbols": list(evidence.symbols),
-            "timeframe": evidence.timeframe,
-            "event_ids": list(evidence.event_ids),
-            "outcome_sha256s": list(evidence.outcome_sha256s),
-            "source_partition_sha256s": list(evidence.source_partition_sha256s),
-            "split_sha256": evidence.split_sha256,
-            "cost_authority_sha256": evidence.cost_authority_sha256,
-            "seed": evidence.seed,
-            "runner_version": evidence.runner_version,
-            "selector_sha256": evidence.selector_evidence.selector_sha256,
-            "weekly_vector_sha256s": [item.vector_sha256 for item in evidence.weekly_vectors],
-            "exposure_row_sha256s": [item.exposure_row_sha256 for item in evidence.exposure_rows],
-            "robustness_rerun_sha256": (
-                evidence.robustness_rerun.rerun_sha256
-                if evidence.robustness_rerun is not None
-                else None
-            ),
-        },
-    )
-
-
-@dataclass(frozen=True, slots=True)
 class SlotRunnerInputsV2:
     """Internal slot runner inputs; the public programme derives this bundle."""
 
@@ -1551,6 +1220,8 @@ _VERIFIED_RESULTS: dict[
         Callable[[], object],
         object,
         ValidationSlotComputationResultV2 | None,
+        object | None,
+        Callable[[], object] | None,
         Mapping[str, object],
     ],
 ] = {}
@@ -1823,8 +1494,12 @@ def _issue_validation_slot_result_v2(
     evidence_verifier: Callable[[], object],
     retained_evidence: object,
     computational_parent: ValidationSlotComputationResultV2 | None = None,
+    evidence_authority: object | None = None,
+    evidence_authority_verifier: Callable[[], object] | None = None,
     **fields: object,
 ) -> ValidationSlotComputationResultV2:
+    if (evidence_authority is None) != (evidence_authority_verifier is None):
+        raise ValueError("result evidence authority and verifier must be supplied together")
     fields["metrics"] = _bounded_result_metrics_v2(fields.get("metrics"))
     fields.pop("result_sha256", None)
     fields["result_sha256"] = validation_slot_result_sha256_v2(fields)
@@ -1859,6 +1534,8 @@ def _issue_validation_slot_result_v2(
         evidence_verifier,
         retained_evidence,
         computational_parent,
+        evidence_authority,
+        evidence_authority_verifier,
         registered_payload,
     )
     return result
@@ -1872,6 +1549,8 @@ def _verify_registered_result_identity_v2(
     Callable[[], object],
     object,
     ValidationSlotComputationResultV2 | None,
+    object | None,
+    Callable[[], object] | None,
     Mapping[str, object],
 ]:
     if type(result) is not ValidationSlotComputationResultV2:
@@ -1904,15 +1583,24 @@ def _verify_validation_slot_computation_result_v2(
     result: ValidationSlotComputationResultV2,
     *,
     verified_results: set[int] | None = None,
+    verified_authorities: set[int] | None = None,
 ) -> ValidationSlotComputationResultV2:
     registered = _verify_registered_result_identity_v2(result)
     verified = verified_results if verified_results is not None else set()
+    authorities = verified_authorities if verified_authorities is not None else set()
     if id(result) in verified:
         return result
+    authority = registered[5]
+    authority_verifier = registered[6]
+    if authority is not None and id(authority) not in authorities:
+        if authority_verifier is None or authority_verifier() is not authority:
+            raise ValueError("slot computation evidence authority verification differs")
+        authorities.add(id(authority))
     if registered[4] is not None:
         _verify_validation_slot_computation_result_v2(
             registered[4],
             verified_results=verified,
+            verified_authorities=authorities,
         )
     registered[2]()
     verified.add(id(result))
@@ -1934,174 +1622,29 @@ def verified_validation_slot_result_payload_v2(
 
     _verify_validation_slot_computation_result_v2(result)
     registered = _VERIFIED_RESULTS[id(result)]
-    return registered[5]
+    return registered[7]
 
 
-def _seed(programme_id: str, slot: ValidationSlot) -> int:
-    return int(
-        hash_json(
-            "phase5-validation-slot-seed-v2",
-            {"programme_id": programme_id, "slot": slot.to_dict()},
-        )[:16],
-        16,
-    )
+def verified_validation_slot_result_payloads_v2(
+    results: Sequence[ValidationSlotComputationResultV2],
+) -> tuple[Mapping[str, object], ...]:
+    """Return issuer snapshots after one bounded shared-authority verification pass."""
 
-
-def _role_metrics(
-    slot: ValidationSlot,
-    evidence: DerivedSlotEvidenceV2,
-    budget: ValidationWorkBudget,
-) -> tuple[dict[str, float | int | str], float | None]:
-    raw_values = tuple(item.value for item in evidence.weekly_vectors)
-    formula = "primary_weekly_return"
-    if slot.kind is ValidationSlotKind.BASELINE:
-        if slot.role == "naive":
-            values = tuple(0.0 for _ in raw_values)
-            formula = "matched_zero_reference"
-        elif slot.role == "persistence":
-            sign = 1.0 if slot.direction == "long" else -1.0
-            values = tuple(sign * value for value in raw_values)
-            formula = "direction_matched_persistence"
-        else:
-            values = raw_values
-            formula = "matched_unconditional_reference"
-    elif slot.kind is ValidationSlotKind.NEGATIVE_CONTROL:
-        if slot.role == "label_shuffle":
-            values = tuple(reversed(raw_values))
-            formula = "deterministic_label_permutation"
-        elif slot.role == "one_week_time_shift":
-            values = raw_values[1:]
-            formula = "causal_one_week_shift"
-        else:
-            values = tuple(
-                value
-                if int(
-                    hash_json(
-                        "phase5-validation-random-control-sign-v2",
-                        {"slot_id": slot.slot_id, "index": index},
-                    )[:2],
-                    16,
-                )
-                % 2
-                else -value
-                for index, value in enumerate(raw_values)
-            )
-            formula = "sha_random_feature_control"
-    elif slot.kind is ValidationSlotKind.ROBUSTNESS:
-        if slot.role == "doubled_cost":
-            values = tuple(value - 0.0002 for value in raw_values)
-            formula = "doubled_proxy_cost_rerun"
-        elif slot.role == "one_bar_delay":
-            values = tuple(value * 0.9 for value in raw_values)
-            formula = "one_bar_delay_rerun"
-        elif slot.role == "exclude_strongest_asset":
-            by_asset: dict[str, list[float]] = defaultdict(list)
-            for row in evidence.exposure_rows:
-                by_asset[row.symbol].append(row.realized_return)
-            strongest = max(
-                by_asset,
-                key=lambda asset: (
-                    sum(by_asset[asset]) / len(by_asset[asset]),
-                    asset,
-                ),
-                default="",
-            )
-            retained = tuple(
-                row.realized_return for row in evidence.exposure_rows if row.symbol != strongest
-            )
-            values = retained
-            formula = "exclude_strongest_asset_rerun"
-        else:
-            by_year: dict[int, list[float]] = defaultdict(list)
-            for row in evidence.exposure_rows:
-                by_year[row.timestamp.year].append(row.realized_return)
-            strongest_year = max(
-                by_year,
-                key=lambda year: (
-                    sum(by_year[year]) / len(by_year[year]),
-                    year,
-                ),
-                default=0,
-            )
-            values = tuple(
-                row.realized_return
-                for row in evidence.exposure_rows
-                if row.timestamp.year != strongest_year
-            )
-            formula = "exclude_strongest_utc_year_rerun"
-    elif slot.kind is ValidationSlotKind.PERTURBATION:
-        parameters = dict(slot.parameters)
-        original = float(parameters["original_bars"])
-        candidate = float(parameters["candidate_bars"])
-        values = tuple(value * candidate / original for value in raw_values)
-        formula = "adjacent_parameter_pipeline_rerun"
-    elif slot.kind is ValidationSlotKind.EXPOSURE:
-        observed = tuple(row.realized_return for row in evidence.exposure_rows)
-        centre = sum(observed) / len(observed) if observed else 0.0
-        values = tuple(value - centre for value in observed)
-        formula = "target_excluded_residual_diagnostic"
-    elif slot.kind is ValidationSlotKind.CAPACITY:
-        values = ()
-        formula = "turnover_capacity_diagnostic"
-    else:
-        values = raw_values
-    estimate = sum(values) / len(values) if values else 0.0
-    support = len(values)
-    role_hash = int(hash_json("phase5-validation-role-metric-v2", slot.to_dict())[:8], 16)
-    bootstrap = (
-        bootstrap_weekly_mean(
-            weekly_values=values,
-            seed=evidence.seed,
-            budget=budget,
-            # MDE only controls the V1 support classification. V2 preserves
-            # that classification as diagnostic while cost completeness gates
-            # the scientific decision independently.
-            mde=1.0,
-            family=slot.family,
-            slot_id=slot.slot_id,
+    if type(results) not in {tuple, list}:
+        raise TypeError("slot result payload verification requires an exact tuple or list")
+    if not 1 <= len(results) <= len(VALIDATION_SLOT_ROSTER):
+        raise ValueError("slot result payload verification cardinality is outside the roster")
+    verified_results: set[int] = set()
+    verified_authorities: set[int] = set()
+    payloads: list[Mapping[str, object]] = []
+    for result in results:
+        _verify_validation_slot_computation_result_v2(
+            result,
+            verified_results=verified_results,
+            verified_authorities=verified_authorities,
         )
-        if slot.primary
-        else None
-    )
-    p_value = bootstrap.p_value if bootstrap is not None else None
-    common: dict[str, float | int | str] = {
-        "estimate": estimate,
-        "weekly_support": support,
-        "event_count": len(evidence.event_ids),
-        "role": slot.role,
-        "formula": formula,
-        "role_replay_token": role_hash,
-    }
-    if bootstrap is not None:
-        common["bootstrap_draw_count"] = bootstrap.draw_count
-        common["bootstrap_reason"] = bootstrap.reason
-        common["ci_lower"] = bootstrap.ci_lower if bootstrap.ci_lower is not None else 0.0
-        common["ci_upper"] = bootstrap.ci_upper if bootstrap.ci_upper is not None else 0.0
-    if slot.kind is ValidationSlotKind.CORE:
-        common["statistic"] = "slot_weekly_mean"
-    elif slot.kind is ValidationSlotKind.BASELINE:
-        common["baseline_kind"] = slot.role
-    elif slot.kind is ValidationSlotKind.NEGATIVE_CONTROL:
-        common["control_kind"] = slot.role
-    elif slot.kind is ValidationSlotKind.ROBUSTNESS:
-        common["rerun_kind"] = slot.role
-        common["rerun_lower_bound"] = (
-            evidence.robustness_rerun.lower_bound
-            if evidence.robustness_rerun is not None
-            and evidence.robustness_rerun.lower_bound is not None
-            else 0.0
-        )
-    elif slot.kind is ValidationSlotKind.PERTURBATION:
-        common["perturbation_kind"] = slot.role
-    elif slot.kind is ValidationSlotKind.EXPOSURE:
-        exposure_values = tuple(row.realized_return for row in evidence.exposure_rows)
-        common["residual_mean"] = (
-            sum(exposure_values) / len(exposure_values) if exposure_values else 0.0
-        )
-    elif slot.kind is ValidationSlotKind.CAPACITY:
-        common["opportunity_count"] = len(evidence.event_ids)
-        common["turnover_proxy"] = sum(row.volume for row in evidence.exposure_rows)
-    return common, p_value if slot.primary else None
+        payloads.append(_VERIFIED_RESULTS[id(result)][7])
+    return tuple(payloads)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2168,7 +1711,6 @@ def _compute_slot_result_material_v2(
             "attempt_number": attempt_number,
         },
     )
-    missing_reason: str | None = None
     if not inputs.source_available:
         missing_reason = "verified development source is unavailable"
     elif slot.family in _PRECISION_REQUIRED_FAMILIES and not inputs.precision_available:
@@ -2177,59 +1719,25 @@ def _compute_slot_result_material_v2(
         parent is None or parent.execution_status != "completed"
     ):
         missing_reason = "required parent slot did not complete"
-    if missing_reason is not None:
-        execution = "failed"
-        decision = "not_evaluated"
-        completed = False
-        metrics: dict[str, float | int | str] = {}
-        p_value = None
-        evidence_sha = hash_json(
-            "phase5-validation-slot-precondition-v2",
-            {"slot_id": slot.slot_id, "reason": missing_reason, "input_sha256": input_sha},
-        )
     else:
-        evidence = derive_slot_evidence_v2(
-            programme_id=inputs.programme_id,
-            slot=slot,
-            outcome_reader=inputs.outcome_reader,
-            seed=_seed(inputs.programme_id, slot),
-            runner_version=inputs.runner_version,
+        missing_reason = (
+            "authenticated exact quantitative primitive inputs are unavailable; "
+            "fixture outcomes and caller cost-completeness booleans cannot authorize computation"
         )
-        evidence.verify_for(
-            programme_id=inputs.programme_id,
-            slot=slot,
-            split_sha256=inputs.split_sha256,
-            cost_authority_sha256=inputs.cost_authority_sha256,
-            runner_version=inputs.runner_version,
-        )
-        metrics, p_value = _role_metrics(slot, evidence, budget)
-        evidence_sha = evidence.artifact_sha256
-        execution = "completed"
-        statistically_inconclusive = slot.primary and p_value is None
-        decision = (
-            "inconclusive"
-            if not slot.primary
-            or statistically_inconclusive
-            or not inputs.promotion_grade_costs_complete
-            else "rejected"
-        )
-        completed = True
-        if statistically_inconclusive:
-            missing_reason = str(metrics["bootstrap_reason"])
-        elif not inputs.promotion_grade_costs_complete:
-            missing_reason = "promotion-grade cost evidence is incomplete"
-        else:
-            missing_reason = "slot computation completed"
+    evidence_sha = hash_json(
+        "phase5-validation-slot-precondition-v2",
+        {"slot_id": slot.slot_id, "reason": missing_reason, "input_sha256": input_sha},
+    )
     return _SlotResultMaterialV2(
         input_sha256=input_sha,
         attempt_sha256=attempt_sha,
         evidence_sha256=evidence_sha,
-        execution_status=execution,
-        decision=decision,
-        computation_completed=completed,
+        execution_status="failed",
+        decision="not_evaluated",
+        computation_completed=False,
         reason=missing_reason,
-        p_value=p_value,
-        metrics=tuple(sorted(metrics.items())),
+        p_value=None,
+        metrics=(),
     )
 
 
@@ -2333,7 +1841,7 @@ def run_slot_roster_v2(
             runner_version=inputs.runner_version,
             parent_attempt_sha256=parent.attempt_sha256 if parent else None,
             parent_result_sha256=parent.result_sha256 if parent else None,
-            **material.result_fields(),
+            **material.result_fields(),  # type: ignore[arg-type]
         )
         by_slot[slot.slot_id] = result
         results.append(result)
@@ -2360,10 +1868,12 @@ def verify_slot_results_v2(
     result_ids: set[str] = set()
     by_slot: dict[str, ValidationSlotComputationResultV2] = {}
     verified_results: set[int] = set()
+    verified_authorities: set[int] = set()
     for slot, result in zip(VALIDATION_SLOT_ROSTER, results, strict=True):
         _verify_validation_slot_computation_result_v2(
             result,
             verified_results=verified_results,
+            verified_authorities=verified_authorities,
         )
         if result.runner_version != runner_version:
             raise ValueError("slot result uses the wrong runner version")
@@ -2405,122 +1915,241 @@ def verify_slot_results_v2(
 
 
 @dataclass(frozen=True, slots=True)
-class GlobalHolmResultV2:
+class FamilyHolmResultV2:
+    family: str
     slot_id: str
     raw_p_value: float | None
     effective_p_value: float
     adjusted_p_value: float
     rejected: bool
     evaluable: bool
-    alpha: float = _GLOBAL_ALPHA
+    alpha: float = _FAMILY_ALPHA
 
 
-def apply_global_holm_v2(
+def apply_family_holm_v2(
     results: Sequence[ValidationSlotComputationResultV2],
-) -> tuple[GlobalHolmResultV2, ...]:
-    """Apply one global Holm correction to exactly 64 frozen primaries."""
+) -> tuple[FamilyHolmResultV2, ...]:
+    """Apply the frozen 0.01 Holm correction within each primary family."""
 
     if not results:
-        raise ValueError("global Holm requires the complete roster and exactly 64 primaries")
+        raise ValueError("family Holm requires the complete roster and exactly 64 primaries")
     expected_all = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
     observed = tuple(item.slot_id for item in results)
     if observed != expected_all:
-        raise ValueError("global Holm requires the complete roster and exactly 64 primaries")
+        raise ValueError("family Holm requires the complete roster and exactly 64 primaries")
     verify_slot_results_v2(results, runner_version=results[0].runner_version)
-    primary_slots = tuple(slot for slot in VALIDATION_SLOT_ROSTER if slot.primary)
+    return _apply_family_holm_verified_v2(results)
+
+
+def _apply_family_holm_verified_v2(
+    results: Sequence[ValidationSlotComputationResultV2],
+) -> tuple[FamilyHolmResultV2, ...]:
+    primary_slots = tuple(
+        slot
+        for slot in VALIDATION_SLOT_ROSTER
+        if slot.kind is ValidationSlotKind.CORE and slot.primary
+    )
     if len(primary_slots) != _PRIMARY_COUNT:
         raise RuntimeError("frozen roster does not contain exactly 64 primaries")
     by_slot = {item.slot_id: item for item in results}
-    pvalues: dict[str, float | None] = {}
-    for slot in primary_slots:
-        result = by_slot[slot.slot_id]
-        if result.p_value is not None and (
-            not isfinite(result.p_value) or not 0.0 <= result.p_value <= 1.0
-        ):
-            raise ValueError("primary p-value must be finite and in [0, 1]")
-        evaluable = (
-            result.computation_completed
-            and result.execution_status == "completed"
-            and result.p_value is not None
+    corrected: list[FamilyHolmResultV2] = []
+    for family in ("A", "B", "G", "E", "D"):
+        family_slots = tuple(slot for slot in primary_slots if slot.family == family)
+        evaluations = tuple(
+            EvaluationStatistic(
+                slot_id=slot.slot_id,
+                family=family,
+                p_value=by_slot[slot.slot_id].p_value,
+                status=ExecutionStatus(by_slot[slot.slot_id].execution_status),
+                decision=ScientificDecision(by_slot[slot.slot_id].decision),
+            )
+            for slot in family_slots
         )
-        pvalues[slot.slot_id] = result.p_value if evaluable else None
-    corrected = global_holm_pvalues_v2(pvalues)
-    corrected_by_slot = {item.slot_id: item for item in corrected}
-    return tuple(
-        GlobalHolmResultV2(
-            slot_id=slot.slot_id,
-            raw_p_value=by_slot[slot.slot_id].p_value,
-            effective_p_value=corrected_by_slot[slot.slot_id].effective_p_value,
-            adjusted_p_value=corrected_by_slot[slot.slot_id].adjusted_p_value,
-            rejected=corrected_by_slot[slot.slot_id].rejected,
-            evaluable=pvalues[slot.slot_id] is not None,
+        adjusted = holm_family_correction(evaluations, family=family)
+        evaluable = {item.slot_id: item.evaluable for item in evaluations}
+        corrected.extend(
+            FamilyHolmResultV2(
+                family=family,
+                slot_id=item.slot_id,
+                raw_p_value=item.raw_p_value,
+                effective_p_value=item.effective_p_value,
+                adjusted_p_value=item.adjusted_p_value,
+                rejected=item.rejected,
+                evaluable=evaluable[item.slot_id],
+            )
+            for item in adjusted
         )
-        for slot in primary_slots
-    )
+    return tuple(corrected)
 
 
-def global_holm_pvalues_v2(
-    pvalues: Mapping[str, float | None],
-) -> tuple[GlobalHolmResultV2, ...]:
-    """Correct exactly 64 canonical primary p-values at alpha 0.05."""
-
-    primary_slots = tuple(slot for slot in VALIDATION_SLOT_ROSTER if slot.primary)
-    expected = tuple(slot.slot_id for slot in primary_slots)
-    if tuple(pvalues) != expected or len(pvalues) != _PRIMARY_COUNT:
-        raise ValueError("global Holm requires exactly 64 canonical primary p-values")
-    effective: dict[str, float] = {}
-    for slot_id in expected:
-        raw = pvalues[slot_id]
-        if raw is None:
-            effective[slot_id] = 1.0
-        elif isinstance(raw, bool) or not isinstance(raw, (int, float)):
-            raise ValueError("primary p-value must be numeric")
-        elif not isfinite(float(raw)) or not 0.0 <= float(raw) <= 1.0:
-            raise ValueError("primary p-value must be finite and in [0, 1]")
-        else:
-            effective[slot_id] = float(raw)
-    ordered = sorted(effective.items(), key=lambda item: (item[1], item[0]))
-    adjusted: dict[str, float] = {}
-    running = 0.0
-    for rank, (slot_id, p_value) in enumerate(ordered, start=1):
-        running = max(running, min(1.0, (_PRIMARY_COUNT - rank + 1) * p_value))
-        adjusted[slot_id] = running
-    return tuple(
-        GlobalHolmResultV2(
-            slot_id=slot.slot_id,
-            raw_p_value=pvalues[slot.slot_id],
-            effective_p_value=effective[slot.slot_id],
-            adjusted_p_value=adjusted[slot.slot_id],
-            rejected=adjusted[slot.slot_id] <= _GLOBAL_ALPHA,
-            evaluable=pvalues[slot.slot_id] is not None,
-        )
-        for slot in primary_slots
-    )
+_PROGRAMME_RUN_ISSUANCE: dict[
+    int,
+    tuple[
+        object,
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[FamilyHolmResultV2, ...],
+    ],
+] = {}
+_VERIFIED_PROGRAMME_RUNS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[ValidationProgrammeRunV2],
+        tuple[object, ...],
+        tuple[ValidationSlotComputationResultV2, ...],
+        tuple[FamilyHolmResultV2, ...],
+    ],
+] = {}
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ValidationProgrammeRunV2:
     results: tuple[ValidationSlotComputationResultV2, ...]
-    holm: tuple[GlobalHolmResultV2, ...]
+    holm: tuple[FamilyHolmResultV2, ...]
     execution_scope: str
     planned_slot_count: int
     executed_slot_count: int
     roster_complete: bool
     scientific_terminal: bool
+    execution_status: str
+    decision: str
+    terminal_reason: str
+    final_holdout_access_count: int
+    _factory_token: InitVar[object | None] = None
 
-    def __post_init__(self) -> None:
-        if self.execution_scope != "gate-b-vs0001-development-slice":
+    def __post_init__(self, _factory_token: object | None) -> None:
+        issuance = _PROGRAMME_RUN_ISSUANCE.pop(id(_factory_token), None)
+        if (
+            issuance is None
+            or issuance[0] is not _factory_token
+            or issuance[1] is not self.results
+            or issuance[2] is not self.holm
+        ):
+            raise TypeError("ValidationProgrammeRunV2 requires its computation factory")
+        if type(self.results) is not tuple or any(
+            type(item) is not ValidationSlotComputationResultV2 for item in self.results
+        ):
+            raise TypeError("validation programme results must be exact registered results")
+        if type(self.holm) is not tuple or any(
+            type(item) is not FamilyHolmResultV2 for item in self.holm
+        ):
+            raise TypeError("validation programme Holm evidence must use the exact result type")
+        if self.execution_scope != "development-only-full-roster":
             raise ValueError("validation programme execution scope is unsupported")
+        expected_slots = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER)
+        expected_primaries = tuple(
+            slot.slot_id
+            for slot in VALIDATION_SLOT_ROSTER
+            if slot.kind is ValidationSlotKind.CORE and slot.primary
+        )
         if (
             self.planned_slot_count != len(VALIDATION_SLOT_ROSTER)
-            or self.executed_slot_count != 1
-            or len(self.results) != 1
-            or self.results[0].slot_id != "VS-0001"
-            or self.holm
-            or self.roster_complete
-            or self.scientific_terminal
+            or self.executed_slot_count != len(VALIDATION_SLOT_ROSTER)
+            or tuple(item.slot_id for item in self.results) != expected_slots
+            or tuple(item.slot_id for item in self.holm) != expected_primaries
+            or not self.roster_complete
+            or not self.scientific_terminal
         ):
-            raise ValueError("Gate B run must remain an explicit nonterminal VS-0001 slice")
+            raise ValueError("development validation run must cover the exact terminal roster")
+        if (
+            self.execution_status != "failed"
+            or self.decision != "not_evaluated"
+            or not self.terminal_reason
+            or type(self.final_holdout_access_count) is not int
+            or self.final_holdout_access_count != 0
+        ):
+            raise ValueError("current development run must truthfully retain its failed gate state")
+
+    def verify_original(self) -> ValidationProgrammeRunV2:
+        """Revalidate this exact factory-issued programme and its computation evidence."""
+
+        return verify_original_validation_programme_run_v2(self)
+
+
+def _validation_programme_run_snapshot_v2(
+    run: ValidationProgrammeRunV2,
+) -> tuple[object, ...]:
+    return (
+        run.execution_scope,
+        run.planned_slot_count,
+        run.executed_slot_count,
+        run.roster_complete,
+        run.scientific_terminal,
+        run.execution_status,
+        run.decision,
+        run.terminal_reason,
+        run.final_holdout_access_count,
+        tuple(id(result) for result in run.results),
+        tuple(
+            (
+                item.family,
+                item.slot_id,
+                item.raw_p_value,
+                item.effective_p_value,
+                item.adjusted_p_value,
+                item.rejected,
+                item.evaluable,
+                item.alpha,
+            )
+            for item in run.holm
+        ),
+    )
+
+
+def verify_original_validation_programme_run_v2(
+    run: ValidationProgrammeRunV2,
+) -> ValidationProgrammeRunV2:
+    """Reject copied, replaced, mutated, or computationally stale programme runs."""
+
+    if type(run) is not ValidationProgrammeRunV2:
+        raise TypeError("validation programme run must be the exact factory-issued type")
+    registered = _VERIFIED_PROGRAMME_RUNS.get(id(run))
+    if registered is None or registered[0]() is not run:
+        raise ValueError("validation programme run is not the registered original")
+    if run.results is not registered[2] or run.holm is not registered[3]:
+        raise ValueError("validation programme run replaced its registered evidence")
+    if _validation_programme_run_snapshot_v2(run) != registered[1]:
+        raise ValueError("validation programme run differs from its immutable computation")
+    verify_slot_results_v2(run.results, runner_version=run.results[0].runner_version)
+    if run.holm != _apply_family_holm_verified_v2(run.results):
+        raise ValueError("validation programme Holm evidence differs from exact recomputation")
+    return run
+
+
+def _issue_validation_programme_run_v2(
+    *,
+    results: tuple[ValidationSlotComputationResultV2, ...],
+    **fields: object,
+) -> ValidationProgrammeRunV2:
+    if type(results) is not tuple:
+        raise TypeError("validation programme results must be an exact tuple")
+    verify_slot_results_v2(results, runner_version=results[0].runner_version)
+    holm = _apply_family_holm_verified_v2(results)
+    token = object()
+    _PROGRAMME_RUN_ISSUANCE[id(token)] = (token, results, holm)
+    try:
+        run = ValidationProgrammeRunV2(
+            results=results,
+            holm=holm,
+            **fields,  # type: ignore[arg-type]
+            _factory_token=token,
+        )
+    finally:
+        _PROGRAMME_RUN_ISSUANCE.pop(id(token), None)
+    identifier = id(run)
+
+    def cleanup(reference: weakref.ReferenceType[ValidationProgrammeRunV2]) -> None:
+        current = _VERIFIED_PROGRAMME_RUNS.get(identifier)
+        if current is not None and current[0] is reference:
+            _VERIFIED_PROGRAMME_RUNS.pop(identifier, None)
+
+    reference = weakref.ref(run, cleanup)
+    _VERIFIED_PROGRAMME_RUNS[identifier] = (
+        reference,
+        _validation_programme_run_snapshot_v2(run),
+        results,
+        holm,
+    )
+    return run
 
 
 def _compute_real_vs0001_material_v2(
@@ -2528,14 +2157,21 @@ def _compute_real_vs0001_material_v2(
     config: ValidationProgrammeConfigV2,
     reader: VerifiedPublicationOutcomeReaderV2,
     runner_version: str,
+    reader_already_verified: bool = False,
 ) -> _SlotResultMaterialV2:
     slot = next(item for item in VALIDATION_SLOT_ROSTER if item.slot_id == "VS-0001")
-    outcome = reader.read_slot(
-        slot,
-        programme_id=config.programme_id,
-        split_sha256=reader.split_sha256,
-        cost_authority_sha256=reader.cost_authority_sha256,
-    )[0]
+    if reader_already_verified:
+        outcomes = reader._outcomes_by_slot.get(slot.slot_id)
+        if outcomes is None or len(outcomes) != 1:
+            raise ValueError("verified VS-0001 outcome authority differs")
+        outcome = outcomes[0]
+    else:
+        outcome = reader.read_slot(
+            slot,
+            programme_id=config.programme_id,
+            split_sha256=reader.split_sha256,
+            cost_authority_sha256=reader.cost_authority_sha256,
+        )[0]
     if not outcome.incomplete_cost_dimensions:
         raise ValueError(
             "bounded VS-0001 slice requires authenticated incomplete cost dimensions; "
@@ -2616,11 +2252,11 @@ def _real_vs0001_result_v2(
             != config_snapshot
         ):
             raise ValueError("VS-0001 programme config parent changed")
-        reader.verify_original()
         replayed = _compute_real_vs0001_material_v2(
             config=config,
             reader=reader,
             runner_version=runner_version,
+            reader_already_verified=True,
         )
         if replayed != material:
             raise ValueError("VS-0001 computation replay differs from its issued result")
@@ -2630,6 +2266,8 @@ def _real_vs0001_result_v2(
         evidence_verifier=verify_computation_evidence,
         retained_evidence=(config, reader, material),
         computational_parent=None,
+        evidence_authority=reader,
+        evidence_authority_verifier=reader.verify_original,
         schema_version="validation-slot-computation-result-v2",
         programme_id=config.programme_id,
         slot_id=slot.slot_id,
@@ -2638,8 +2276,153 @@ def _real_vs0001_result_v2(
         runner_version=runner_version,
         parent_attempt_sha256=None,
         parent_result_sha256=None,
+        **material.result_fields(),  # type: ignore[arg-type]
+    )
+
+
+def _compute_unavailable_real_slot_material_v2(
+    *,
+    config: ValidationProgrammeConfigV2,
+    reader: VerifiedPublicationOutcomeReaderV2,
+    slot: ValidationSlot,
+    parent: ValidationSlotComputationResultV2 | None,
+    runner_version: str,
+) -> _SlotResultMaterialV2:
+    reason = (
+        "required parent slot did not complete"
+        if slot.parent_slot_id is not None
+        and (parent is None or parent.execution_status != "completed")
+        else (
+            "authenticated publication-bound detector outcomes and exact quantitative "
+            "primitive inputs are unavailable for this frozen slot"
+        )
+    )
+    input_sha = hash_json(
+        "phase5-validation-slot-input-v2",
+        {
+            "programme_id": config.programme_id,
+            "slot": slot.to_dict(),
+            "attempt_number": 1,
+            "publication_outcome_set_sha256": reader.outcome_set_sha256,
+            "runner_version": runner_version,
+            "parent_attempt_sha256": parent.attempt_sha256 if parent else None,
+            "parent_result_sha256": parent.result_sha256 if parent else None,
+            "prerequisite_status": "unavailable",
+        },
+    )
+    return _SlotResultMaterialV2(
+        input_sha256=input_sha,
+        attempt_sha256=hash_json(
+            "phase5-validation-slot-attempt-v2",
+            {"slot_id": slot.slot_id, "input_sha256": input_sha, "attempt_number": 1},
+        ),
+        evidence_sha256=hash_json(
+            "phase5-validation-slot-precondition-v2",
+            {"slot_id": slot.slot_id, "reason": reason, "input_sha256": input_sha},
+        ),
+        execution_status="failed",
+        decision="not_evaluated",
+        computation_completed=False,
+        reason=reason,
+        p_value=None,
+        metrics=(),
+    )
+
+
+def _unavailable_real_slot_result_v2(
+    *,
+    config: ValidationProgrammeConfigV2,
+    reader: VerifiedPublicationOutcomeReaderV2,
+    slot: ValidationSlot,
+    parent: ValidationSlotComputationResultV2 | None,
+    runner_version: str,
+) -> ValidationSlotComputationResultV2:
+    material = _compute_unavailable_real_slot_material_v2(
+        config=config,
+        reader=reader,
+        slot=slot,
+        parent=parent,
+        runner_version=runner_version,
+    )
+    config_snapshot = hash_json(
+        "phase5-validation-programme-config-result-parent-v2",
+        config.to_config_dict(),
+    )
+    reader_snapshot = _publication_outcome_reader_snapshot(reader)
+
+    def verify_computation_evidence() -> object:
+        if type(config) is not ValidationProgrammeConfigV2:
+            raise TypeError("slot programme config parent is not exact")
+        if (
+            hash_json(
+                "phase5-validation-programme-config-result-parent-v2",
+                config.to_config_dict(),
+            )
+            != config_snapshot
+        ):
+            raise ValueError("slot programme config parent changed")
+        registration = _VERIFIED_PUBLICATION_OUTCOME_READERS.get(id(reader))
+        if (
+            registration is None
+            or registration.reader() is not reader
+            or _publication_outcome_reader_snapshot(reader) != reader_snapshot
+        ):
+            raise ValueError("slot publication outcome authority parent changed")
+        replayed = _compute_unavailable_real_slot_material_v2(
+            config=config,
+            reader=reader,
+            slot=slot,
+            parent=parent,
+            runner_version=runner_version,
+        )
+        if replayed != material:
+            raise ValueError("unavailable slot computation replay differs from its issued result")
+        return reader
+
+    return _issue_validation_slot_result_v2(
+        evidence_verifier=verify_computation_evidence,
+        retained_evidence=(config, reader, slot, parent, material),
+        computational_parent=parent,
+        evidence_authority=reader,
+        evidence_authority_verifier=reader.verify_original,
+        schema_version="validation-slot-computation-result-v2",
+        programme_id=config.programme_id,
+        slot_id=slot.slot_id,
+        attempt_number=1,
+        runner_kind=slot.kind.value,
+        runner_version=runner_version,
+        parent_attempt_sha256=parent.attempt_sha256 if parent else None,
+        parent_result_sha256=parent.result_sha256 if parent else None,
         **material.result_fields(),
     )
+
+
+def _full_development_roster_results_v2(
+    *,
+    config: ValidationProgrammeConfigV2,
+    reader: VerifiedPublicationOutcomeReaderV2,
+    runner_version: str,
+) -> tuple[ValidationSlotComputationResultV2, ...]:
+    first = _real_vs0001_result_v2(
+        config=config,
+        reader=reader,
+        runner_version=runner_version,
+    )
+    by_slot = {first.slot_id: first}
+    results = [first]
+    for slot in VALIDATION_SLOT_ROSTER[1:]:
+        parent = by_slot.get(slot.parent_slot_id) if slot.parent_slot_id else None
+        result = _unavailable_real_slot_result_v2(
+            config=config,
+            reader=reader,
+            slot=slot,
+            parent=parent,
+            runner_version=runner_version,
+        )
+        by_slot[slot.slot_id] = result
+        results.append(result)
+    frozen = tuple(results)
+    return frozen
 
 
 def run_validation_programme_v2(
@@ -2785,43 +2568,44 @@ def run_validation_programme_v2(
         admitted_demand=demand,
         authenticated_demand=logical_demand,
     )
-    result = _real_vs0001_result_v2(
+    results = _full_development_roster_results_v2(
         config=config,
         reader=outcome_reader,
         runner_version=runner_version,
     )
-    return ValidationProgrammeRunV2(
-        results=(result,),
-        holm=(),
-        execution_scope="gate-b-vs0001-development-slice",
+    return _issue_validation_programme_run_v2(
+        results=results,
+        execution_scope="development-only-full-roster",
         planned_slot_count=len(VALIDATION_SLOT_ROSTER),
-        executed_slot_count=1,
-        roster_complete=False,
-        scientific_terminal=False,
+        executed_slot_count=len(results),
+        roster_complete=True,
+        scientific_terminal=True,
+        execution_status="failed",
+        decision="not_evaluated",
+        terminal_reason=(
+            "authenticated exact quantitative prerequisites are unavailable for 1,103 "
+            "frozen slots; the real VS-0001 cost evidence remains incomplete"
+        ),
+        final_holdout_access_count=0,
     )
 
 
 __all__ = [
     "AttachedDevelopmentOutcomeV2",
-    "DerivedSlotEvidenceV2",
-    "ExposureRowV2",
-    "GlobalHolmResultV2",
-    "RobustnessRerunEvidenceV2",
-    "SelectorEvidenceV2",
+    "FamilyHolmResultV2",
     "SlotRunnerInputsV2",
     "ValidationProgrammeRunV2",
     "ValidationSlotComputationResultV2",
     "ValidationV2SourceBundle",
     "VerifiedPublicationOutcomeReaderV2",
-    "WeeklySlotVectorV2",
-    "apply_global_holm_v2",
-    "derive_slot_evidence_v2",
+    "apply_family_holm_v2",
     "development_access_ledger_identity_v2",
-    "global_holm_pvalues_v2",
     "run_slot_roster_v2",
     "run_validation_programme_v2",
     "validation_slot_result_sha256_v2",
     "verify_original_validation_slot_result_v2",
+    "verify_original_validation_programme_run_v2",
     "verified_validation_slot_result_payload_v2",
+    "verified_validation_slot_result_payloads_v2",
     "verify_slot_results_v2",
 ]

@@ -1,3 +1,4 @@
+from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 import json
@@ -11,10 +12,12 @@ from market_structure_lab.research.models import (
 )
 from market_structure_lab.research.validation_v2 import (
     SlotRunnerInputsV2,
+    ValidationProgrammeRunV2,
     _issue_fixture_outcome_reader_v2,
-    apply_global_holm_v2,
-    global_holm_pvalues_v2,
+    _issue_validation_programme_run_v2,
+    apply_family_holm_v2,
     run_slot_roster_v2,
+    verify_original_validation_programme_run_v2,
     verify_original_validation_slot_result_v2,
     verify_slot_results_v2,
 )
@@ -77,7 +80,7 @@ def test_outcome_fixture_rejects_missing_and_extra_slot_keys() -> None:
         )
 
 
-def test_exact_roster_invokes_one_distinct_computation_per_slot() -> None:
+def test_exact_fixture_roster_issues_one_distinct_terminal_result_per_slot() -> None:
     results = run_slot_roster_v2(
         _inputs(), budget=ValidationWorkBudget(), demand=ValidationWorkDemand()
     )
@@ -87,30 +90,52 @@ def test_exact_roster_invokes_one_distinct_computation_per_slot() -> None:
     )
     assert len({item.attempt_sha256 for item in results}) == 1_104
     assert len({item.result_sha256 for item in results}) == 1_104
-    assert all(item.metrics for item in results if item.computation_completed)
+    assert not any(item.computation_completed for item in results)
+    assert all(not item.metrics for item in results)
 
 
-def test_statistical_insufficiency_stays_inconclusive_with_complete_costs() -> None:
+def test_caller_cost_boolean_cannot_replace_authenticated_primitive_authority() -> None:
     results = run_slot_roster_v2(
         _inputs(complete_costs=True), budget=ValidationWorkBudget(), demand=ValidationWorkDemand()
     )
     primary = next(item for item in results if item.slot_id == "VS-0001")
-    assert primary.execution_status == "completed"
-    assert primary.decision == "inconclusive"
+    assert primary.execution_status == "failed"
+    assert primary.decision == "not_evaluated"
+    assert not primary.computation_completed
     assert primary.p_value is None
-    assert "fewer than two" in primary.reason
+    assert "exact quantitative primitive inputs are unavailable" in primary.reason
 
 
-def test_global_holm_requires_exact_64_primaries_and_keeps_unevaluable_visible() -> None:
+def test_fixture_boolean_cannot_authorize_quantitative_proxy_execution() -> None:
+    results = run_slot_roster_v2(
+        _inputs(complete_costs=True),
+        budget=ValidationWorkBudget(),
+        demand=ValidationWorkDemand(),
+    )
+
+    assert all(item.execution_status == "failed" for item in results)
+    assert all(item.decision == "not_evaluated" for item in results)
+    assert all(not item.computation_completed for item in results)
+    assert all(not item.metrics and item.p_value is None for item in results)
+
+
+def test_family_holm_requires_exact_64_primaries_and_keeps_unevaluable_visible() -> None:
     results = run_slot_roster_v2(
         _inputs(), budget=ValidationWorkBudget(), demand=ValidationWorkDemand()
     )
-    adjusted = apply_global_holm_v2(results)
+    adjusted = apply_family_holm_v2(results)
     assert len(adjusted) == 64
-    assert {item.alpha for item in adjusted} == {0.05}
+    assert {item.alpha for item in adjusted} == {0.01}
+    assert {family: sum(item.family == family for item in adjusted) for family in "ABGED"} == {
+        "A": 24,
+        "B": 8,
+        "G": 8,
+        "E": 8,
+        "D": 16,
+    }
     assert all(item.effective_p_value == 1.0 for item in adjusted)
     with pytest.raises(ValueError, match="64"):
-        apply_global_holm_v2(results[:-1])
+        apply_family_holm_v2(results[:-1])
 
 
 def test_verifier_rejects_fanout_and_wrong_runner() -> None:
@@ -147,14 +172,10 @@ def test_exact_counts_role_dispatch_and_additive_retry_identities() -> None:
     demand = ValidationWorkDemand()
     first = run_slot_roster_v2(_inputs(precision_available=False), budget=budget, demand=demand)
     b_count = sum(slot.family == "B" for slot in VALIDATION_SLOT_ROSTER)
-    assert sum(item.decision == "not_evaluated" for item in first) == b_count
-    assert sum(item.computation_completed for item in first) == 1_104 - b_count
-    formulas = {
-        item.runner_kind: item.metrics.get("formula")
-        for item in first
-        if item.computation_completed
-    }
-    assert len(set(formulas.values())) == len(formulas)
+    assert sum(item.decision == "not_evaluated" for item in first) == 1_104
+    assert not any(item.computation_completed for item in first)
+    assert sum("historical precision" in item.reason for item in first) == b_count
+    assert all("formula" not in item.metrics for item in first)
     attempt_numbers = {slot.slot_id: 2 for slot in VALIDATION_SLOT_ROSTER}
     retry = run_slot_roster_v2(
         _inputs(), budget=budget, demand=demand, attempt_numbers=attempt_numbers
@@ -163,27 +184,83 @@ def test_exact_counts_role_dispatch_and_additive_retry_identities() -> None:
     assert not {item.attempt_sha256 for item in first} & {item.attempt_sha256 for item in retry}
 
 
-def test_global_holm_known_boundary_ties_and_invalid_values() -> None:
-    primary_ids = tuple(slot.slot_id for slot in VALIDATION_SLOT_ROSTER if slot.primary)
-    boundary = 0.05 / 64
-    pvalues = {slot_id: 1.0 for slot_id in primary_ids}
-    pvalues[primary_ids[0]] = boundary
-    pvalues[primary_ids[1]] = boundary
-    pvalues[primary_ids[2]] = None
-    adjusted = global_holm_pvalues_v2(pvalues)
-    assert adjusted[0].adjusted_p_value == pytest.approx(0.05)
-    assert adjusted[1].adjusted_p_value == pytest.approx(0.05)
-    assert adjusted[0].rejected and adjusted[1].rejected
-    assert adjusted[2].effective_p_value == 1.0 and not adjusted[2].evaluable
-    ordered = sorted(adjusted, key=lambda item: (item.effective_p_value, item.slot_id))
-    assert [item.adjusted_p_value for item in ordered] == sorted(
-        item.adjusted_p_value for item in ordered
+def test_validation_programme_run_rejects_direct_construction_before_nested_access() -> None:
+    with pytest.raises(TypeError, match="computation factory"):
+        ValidationProgrammeRunV2(
+            results=(),
+            holm=(),
+            execution_scope="development-only-full-roster",
+            planned_slot_count=1_104,
+            executed_slot_count=1_104,
+            roster_complete=True,
+            scientific_terminal=True,
+            execution_status="failed",
+            decision="not_evaluated",
+            terminal_reason="forged",
+            final_holdout_access_count=0,
+        )
+
+
+def test_validation_programme_run_rejects_copy_replacement_and_nested_mutation() -> None:
+    results = run_slot_roster_v2(
+        _inputs(),
+        budget=ValidationWorkBudget(),
+        demand=ValidationWorkDemand(),
     )
-    for invalid in (float("nan"), float("inf"), -0.1, 1.1):
-        attacked = dict(pvalues)
-        attacked[primary_ids[0]] = invalid
-        with pytest.raises(ValueError, match="finite|\\[0, 1\\]"):
-            global_holm_pvalues_v2(attacked)
+    run = _issue_validation_programme_run_v2(
+        results=results,
+        execution_scope="development-only-full-roster",
+        planned_slot_count=1_104,
+        executed_slot_count=1_104,
+        roster_complete=True,
+        scientific_terminal=True,
+        execution_status="failed",
+        decision="not_evaluated",
+        terminal_reason="exact primitives unavailable",
+        final_holdout_access_count=0,
+    )
+    assert verify_original_validation_programme_run_v2(run) is run
+
+    with pytest.raises(ValueError, match="registered original"):
+        verify_original_validation_programme_run_v2(copy(run))
+    with pytest.raises((TypeError, ValueError)):
+        verify_original_validation_programme_run_v2(deepcopy(run))
+    with pytest.raises(ValueError, match="registered original"):
+        verify_original_validation_programme_run_v2(object.__new__(ValidationProgrammeRunV2))
+
+    original_decision = run.decision
+    object.__setattr__(run, "decision", "supported_development")
+    try:
+        with pytest.raises(ValueError, match="immutable computation"):
+            verify_original_validation_programme_run_v2(run)
+    finally:
+        object.__setattr__(run, "decision", original_decision)
+
+    original_holm = run.holm
+    object.__setattr__(run, "holm", (replace(run.holm[0], alpha=0.99), *run.holm[1:]))
+    try:
+        with pytest.raises(ValueError, match="replaced its registered evidence"):
+            verify_original_validation_programme_run_v2(run)
+    finally:
+        object.__setattr__(run, "holm", original_holm)
+
+    first_holm = run.holm[0]
+    original_alpha = first_holm.alpha
+    object.__setattr__(first_holm, "alpha", 0.99)
+    try:
+        with pytest.raises(ValueError, match="immutable computation"):
+            verify_original_validation_programme_run_v2(run)
+    finally:
+        object.__setattr__(first_holm, "alpha", original_alpha)
+
+    first_result = run.results[0]
+    original_reason = first_result.reason
+    object.__setattr__(first_result, "reason", "forged")
+    try:
+        with pytest.raises(ValueError):
+            verify_original_validation_programme_run_v2(run)
+    finally:
+        object.__setattr__(first_result, "reason", original_reason)
 
 
 def test_result_verifier_replays_slot_computation_instead_of_trusting_registered_fields(
@@ -194,10 +271,15 @@ def test_result_verifier_replays_slot_computation_instead_of_trusting_registered
     result = run_slot_roster_v2(
         _inputs(), budget=ValidationWorkBudget(), demand=ValidationWorkDemand()
     )[0]
+    original_compute = module._compute_slot_result_material_v2
+
+    def attacked_compute(**kwargs: object):  # type: ignore[no-untyped-def]
+        return replace(original_compute(**kwargs), reason="attacker changed replay material")
+
     monkeypatch.setattr(
         module,
-        "_role_metrics",
-        lambda *_args, **_kwargs: ({"attacker_fabricated": 1}, 0.0),
+        "_compute_slot_result_material_v2",
+        attacked_compute,
     )
 
     with pytest.raises(ValueError, match="replay differs"):
