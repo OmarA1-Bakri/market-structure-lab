@@ -875,6 +875,7 @@ def select_stratified_controls(
             if row.control_role == required_control_role
             and row.stratum == candidate.stratum
             and row.row_identity != candidate.row_identity
+            and row.legal_entry_time != candidate.legal_entry_time
             and row.row_identity not in used_rows
         ]
         if not eligible:
@@ -939,6 +940,7 @@ def build_persistence_controls(
             and row.direction == direction
             and row.row_identity not in used_rows
             and row.row_identity != candidate.row_identity
+            and row.legal_entry_time != candidate.legal_entry_time
             and row.is_non_final
             and candidate.is_non_final
         ]

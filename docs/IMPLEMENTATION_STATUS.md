@@ -730,6 +730,13 @@ rows and records zero final-holdout access. This closes only the candidate base/
 authenticated unconditional/persistence opportunity pools and numeric promotion-grade cost evidence
 remain required before Gate D inference can execute.
 
+The shared A-control primitives now reject a distinct control identifier at the candidate's same
+legal-entry clock, so relabelling one opportunity cannot masquerade as a matched baseline.
+Synthetic-oracle evaluation also passes unconditional and persistence rows to their selectors as
+separate bounded pools; unrelated roles no longer consume the per-selection control budget. These
+repairs harden the existing exact primitives but do not create the still-missing publication-rooted
+control opportunity authority.
+
 Exact identities, exclusions, missing prerequisites, receipt hashes, replay evidence, and
 verification are recorded in
 [`PHASE5_VALIDATION_EVIDENCE.md`](PHASE5_VALIDATION_EVIDENCE.md). This is not validation failure

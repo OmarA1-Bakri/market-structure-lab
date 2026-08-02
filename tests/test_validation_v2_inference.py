@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from copy import copy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -112,8 +112,14 @@ def _rows(
         for asset_index, symbol in enumerate(symbols):
             timestamp = START + timedelta(days=7 * week, hours=1 + asset_index)
 
-            def make_row(role: str, exit_price: float) -> RawPrimaryOpportunityRowV2:
+            def make_row(
+                role: str,
+                exit_price: float,
+                *,
+                entry_offset_hours: int = 0,
+            ) -> RawPrimaryOpportunityRowV2:
                 identity = f"{role}-{week}-{symbol}"
+                entry_time = timestamp + timedelta(hours=entry_offset_hours)
                 return RawPrimaryOpportunityRowV2(
                     row_identity=identity,
                     event_id=identity,
@@ -133,11 +139,11 @@ def _rows(
                     direction=1,
                     horizon_hours=24,
                     segment_id=0,
-                    feature_time=timestamp - timedelta(hours=2),
-                    signal_time=timestamp - timedelta(hours=1),
-                    legal_entry_time=timestamp,
-                    label_start=timestamp,
-                    label_end=timestamp + timedelta(hours=24),
+                    feature_time=entry_time - timedelta(hours=2),
+                    signal_time=entry_time - timedelta(hours=1),
+                    legal_entry_time=entry_time,
+                    label_start=entry_time,
+                    label_end=entry_time + timedelta(hours=24),
                     programme_id=PROGRAMME_ID,
                     publication_sha256=SHA_B,
                     component=component,
@@ -147,8 +153,8 @@ def _rows(
                     exit_price=exit_price,
                     delayed_entry_price=101.0,
                     delayed_exit_price=exit_price,
-                    delayed_entry_time=timestamp + timedelta(hours=1),
-                    delayed_exit_time=timestamp + timedelta(hours=25),
+                    delayed_entry_time=entry_time + timedelta(hours=1),
+                    delayed_exit_time=entry_time + timedelta(hours=25),
                     delay_evidence_sha256=SHA_C,
                     prior_completed_close_return=0.01,
                 )
@@ -162,10 +168,12 @@ def _rows(
                     make_row(
                         "unconditional",
                         101.0 + variation_scale * ((0.25 * week) + (0.1 * asset_index)),
+                        entry_offset_hours=2,
                     ),
                     make_row(
                         "persistence",
                         102.0 + variation_scale * ((0.3 * week) + (0.1 * asset_index)),
+                        entry_offset_hours=4,
                     ),
                 )
             )
@@ -273,6 +281,48 @@ def test_exact_primary_inference_is_deterministic_and_uses_frozen_primitives() -
     assert authority.authority_scope == "registered_synthetic_oracle_development"
     assert authority.production_eligible is False
     verify_synthetic_primary_contrast_evaluation_v2(first)
+
+
+def test_inference_passes_only_the_required_role_to_each_control_selector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_roles: list[tuple[str, frozenset[str]]] = []
+    real_selector = inference_module.select_stratified_controls
+    real_persistence = inference_module.build_persistence_controls
+
+    def capture_roles(
+        candidates: Sequence[ControlOpportunity],
+        control_pool: Sequence[ControlOpportunity],
+        **kwargs: Any,
+    ) -> object:
+        rows = tuple(control_pool)
+        observed_roles.append(
+            (
+                cast(str, kwargs["required_control_role"]),
+                frozenset(row.control_role for row in rows),
+            )
+        )
+        return real_selector(candidates, rows, **kwargs)
+
+    def capture_persistence(
+        candidates: Sequence[ControlOpportunity],
+        control_pool: Sequence[ControlOpportunity],
+        **kwargs: Any,
+    ) -> object:
+        rows = tuple(control_pool)
+        observed_roles.append(("persistence", frozenset(row.control_role for row in rows)))
+        return real_persistence(candidates, rows, **kwargs)
+
+    monkeypatch.setattr(inference_module, "select_stratified_controls", capture_roles)
+    monkeypatch.setattr(inference_module, "build_persistence_controls", capture_persistence)
+
+    evaluation = evaluate_synthetic_primary_contrasts_v2(_authority())
+
+    assert evaluation.final_holdout_access_count == 0
+    assert observed_roles == [
+        ("unconditional", frozenset({"unconditional"})),
+        ("persistence", frozenset({"persistence"})),
+    ]
 
 
 def test_known_effect_synthetic_oracle_proves_evaluable_preterminal_iut() -> None:

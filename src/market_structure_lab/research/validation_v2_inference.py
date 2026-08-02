@@ -958,18 +958,19 @@ def evaluate_synthetic_primary_contrasts_v2(
         raise ValueError(f"cost policy is not admissible: {assessment.reason}")
     cost_scenarios, opportunities = _cost_and_control_opportunities(snapshot)
     candidates = tuple(row for row in opportunities if row.control_role == "candidate")
-    control_pool = tuple(row for row in opportunities if row.control_role != "candidate")
+    unconditional_pool = tuple(row for row in opportunities if row.control_role == "unconditional")
+    persistence_pool = tuple(row for row in opportunities if row.control_role == "persistence")
     naive = build_naive_zero_controls(candidates, budget=snapshot.budget)
     unconditional = select_stratified_controls(
         candidates,
-        control_pool,
+        unconditional_pool,
         kind=ControlKind.UNCONDITIONAL,
         required_control_role="unconditional",
         budget=snapshot.budget,
     )
     persistence = build_persistence_controls(
         candidates,
-        control_pool,
+        persistence_pool,
         budget=snapshot.budget,
     )
     controls_complete = all(

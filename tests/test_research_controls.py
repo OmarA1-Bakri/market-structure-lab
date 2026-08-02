@@ -167,9 +167,18 @@ def test_unconditional_controls_are_exact_stratified_hash_ordered_and_count_shor
     candidate = _opp("C01")
     pool = (
         _opp("C01", control_role="unconditional"),  # overlapping row, ineligible
-        _opp("U01", control_role="unconditional", gross_return=0.02),
-        _opp("U02", control_role="unconditional", gross_return=0.03),
-        _opp("BAD", control_role="unconditional", symbol="ADAUSDT"),
+        _opp(
+            "SAME-CLOCK",
+            control_role="unconditional",
+        ),  # distinct identity at the same legal opportunity, still ineligible
+        _opp("U01", control_role="unconditional", entry_offset_hours=2, gross_return=0.02),
+        _opp("U02", control_role="unconditional", entry_offset_hours=3, gross_return=0.03),
+        _opp(
+            "BAD",
+            control_role="unconditional",
+            symbol="ADAUSDT",
+            entry_offset_hours=2,
+        ),
     )
     complete = select_stratified_controls(
         (candidate,),
@@ -180,7 +189,7 @@ def test_unconditional_controls_are_exact_stratified_hash_ordered_and_count_shor
     )
 
     expected = min(
-        (pool[1], pool[2]),
+        (pool[2], pool[3]),
         key=lambda row: hash_json(
             "unconditional-control-order-v1",
             {"candidate_id": candidate.candidate_id, "row_identity": row.row_identity},
@@ -190,10 +199,21 @@ def test_unconditional_controls_are_exact_stratified_hash_ordered_and_count_shor
     assert complete.records[0].control_row_identity == expected.row_identity
     assert complete.records[0].control_return == expected.gross_return
     assert complete.records[0].control_row_identity != candidate.row_identity
+    assert complete.records[0].control_row_identity != pool[1].row_identity
+
+    same_clock_only = select_stratified_controls(
+        (candidate,),
+        pool[1:2],
+        kind=ControlKind.UNCONDITIONAL,
+        required_control_role="unconditional",
+        budget=ValidationWorkBudget(),
+    )
+    assert same_clock_only.status is ControlSelectionStatus.INCONCLUSIVE
+    assert same_clock_only.shortage_count == 1
 
     shortage = select_stratified_controls(
         (candidate, replace(candidate, row_identity="ROW-C02", event_id="EV-C02")),
-        pool[:1],
+        pool[2:3],
         kind=ControlKind.UNCONDITIONAL,
         required_control_role="unconditional",
         budget=ValidationWorkBudget(),
@@ -590,13 +610,33 @@ def test_random_feature_direction_seed_changes_assignment_order_not_stratum_coun
 def test_persistence_controls_match_exact_strata_and_shortage_explicit() -> None:
     candidates = (_opp("PA", prior_return=0.02), _opp("PB", prior_return=-0.02, direction=-1))
     pool = (
-        _opp("PL", control_role="persistence", direction=1, gross_return=0.05),
-        _opp("PS", control_role="persistence", direction=-1, gross_return=-0.05),
+        _opp(
+            "PL",
+            control_role="persistence",
+            direction=1,
+            entry_offset_hours=2,
+            gross_return=0.05,
+        ),
+        _opp(
+            "PS",
+            control_role="persistence",
+            direction=-1,
+            entry_offset_hours=2,
+            gross_return=-0.05,
+        ),
     )
 
     complete = build_persistence_controls(candidates, pool, budget=ValidationWorkBudget())
     assert complete.status is ControlSelectionStatus.COMPLETE
     assert tuple(record.control_direction for record in complete.records) == (1, -1)
+
+    same_clock = build_persistence_controls(
+        candidates[:1],
+        (_opp("P-SAME", control_role="persistence", direction=1),),
+        budget=ValidationWorkBudget(),
+    )
+    assert same_clock.status is ControlSelectionStatus.INCONCLUSIVE
+    assert same_clock.shortage_count == 1
 
     shortage = build_persistence_controls(candidates, pool[:1], budget=ValidationWorkBudget())
     assert shortage.status is ControlSelectionStatus.INCONCLUSIVE
