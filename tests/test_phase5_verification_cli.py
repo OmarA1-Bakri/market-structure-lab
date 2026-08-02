@@ -86,6 +86,46 @@ def test_freeze_preserves_logs_and_publishes_failure_receipt(
     assert failure["error_type"] == expected_error_type
 
 
+def test_freeze_captures_environment_once_before_collection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    output = tmp_path / "attempt" / "manifest.json"
+    expected = cli.VerificationEnvironment(
+        python_version="3.13.13",
+        python_implementation="CPython",
+        executable="python",
+        operating_system="Linux",
+        platform="system=Linux;release=test;version=build;machine=x86_64",
+    )
+    calls = 0
+
+    def current() -> cli.VerificationEnvironment:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("verification environment was captured more than once")
+        return expected
+
+    monkeypatch.setattr(cli, "_require_bound_worktree", lambda _repository: None)
+    monkeypatch.setattr(cli.VerificationEnvironment, "current", current)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[], returncode=2, stdout=b"collection failed\n", stderr=b"diagnostic\n"
+        ),
+    )
+
+    assert cli._freeze(repository, output, 8) == 2  # noqa: SLF001
+
+    failure = json.loads(output.with_name("manifest.json.failure.json").read_bytes())
+    assert calls == 1
+    assert failure["environment"] == expected.to_dict()
+
+
 def test_reconcile_rehashes_collection_logs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

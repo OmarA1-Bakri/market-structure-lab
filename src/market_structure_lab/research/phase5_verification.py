@@ -34,10 +34,13 @@ class VerificationEnvironment:
         """Capture the current interpreter and operating-system identity."""
 
         operating_system = platform.system()
-        platform_identity = "-".join(
-            component
-            for component in (operating_system, platform.release(), platform.machine())
-            if component
+        platform_identity = ";".join(
+            (
+                f"system={operating_system}",
+                f"release={platform.release()}",
+                f"version={platform.version()}",
+                f"machine={platform.machine()}",
+            )
         )
         return cls(
             python_version=platform.python_version(),

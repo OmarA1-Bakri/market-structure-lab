@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import platform
 import sys
 from typing import cast
 
@@ -58,6 +59,20 @@ def test_collection_parser_requires_unique_test_nodeids() -> None:
 
 def test_current_environment_binds_the_exact_running_executable() -> None:
     assert VerificationEnvironment.current().executable == sys.executable
+
+
+def test_current_environment_binds_explicit_os_build_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    monkeypatch.setattr(platform, "release", lambda: "11")
+    monkeypatch.setattr(platform, "version", lambda: "10.0.26200")
+    monkeypatch.setattr(platform, "machine", lambda: "AMD64")
+
+    environment = VerificationEnvironment.current()
+
+    assert environment.operating_system == "Windows"
+    assert environment.platform == "system=Windows;release=11;version=10.0.26200;machine=AMD64"
 
 
 def test_manifest_freezes_complete_non_overlapping_cross_platform_shards() -> None:
