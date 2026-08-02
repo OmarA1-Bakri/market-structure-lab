@@ -33,12 +33,18 @@ class VerificationEnvironment:
     def current(cls) -> VerificationEnvironment:
         """Capture the current interpreter and operating-system identity."""
 
+        operating_system = platform.system()
+        platform_identity = "-".join(
+            component
+            for component in (operating_system, platform.release(), platform.machine())
+            if component
+        )
         return cls(
             python_version=platform.python_version(),
             python_implementation=platform.python_implementation(),
             executable=sys.executable,
-            operating_system=platform.system(),
-            platform=platform.platform(),
+            operating_system=operating_system,
+            platform=platform_identity,
         )
 
     def to_dict(self) -> dict[str, str]:

@@ -61,6 +61,7 @@ def _freeze(repository: Path, output: Path, shard_count: int) -> int:
     _require_external_output(repository, output)
     _require_bound_worktree(repository)
     command = [sys.executable, "-m", "pytest", "--collect-only", "-q"]
+    verification_environment = VerificationEnvironment.current()
     environment = _clean_pytest_environment()
     started_at = utc_now()
     completed = subprocess.run(
@@ -85,6 +86,7 @@ def _freeze(repository: Path, output: Path, shard_count: int) -> int:
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             error=None,
+            environment=verification_environment,
         )
         return completed.returncode
     try:
@@ -97,7 +99,7 @@ def _freeze(repository: Path, output: Path, shard_count: int) -> int:
             collection_command=command,
             nodeids=nodeids,
             non_windows_shard_count=shard_count,
-            environment=VerificationEnvironment.current(),
+            environment=verification_environment,
             collection_started_at=started_at,
             collection_ended_at=ended_at,
             collection_exit_code=completed.returncode,
@@ -114,6 +116,7 @@ def _freeze(repository: Path, output: Path, shard_count: int) -> int:
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             error=error,
+            environment=verification_environment,
         )
         raise
     _write_new(output, canonical_bytes(payload))
@@ -317,11 +320,12 @@ def _write_freeze_failure(
     stdout_path: Path,
     stderr_path: Path,
     error: Exception | None,
+    environment: VerificationEnvironment,
 ) -> None:
     failure: dict[str, object] = {
         "schema_version": "phase5-repository-verification-freeze-failure-v1",
         "command": list(command),
-        "environment": VerificationEnvironment.current().to_dict(),
+        "environment": environment.to_dict(),
         "started_at": started_at,
         "ended_at": ended_at,
         "exit_code": exit_code,
