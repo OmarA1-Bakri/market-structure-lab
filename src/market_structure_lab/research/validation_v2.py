@@ -1933,6 +1933,7 @@ def _derive_vs0001_control_input_material_v2(
                 "interval_index": interval_index,
             },
         )
+        selected_donor_intervals: list[tuple[datetime, datetime]] = []
         for role, output in (
             ("unconditional", unconditional),
             ("persistence", persistence),
@@ -2001,17 +2002,16 @@ def _derive_vs0001_control_input_material_v2(
                 ),
             )
             selected_indices: list[int] = []
-            selected_intervals: list[tuple[datetime, datetime]] = []
             for index in ordered_indices:
                 entry_time = series.rows[index].timestamp
                 exit_time = series.rows[index + candidate.horizon_hours].timestamp
                 if any(
                     _intervals_overlap_v2(entry_time, exit_time, start, end)
-                    for start, end in selected_intervals
+                    for start, end in selected_donor_intervals
                 ):
                     continue
                 selected_indices.append(index)
-                selected_intervals.append((entry_time, exit_time))
+                selected_donor_intervals.append((entry_time, exit_time))
                 if len(selected_indices) == len(members):
                     break
             if len(selected_indices) != len(members):

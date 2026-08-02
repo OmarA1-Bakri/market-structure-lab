@@ -91,7 +91,7 @@ def _control_material_fixture(*, price_offset: Decimal, input_sha256: str) -> tu
     start = datetime(2025, 1, 6, tzinfo=UTC)
     rows: list[SimpleNamespace] = []
     for index in range(100):
-        close = Decimal("101") if index in {4, 59} else Decimal("100")
+        close = Decimal("101") if index in {1, 4, 59} else Decimal("100")
         open_ = close + price_offset
         rows.append(
             SimpleNamespace(
@@ -204,6 +204,27 @@ def test_control_donor_selection_is_outcome_blind_and_non_overlapping() -> None:
         [control] = rows
         assert control.label_end <= candidate.label_start
         assert control.legal_entry_time != candidate.legal_entry_time
+
+
+def test_control_donor_horizons_never_overlap_across_roles() -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    candidate_inputs, registration = _control_material_fixture(
+        price_offset=Decimal("0"),
+        input_sha256="d" * 64,
+    )
+
+    unconditional, persistence, _ = module._derive_vs0001_control_input_material_v2(  # noqa: SLF001
+        candidate_inputs,
+        registration,
+    )
+
+    [unconditional_row] = unconditional
+    [persistence_row] = persistence
+    assert (
+        unconditional_row.label_end <= persistence_row.label_start
+        or persistence_row.label_end <= unconditional_row.label_start
+    )
 
 
 def _stub_population_dependencies(
