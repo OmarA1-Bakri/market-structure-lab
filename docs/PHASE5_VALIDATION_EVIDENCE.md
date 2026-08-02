@@ -194,10 +194,19 @@ not committed.
 
 The hardened CLI is the canonical verified terminal-preflight route for current real artifacts.
 The public `run_validation_programme` function is the typed ready-path implementation boundary,
-but the repository does not yet contain a canonical loader that can assemble the complete real
-typed primitive-source bundle. The CLI therefore cannot honestly execute a ready real lifecycle
-until that separately designed and verified boundary exists. No speculative loader or fabricated
-readiness was added.
+The original Task 10 close-out did not contain a canonical loader that could assemble the complete
+real typed primitive-source bundle, so that immutable programme correctly stopped before outcome
+evaluation. No readiness was fabricated and its receipts remain unchanged.
+
+Subsequent V2 enabling work now includes an explicit-path source-bundle loader, bounded VS-0001
+event/outcome population, publication-rooted base/delay candidate inputs, and a factory-issued
+publication-rooted unconditional/persistence control-input authority. Donor clocks are selected
+without using outcome prices, candidate and donor horizon overlaps are excluded, retained parents
+replay exactly, and shortages remain explicit. The bounded real synthetic slice has an admissible
+unconditional donor but no admissible persistence donor under the frozen different-clock rule.
+Together with still-incomplete promotion-grade numeric cost evidence, that shortage keeps exact
+Gate D inference unavailable. These V2 additions do not rewrite the Task 10 receipt tree, access the
+final holdout, validate a behaviour, promote an edge, or authorize Phase 6.
 
 ## Verification and phase gate
 

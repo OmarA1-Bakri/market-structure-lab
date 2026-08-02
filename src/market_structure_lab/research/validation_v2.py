@@ -146,6 +146,7 @@ _OUTCOME_FACTORY = object()
 _OUTCOME_READER_FACTORY = object()
 _PUBLICATION_OUTCOME_READER_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
 _CANDIDATE_INPUT_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
+_CONTROL_INPUT_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
 _VERIFIED_OUTCOME_READERS: dict[
     int,
     tuple[
@@ -1056,6 +1057,76 @@ class VerifiedVs0001CandidateInputsV2:
         return _verify_vs0001_candidate_inputs_v2(self)
 
 
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class VerifiedVs0001ControlInputsV2:
+    """Factory-issued publication-rooted unconditional and persistence pools."""
+
+    programme_id: str
+    slot_id: str
+    source_publication_sha256: str
+    aggregate_publication_sha256: str
+    candidate_input_set_sha256: str
+    unconditional_rows: tuple[RawPrimaryOpportunityRowV2, ...]
+    persistence_rows: tuple[RawPrimaryOpportunityRowV2, ...]
+    unavailable_strata: tuple[tuple[str, str], ...]
+    control_set_sha256: str
+    final_holdout_access_count: int = 0
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        issuance = _CONTROL_INPUT_ISSUANCE.pop(id(_factory_token), None)
+        if (
+            issuance is None
+            or issuance[0] is not _factory_token
+            or issuance[1] != _vs0001_control_inputs_snapshot_v2(self)
+        ):
+            raise TypeError("VerifiedVs0001ControlInputsV2 requires its verifier factory")
+        _require_programme(self.programme_id)
+        if self.slot_id != "VS-0001":
+            raise ValueError("control inputs must belong to canonical VS-0001")
+        for value, label in (
+            (self.source_publication_sha256, "source_publication_sha256"),
+            (self.aggregate_publication_sha256, "aggregate_publication_sha256"),
+            (self.candidate_input_set_sha256, "candidate_input_set_sha256"),
+            (self.control_set_sha256, "control_set_sha256"),
+        ):
+            _require_sha256(value, label)
+        for rows, role in (
+            (self.unconditional_rows, "unconditional"),
+            (self.persistence_rows, "persistence"),
+        ):
+            if type(rows) is not tuple or any(
+                type(row) is not RawPrimaryOpportunityRowV2 for row in rows
+            ):
+                raise TypeError("control input rows must be exact raw primary rows")
+            if any(row.control_role != role for row in rows):
+                raise ValueError(f"{role} input authority contains a wrong-role row")
+            if len(rows) > _VS0001_MAX_ELIGIBLE_EVENTS:
+                raise ValueError(f"{role} input authority exceeds the frozen event ceiling")
+            if len({row.row_identity for row in rows}) != len(rows):
+                raise ValueError(f"{role} input authority contains duplicate row identities")
+            if len({row.event_id for row in rows}) != len(rows):
+                raise ValueError(f"{role} input authority contains duplicate event identities")
+        if type(self.unavailable_strata) is not tuple or any(
+            type(item) is not tuple
+            or len(item) != 2
+            or any(type(value) is not str or value == "" for value in item)
+            for item in self.unavailable_strata
+        ):
+            raise TypeError("unavailable control strata must be exact non-empty string pairs")
+        if len(set(self.unavailable_strata)) != len(self.unavailable_strata):
+            raise ValueError("unavailable control strata must be unique")
+        if self.final_holdout_access_count != 0:
+            raise ValueError("control input authority cannot contain final access")
+        if self.control_set_sha256 != _vs0001_control_inputs_content_sha256_v2(self):
+            raise ValueError("control input authority identity differs")
+
+    def verify_original(self) -> VerifiedVs0001ControlInputsV2:
+        """Revalidate this authority and every retained publication parent."""
+
+        return _verify_vs0001_control_inputs_v2(self)
+
+
 @dataclass(frozen=True, slots=True)
 class _PublicationOutcomeReaderRegistrationV2:
     reader: weakref.ReferenceType[VerifiedPublicationOutcomeReaderV2]
@@ -1098,6 +1169,16 @@ class _Vs0001CandidateInputsRegistrationV2:
 
 
 _VERIFIED_VS0001_CANDIDATE_INPUTS: dict[int, _Vs0001CandidateInputsRegistrationV2] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class _Vs0001ControlInputsRegistrationV2:
+    inputs: weakref.ReferenceType[VerifiedVs0001ControlInputsV2]
+    snapshot: tuple[object, ...]
+    candidate_inputs: VerifiedVs0001CandidateInputsV2
+
+
+_VERIFIED_VS0001_CONTROL_INPUTS: dict[int, _Vs0001ControlInputsRegistrationV2] = {}
 
 
 def _publication_outcome_reader_snapshot(
@@ -1595,6 +1676,472 @@ def _verify_vs0001_candidate_inputs_v2(
         or inputs.input_set_sha256 != expected_sha256
     ):
         raise ValueError("candidate input authority differs from retained computation parents")
+    return inputs
+
+
+def _vs0001_control_inputs_sha256_v2(
+    *,
+    programme_id: str,
+    slot_id: str,
+    source_publication_sha256: str,
+    aggregate_publication_sha256: str,
+    candidate_input_set_sha256: str,
+    unconditional_rows: tuple[RawPrimaryOpportunityRowV2, ...],
+    persistence_rows: tuple[RawPrimaryOpportunityRowV2, ...],
+    unavailable_strata: tuple[tuple[str, str], ...],
+    final_holdout_access_count: int,
+) -> str:
+    return hash_json(
+        "phase5-validation-vs0001-control-inputs-v2",
+        {
+            "programme_id": programme_id,
+            "slot_id": slot_id,
+            "source_publication_sha256": source_publication_sha256,
+            "aggregate_publication_sha256": aggregate_publication_sha256,
+            "candidate_input_set_sha256": candidate_input_set_sha256,
+            "unconditional_rows": [row.to_dict() for row in unconditional_rows],
+            "persistence_rows": [row.to_dict() for row in persistence_rows],
+            "unavailable_strata": [list(item) for item in unavailable_strata],
+            "final_holdout_access_count": final_holdout_access_count,
+        },
+    )
+
+
+def _vs0001_control_inputs_content_sha256_v2(
+    inputs: VerifiedVs0001ControlInputsV2,
+) -> str:
+    return _vs0001_control_inputs_sha256_v2(
+        programme_id=inputs.programme_id,
+        slot_id=inputs.slot_id,
+        source_publication_sha256=inputs.source_publication_sha256,
+        aggregate_publication_sha256=inputs.aggregate_publication_sha256,
+        candidate_input_set_sha256=inputs.candidate_input_set_sha256,
+        unconditional_rows=inputs.unconditional_rows,
+        persistence_rows=inputs.persistence_rows,
+        unavailable_strata=inputs.unavailable_strata,
+        final_holdout_access_count=inputs.final_holdout_access_count,
+    )
+
+
+def _vs0001_control_inputs_snapshot_v2(
+    inputs: VerifiedVs0001ControlInputsV2,
+) -> tuple[object, ...]:
+    return (
+        inputs.programme_id,
+        inputs.slot_id,
+        inputs.source_publication_sha256,
+        inputs.aggregate_publication_sha256,
+        inputs.candidate_input_set_sha256,
+        tuple(
+            hash_json("phase5-validation-vs0001-control-input-row-v2", row.to_dict())
+            for row in inputs.unconditional_rows
+        ),
+        tuple(
+            hash_json("phase5-validation-vs0001-control-input-row-v2", row.to_dict())
+            for row in inputs.persistence_rows
+        ),
+        inputs.unavailable_strata,
+        inputs.control_set_sha256,
+        inputs.final_holdout_access_count,
+    )
+
+
+def _vs0001_control_stratum_v2(row: RawPrimaryOpportunityRowV2) -> tuple[object, ...]:
+    return (
+        row.symbol,
+        row.fold_id,
+        row.utc_week_start,
+        row.direction,
+        row.horizon_hours,
+        row.timeframe,
+        row.programme_id,
+        row.publication_sha256,
+        row.segment_id,
+        row.component,
+        row.block_id,
+    )
+
+
+def _intervals_overlap_v2(
+    left_start: datetime,
+    left_end: datetime,
+    right_start: datetime,
+    right_end: datetime,
+) -> bool:
+    return left_start < right_end and right_start < left_end
+
+
+def _preflight_vs0001_control_derivation_v2(
+    inputs: VerifiedVs0001CandidateInputsV2,
+) -> tuple[_Vs0001CandidateInputsRegistrationV2, _PublicationOutcomeReaderRegistrationV2]:
+    if type(inputs) is not VerifiedVs0001CandidateInputsV2:
+        raise TypeError("control inputs require the exact candidate input authority")
+    candidate_registration = _VERIFIED_VS0001_CANDIDATE_INPUTS.get(id(inputs))
+    if candidate_registration is None or candidate_registration.inputs() is not inputs:
+        raise ValueError("candidate input authority is not the registered original")
+    if _vs0001_candidate_inputs_snapshot_v2(inputs) != candidate_registration.snapshot:
+        raise ValueError("candidate input authority differs from its immutable snapshot")
+    reader_registration = _VERIFIED_PUBLICATION_OUTCOME_READERS.get(
+        id(candidate_registration.reader)
+    )
+    if (
+        reader_registration is None
+        or reader_registration.reader() is not candidate_registration.reader
+    ):
+        raise ValueError("candidate input publication authority is unavailable")
+    requested_controls = len(inputs.rows) * 2
+    ValidationWorkBudget.preflight(
+        reader_registration.work_budget,
+        ValidationWorkDemand(
+            controls=requested_controls,
+            events=requested_controls,
+        ),
+    )
+    return candidate_registration, reader_registration
+
+
+def _control_row_from_series_v2(
+    *,
+    candidate: RawPrimaryOpportunityRowV2,
+    series: VerifiedAggregateSeriesV2,
+    entry_index: int,
+    role: str,
+    candidate_input_set_sha256: str,
+) -> RawPrimaryOpportunityRowV2:
+    horizon = candidate.horizon_hours
+    prior_previous = series.rows[entry_index - 2]
+    prior_completed = series.rows[entry_index - 1]
+    entry = series.rows[entry_index]
+    exit_row = series.rows[entry_index + horizon]
+    delayed_entry = series.rows[entry_index + 1]
+    delayed_exit = series.rows[entry_index + horizon + 1]
+    prior_return = float(prior_completed.close / prior_previous.close - Decimal(1))
+    parent_payload = {
+        "candidate_input_set_sha256": candidate_input_set_sha256,
+        "role": role,
+        "series_identity": series.series_identity,
+        "entry_row_sha256": entry.row_sha256,
+        "exit_row_sha256": exit_row.row_sha256,
+        "delayed_entry_row_sha256": delayed_entry.row_sha256,
+        "delayed_exit_row_sha256": delayed_exit.row_sha256,
+        "prior_previous_row_sha256": prior_previous.row_sha256,
+        "prior_completed_row_sha256": prior_completed.row_sha256,
+        "direction": candidate.direction,
+    }
+    event_id = "VCE2-" + hash_json(
+        "phase5-validation-vs0001-control-event-v2",
+        {
+            "candidate_id": candidate.candidate_id,
+            "stratum": [str(item) for item in _vs0001_control_stratum_v2(candidate)],
+            **parent_payload,
+        },
+    )
+    return RawPrimaryOpportunityRowV2(
+        row_identity="VCI2-"
+        + hash_json("phase5-validation-vs0001-control-input-row-v2", parent_payload),
+        event_id=event_id,
+        candidate_id=candidate.candidate_id,
+        family=candidate.family,
+        detector_role=candidate.detector_role,
+        detector_parameters=candidate.detector_parameters,
+        control_role=role,
+        symbol=candidate.symbol,
+        timeframe=candidate.timeframe,
+        fold_id=candidate.fold_id,
+        utc_week_start=candidate.utc_week_start,
+        direction=candidate.direction,
+        horizon_hours=horizon,
+        segment_id=candidate.segment_id,
+        feature_time=prior_previous.timestamp,
+        signal_time=prior_completed.timestamp,
+        legal_entry_time=entry.timestamp,
+        label_start=entry.timestamp,
+        label_end=exit_row.timestamp,
+        programme_id=candidate.programme_id,
+        publication_sha256=candidate.publication_sha256,
+        component=candidate.component,
+        block_id=candidate.block_id,
+        venue=candidate.venue,
+        entry_price=float(entry.open),
+        exit_price=float(exit_row.open),
+        delayed_entry_price=float(delayed_entry.open),
+        delayed_exit_price=float(delayed_exit.open),
+        delayed_entry_time=delayed_entry.timestamp,
+        delayed_exit_time=delayed_exit.timestamp,
+        delay_evidence_sha256=candidate.delay_evidence_sha256,
+        prior_completed_close_return=prior_return,
+    )
+
+
+def _derive_vs0001_control_input_material_v2(
+    candidate_inputs: VerifiedVs0001CandidateInputsV2,
+    reader_registration: _PublicationOutcomeReaderRegistrationV2,
+) -> tuple[
+    tuple[RawPrimaryOpportunityRowV2, ...],
+    tuple[RawPrimaryOpportunityRowV2, ...],
+    tuple[tuple[str, str], ...],
+]:
+    series_by_signal_id = {
+        signal.signal_id: series
+        for signal, series in zip(
+            reader_registration.signals,
+            reader_registration.aggregate_series,
+            strict=True,
+        )
+    }
+    fold_by_id = {fold.fold_id: fold for fold in reader_registration.folds.outer_folds}
+    groups: dict[
+        tuple[tuple[object, ...], int],
+        list[tuple[RawPrimaryOpportunityRowV2, VerifiedAggregateSeriesV2]],
+    ] = {}
+    for candidate in candidate_inputs.rows:
+        series = series_by_signal_id.get(candidate.event_id)
+        if series is None:
+            raise ValueError("candidate control parent series is unavailable")
+        groups.setdefault(
+            (_vs0001_control_stratum_v2(candidate), series.key.interval_index), []
+        ).append((candidate, series))
+
+    unconditional: list[RawPrimaryOpportunityRowV2] = []
+    persistence: list[RawPrimaryOpportunityRowV2] = []
+    unavailable: list[tuple[str, str]] = []
+    for (stratum, interval_index), members in sorted(
+        groups.items(),
+        key=lambda item: repr(item[0]),
+    ):
+        members.sort(key=lambda item: (item[0].legal_entry_time, item[0].event_id))
+        candidate, series = members[0]
+        if any(item_series.key.interval_index != interval_index for _, item_series in members):
+            raise ValueError("candidate control stratum mixes aggregate series")
+        fold = fold_by_id.get(candidate.fold_id)
+        if fold is None:
+            raise ValueError("candidate control fold is unavailable")
+        candidate_intervals = tuple((item.label_start, item.label_end) for item, _ in members)
+        stratum_sha256 = hash_json(
+            "phase5-validation-vs0001-control-stratum-v2",
+            {
+                "symbol": candidate.symbol,
+                "fold_id": candidate.fold_id,
+                "utc_week_start": candidate.utc_week_start,
+                "direction": candidate.direction,
+                "horizon_hours": candidate.horizon_hours,
+                "timeframe": candidate.timeframe,
+                "programme_id": candidate.programme_id,
+                "segment_id": candidate.segment_id,
+                "component": candidate.component,
+                "block_id": candidate.block_id,
+                "interval_index": interval_index,
+            },
+        )
+        for role, output in (
+            ("unconditional", unconditional),
+            ("persistence", persistence),
+        ):
+            if role == "persistence":
+                incompatible = sum(
+                    item.prior_completed_close_return is None
+                    or item.prior_completed_close_return == 0
+                    or (1 if item.prior_completed_close_return > 0 else -1) != item.direction
+                    for item, _ in members
+                )
+                if incompatible:
+                    unavailable.append(
+                        (stratum_sha256, f"persistence_direction_shortage:{incompatible}")
+                    )
+            eligible_indices: list[int] = []
+            for index in range(2, len(series.rows) - candidate.horizon_hours - 1):
+                prior_previous = series.rows[index - 2]
+                prior_completed = series.rows[index - 1]
+                entry = series.rows[index]
+                exit_row = series.rows[index + candidate.horizon_hours]
+                delayed_exit = series.rows[index + candidate.horizon_hours + 1]
+                relevant = series.rows[index - 2 : index + candidate.horizon_hours + 2]
+                if any(
+                    current.timestamp != previous.timestamp + timedelta(hours=1)
+                    or current.symbol != candidate.symbol
+                    or current.target_timeframe != candidate.timeframe
+                    or current.interval_index != entry.interval_index
+                    or current.segment_id != candidate.segment_id
+                    for previous, current in zip(relevant, relevant[1:])
+                ):
+                    continue
+                if (
+                    entry.timestamp < fold.test.start
+                    or delayed_exit.timestamp >= fold.test.end
+                    or _vs0001_utc_week_start(entry.timestamp) != candidate.utc_week_start
+                ):
+                    continue
+                if any(
+                    _intervals_overlap_v2(
+                        entry.timestamp,
+                        exit_row.timestamp,
+                        candidate_start,
+                        candidate_end,
+                    )
+                    for candidate_start, candidate_end in candidate_intervals
+                ):
+                    continue
+                if role == "persistence":
+                    prior_return = prior_completed.close / prior_previous.close - Decimal(1)
+                    prior_direction = 1 if prior_return > 0 else -1 if prior_return < 0 else 0
+                    if prior_direction != candidate.direction:
+                        continue
+                eligible_indices.append(index)
+            ordered_indices = sorted(
+                eligible_indices,
+                key=lambda index: hash_json(
+                    "phase5-validation-vs0001-control-donor-order-v2",
+                    {
+                        "programme_id": candidate.programme_id,
+                        "candidate_id": candidate.candidate_id,
+                        "stratum_sha256": stratum_sha256,
+                        "role": role,
+                        "entry_time": series.rows[index].timestamp,
+                    },
+                ),
+            )
+            selected_indices: list[int] = []
+            selected_intervals: list[tuple[datetime, datetime]] = []
+            for index in ordered_indices:
+                entry_time = series.rows[index].timestamp
+                exit_time = series.rows[index + candidate.horizon_hours].timestamp
+                if any(
+                    _intervals_overlap_v2(entry_time, exit_time, start, end)
+                    for start, end in selected_intervals
+                ):
+                    continue
+                selected_indices.append(index)
+                selected_intervals.append((entry_time, exit_time))
+                if len(selected_indices) == len(members):
+                    break
+            if len(selected_indices) != len(members):
+                unavailable.append(
+                    (
+                        stratum_sha256,
+                        f"{role}_donor_shortage:{len(members) - len(selected_indices)}",
+                    )
+                )
+            output.extend(
+                _control_row_from_series_v2(
+                    candidate=candidate,
+                    series=series,
+                    entry_index=index,
+                    role=role,
+                    candidate_input_set_sha256=candidate_inputs.input_set_sha256,
+                )
+                for index in selected_indices
+            )
+    return tuple(unconditional), tuple(persistence), tuple(sorted(set(unavailable)))
+
+
+def derive_verified_vs0001_control_inputs_v2(
+    candidate_inputs: VerifiedVs0001CandidateInputsV2,
+) -> VerifiedVs0001ControlInputsV2:
+    """Derive bounded outcome-blind A control pools from verified aggregate parents."""
+
+    _, reader_registration = _preflight_vs0001_control_derivation_v2(candidate_inputs)
+    candidate_inputs = _verify_vs0001_candidate_inputs_v2(candidate_inputs)
+    unconditional, persistence, unavailable = _derive_vs0001_control_input_material_v2(
+        candidate_inputs,
+        reader_registration,
+    )
+    control_set_sha256 = _vs0001_control_inputs_sha256_v2(
+        programme_id=candidate_inputs.programme_id,
+        slot_id="VS-0001",
+        source_publication_sha256=candidate_inputs.source_publication_sha256,
+        aggregate_publication_sha256=candidate_inputs.aggregate_publication_sha256,
+        candidate_input_set_sha256=candidate_inputs.input_set_sha256,
+        unconditional_rows=unconditional,
+        persistence_rows=persistence,
+        unavailable_strata=unavailable,
+        final_holdout_access_count=0,
+    )
+    expected_snapshot = (
+        candidate_inputs.programme_id,
+        "VS-0001",
+        candidate_inputs.source_publication_sha256,
+        candidate_inputs.aggregate_publication_sha256,
+        candidate_inputs.input_set_sha256,
+        tuple(
+            hash_json("phase5-validation-vs0001-control-input-row-v2", row.to_dict())
+            for row in unconditional
+        ),
+        tuple(
+            hash_json("phase5-validation-vs0001-control-input-row-v2", row.to_dict())
+            for row in persistence
+        ),
+        unavailable,
+        control_set_sha256,
+        0,
+    )
+    issuance_token = object()
+    _CONTROL_INPUT_ISSUANCE[id(issuance_token)] = (issuance_token, expected_snapshot)
+    try:
+        inputs = VerifiedVs0001ControlInputsV2(
+            programme_id=candidate_inputs.programme_id,
+            slot_id="VS-0001",
+            source_publication_sha256=candidate_inputs.source_publication_sha256,
+            aggregate_publication_sha256=candidate_inputs.aggregate_publication_sha256,
+            candidate_input_set_sha256=candidate_inputs.input_set_sha256,
+            unconditional_rows=unconditional,
+            persistence_rows=persistence,
+            unavailable_strata=unavailable,
+            control_set_sha256=control_set_sha256,
+            final_holdout_access_count=0,
+            _factory_token=issuance_token,
+        )
+    finally:
+        _CONTROL_INPUT_ISSUANCE.pop(id(issuance_token), None)
+    identifier = id(inputs)
+
+    def cleanup(reference: weakref.ReferenceType[VerifiedVs0001ControlInputsV2]) -> None:
+        current = _VERIFIED_VS0001_CONTROL_INPUTS.get(identifier)
+        if current is not None and current.inputs is reference:
+            _VERIFIED_VS0001_CONTROL_INPUTS.pop(identifier, None)
+
+    reference = weakref.ref(inputs, cleanup)
+    _VERIFIED_VS0001_CONTROL_INPUTS[identifier] = _Vs0001ControlInputsRegistrationV2(
+        inputs=reference,
+        snapshot=expected_snapshot,
+        candidate_inputs=candidate_inputs,
+    )
+    return inputs
+
+
+def _verify_vs0001_control_inputs_v2(
+    inputs: VerifiedVs0001ControlInputsV2,
+) -> VerifiedVs0001ControlInputsV2:
+    if type(inputs) is not VerifiedVs0001ControlInputsV2:
+        raise TypeError("control inputs must be the exact verifier-issued type")
+    registered = _VERIFIED_VS0001_CONTROL_INPUTS.get(id(inputs))
+    if registered is None or registered.inputs() is not inputs:
+        raise ValueError("control input authority is not the registered original")
+    if _vs0001_control_inputs_snapshot_v2(inputs) != registered.snapshot:
+        raise ValueError("control input authority differs from its immutable snapshot")
+    _, reader_registration = _preflight_vs0001_control_derivation_v2(registered.candidate_inputs)
+    candidate_inputs = _verify_vs0001_candidate_inputs_v2(registered.candidate_inputs)
+    unconditional, persistence, unavailable = _derive_vs0001_control_input_material_v2(
+        candidate_inputs,
+        reader_registration,
+    )
+    expected_sha256 = _vs0001_control_inputs_sha256_v2(
+        programme_id=candidate_inputs.programme_id,
+        slot_id="VS-0001",
+        source_publication_sha256=candidate_inputs.source_publication_sha256,
+        aggregate_publication_sha256=candidate_inputs.aggregate_publication_sha256,
+        candidate_input_set_sha256=candidate_inputs.input_set_sha256,
+        unconditional_rows=unconditional,
+        persistence_rows=persistence,
+        unavailable_strata=unavailable,
+        final_holdout_access_count=0,
+    )
+    if (
+        inputs.unconditional_rows != unconditional
+        or inputs.persistence_rows != persistence
+        or inputs.unavailable_strata != unavailable
+        or inputs.control_set_sha256 != expected_sha256
+    ):
+        raise ValueError("control input authority differs from retained computation parents")
     return inputs
 
 

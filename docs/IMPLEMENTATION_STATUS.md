@@ -734,8 +734,18 @@ The shared A-control primitives now reject a distinct control identifier at the 
 legal-entry clock, so relabelling one opportunity cannot masquerade as a matched baseline.
 Synthetic-oracle evaluation also passes unconditional and persistence rows to their selectors as
 separate bounded pools; unrelated roles no longer consume the per-selection control budget. These
-repairs harden the existing exact primitives but do not create the still-missing publication-rooted
-control opportunity authority.
+repairs harden the existing exact primitives.
+
+The V2 boundary can now derive a separate factory-issued, publication-rooted VS-0001 control-input
+authority from the verified candidate-input and aggregate parents. It admits two requested control
+rows per retained candidate before parent replay, selects unconditional and persistence donors by
+outcome-blind programme/candidate/stratum/time metadata, excludes candidate-overlapping and
+donor-overlapping 24-hour paths, seals base/delay prices only after donor clocks are fixed, and
+records exact shortage reasons instead of relabelling a candidate or borrowing across strata.
+Changing outcome prices changes the derived row identities but not the selected clocks. The bounded
+real synthetic slice truthfully yields one unconditional donor and a persistence-donor shortage;
+it therefore does not enable inference. Numeric promotion-grade cost evidence and complete legal
+control support remain required before Gate D inference can execute.
 
 Exact identities, exclusions, missing prerequisites, receipt hashes, replay evidence, and
 verification are recorded in

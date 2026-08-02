@@ -26,6 +26,7 @@ from market_structure_lab.research.outcomes import DevelopmentOutcomeRowV2
 from market_structure_lab.research.validation_v2 import (
     ValidationV2SourceBundle,
     derive_verified_vs0001_candidate_inputs_v2,
+    derive_verified_vs0001_control_inputs_v2,
     development_access_ledger_identity_v2,
     run_validation_programme_v2,
     verify_original_validation_slot_result_v2,
@@ -33,6 +34,7 @@ from market_structure_lab.research.validation_v2 import (
 from market_structure_lab.research.validation_v2_costs import (
     publish_validation_cost_authority_v2,
 )
+from market_structure_lab.research.validation_v2_inference import RawPrimaryOpportunityRowV2
 from market_structure_lab.research.validation_v2_models import (
     PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
     PHASE5_VS0001_POPULATION_POLICY_IDENTITY,
@@ -81,6 +83,127 @@ def _stub_population_signal(
         legal_entry=legal_entry,
         direction=1,
     )
+
+
+def _control_material_fixture(*, price_offset: Decimal, input_sha256: str) -> tuple[Any, Any]:
+    from market_structure_lab.core.identity import hash_json
+
+    start = datetime(2025, 1, 6, tzinfo=UTC)
+    rows: list[SimpleNamespace] = []
+    for index in range(100):
+        close = Decimal("101") if index in {4, 59} else Decimal("100")
+        open_ = close + price_offset
+        rows.append(
+            SimpleNamespace(
+                timestamp=start + timedelta(hours=index),
+                symbol="BTCUSDT",
+                target_timeframe="1h",
+                interval_index=1,
+                segment_id=0,
+                open=open_,
+                close=close,
+                row_sha256=hash_json(
+                    "test-control-material-row",
+                    {"index": index, "open": str(open_), "close": str(close)},
+                ),
+            )
+        )
+    series = SimpleNamespace(
+        rows=tuple(rows),
+        series_identity=hash_json(
+            "test-control-material-series",
+            {"price_offset": str(price_offset)},
+        ),
+        key=SimpleNamespace(interval_index=1),
+    )
+    entry_index = 60
+    candidate = RawPrimaryOpportunityRowV2(
+        row_identity="VPI2-test-candidate",
+        event_id="CS-test-candidate",
+        candidate_id="HC-A-001",
+        family="A",
+        detector_role="moving_average_crossover",
+        detector_parameters=(
+            ("detector", "moving_average_crossover"),
+            ("fast_hours", "24"),
+            ("slow_hours", "72"),
+        ),
+        control_role="candidate",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        fold_id="outer-1",
+        utc_week_start=start,
+        direction=1,
+        horizon_hours=24,
+        segment_id=0,
+        feature_time=rows[entry_index - 2].timestamp,
+        signal_time=rows[entry_index - 1].timestamp,
+        legal_entry_time=rows[entry_index].timestamp,
+        label_start=rows[entry_index].timestamp,
+        label_end=rows[entry_index + 24].timestamp,
+        programme_id="VPV2-" + "a" * 64,
+        publication_sha256="b" * 64,
+        component="development",
+        block_id=start.date().isoformat(),
+        venue="binance_spot",
+        entry_price=float(rows[entry_index].open),
+        exit_price=float(rows[entry_index + 24].open),
+        delayed_entry_price=float(rows[entry_index + 1].open),
+        delayed_exit_price=float(rows[entry_index + 25].open),
+        delayed_entry_time=rows[entry_index + 1].timestamp,
+        delayed_exit_time=rows[entry_index + 25].timestamp,
+        delay_evidence_sha256="c" * 64,
+        prior_completed_close_return=0.01,
+    )
+    candidate_inputs = SimpleNamespace(rows=(candidate,), input_set_sha256=input_sha256)
+    registration = SimpleNamespace(
+        signals=(SimpleNamespace(signal_id=candidate.event_id),),
+        aggregate_series=(series,),
+        folds=SimpleNamespace(
+            outer_folds=(
+                SimpleNamespace(
+                    fold_id=candidate.fold_id,
+                    test=SimpleNamespace(start=start, end=start + timedelta(days=7)),
+                ),
+            )
+        ),
+    )
+    return candidate_inputs, registration
+
+
+def test_control_donor_selection_is_outcome_blind_and_non_overlapping() -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    first_inputs, first_registration = _control_material_fixture(
+        price_offset=Decimal("0"),
+        input_sha256="d" * 64,
+    )
+    second_inputs, second_registration = _control_material_fixture(
+        price_offset=Decimal("7"),
+        input_sha256="e" * 64,
+    )
+
+    first = module._derive_vs0001_control_input_material_v2(  # noqa: SLF001
+        first_inputs,
+        first_registration,
+    )
+    second = module._derive_vs0001_control_input_material_v2(  # noqa: SLF001
+        second_inputs,
+        second_registration,
+    )
+
+    assert first[2] == second[2] == ()
+    assert tuple(row.legal_entry_time for rows in first[:2] for row in rows) == tuple(
+        row.legal_entry_time for rows in second[:2] for row in rows
+    )
+    assert tuple(row.row_identity for rows in first[:2] for row in rows) != tuple(
+        row.row_identity for rows in second[:2] for row in rows
+    )
+    candidate = first_inputs.rows[0]
+    for rows in first[:2]:
+        [control] = rows
+        assert control.label_end <= candidate.label_start
+        assert control.legal_entry_time != candidate.legal_entry_time
 
 
 def _stub_population_dependencies(
@@ -928,6 +1051,57 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     with pytest.raises(TypeError, match="verifier factory"):
         replace(candidate_inputs, rows=candidate_inputs.rows)
 
+    control_inputs = derive_verified_vs0001_control_inputs_v2(candidate_inputs)
+    assert control_inputs.verify_original() is control_inputs
+    assert control_inputs.programme_id == candidate_inputs.programme_id
+    assert control_inputs.slot_id == "VS-0001"
+    assert control_inputs.candidate_input_set_sha256 == candidate_inputs.input_set_sha256
+    assert control_inputs.source_publication_sha256 == candidate_inputs.source_publication_sha256
+    assert control_inputs.aggregate_publication_sha256 == (
+        candidate_inputs.aggregate_publication_sha256
+    )
+    assert control_inputs.final_holdout_access_count == 0
+    assert len(control_inputs.unconditional_rows) == 1
+    assert control_inputs.persistence_rows == ()
+    assert len(control_inputs.unavailable_strata) == 1
+    assert control_inputs.unavailable_strata[0][1] == "persistence_donor_shortage:1"
+    control_row = control_inputs.unconditional_rows[0]
+    assert control_row.control_role == "unconditional"
+    assert control_row.event_id != candidate_row.event_id
+    assert control_row.row_identity != candidate_row.row_identity
+    assert control_row.legal_entry_time != candidate_row.legal_entry_time
+    assert control_row.label_end <= candidate_row.label_start
+    assert (
+        control_row.symbol,
+        control_row.fold_id,
+        control_row.utc_week_start,
+        control_row.direction,
+        control_row.horizon_hours,
+        control_row.timeframe,
+        control_row.programme_id,
+        control_row.publication_sha256,
+        control_row.segment_id,
+        control_row.component,
+        control_row.block_id,
+    ) == (
+        candidate_row.symbol,
+        candidate_row.fold_id,
+        candidate_row.utc_week_start,
+        candidate_row.direction,
+        candidate_row.horizon_hours,
+        candidate_row.timeframe,
+        candidate_row.programme_id,
+        candidate_row.publication_sha256,
+        candidate_row.segment_id,
+        candidate_row.component,
+        candidate_row.block_id,
+    )
+    with pytest.raises(TypeError, match="verifier factory"):
+        replace(
+            control_inputs,
+            unconditional_rows=control_inputs.unconditional_rows,
+        )
+
     original_delayed_exit = candidate_row.delayed_exit_price
     object.__setattr__(candidate_row, "delayed_exit_price", 999.0)
     try:
@@ -935,6 +1109,14 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
             candidate_inputs.verify_original()
     finally:
         object.__setattr__(candidate_row, "delayed_exit_price", original_delayed_exit)
+
+    original_control_exit = control_row.exit_price
+    object.__setattr__(control_row, "exit_price", 999.0)
+    try:
+        with pytest.raises(ValueError, match="control input"):
+            control_inputs.verify_original()
+    finally:
+        object.__setattr__(control_row, "exit_price", original_control_exit)
 
     assert run.execution_scope == "development-only-full-roster"
     assert run.planned_slot_count == 1_104
