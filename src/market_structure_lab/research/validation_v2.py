@@ -90,6 +90,7 @@ from market_structure_lab.research.validation_v2_costs import (
     verified_cost_authority_bytes_v2,
     verify_validation_cost_authority_metadata_v2,
 )
+from market_structure_lab.research.validation_v2_inference import RawPrimaryOpportunityRowV2
 from market_structure_lab.research.validation_v2_models import (
     AccessAuditLedgerIdentityV2,
     AggregatePublicationIdentityV2,
@@ -144,6 +145,7 @@ _VS0001_PATH_ROWS = _VS0001_HORIZON_HOURS * 60
 _OUTCOME_FACTORY = object()
 _OUTCOME_READER_FACTORY = object()
 _PUBLICATION_OUTCOME_READER_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
+_CANDIDATE_INPUT_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
 _VERIFIED_OUTCOME_READERS: dict[
     int,
     tuple[
@@ -995,6 +997,65 @@ class VerifiedPublicationOutcomeReaderV2:
         return self._outcomes_by_slot[slot.slot_id]
 
 
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class VerifiedVs0001CandidateInputsV2:
+    """Factory-issued publication-rooted inputs before control or cost evaluation."""
+
+    programme_id: str
+    slot_id: str
+    source_publication_sha256: str
+    aggregate_publication_sha256: str
+    outcome_set_sha256: str
+    rows: tuple[RawPrimaryOpportunityRowV2, ...]
+    unavailable_outcomes: tuple[tuple[str, str], ...]
+    input_set_sha256: str
+    final_holdout_access_count: int = 0
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        issuance = _CANDIDATE_INPUT_ISSUANCE.pop(id(_factory_token), None)
+        if (
+            issuance is None
+            or issuance[0] is not _factory_token
+            or issuance[1] != _vs0001_candidate_inputs_snapshot_v2(self)
+        ):
+            raise TypeError("VerifiedVs0001CandidateInputsV2 requires its verifier factory")
+        _require_programme(self.programme_id)
+        if self.slot_id != "VS-0001":
+            raise ValueError("candidate inputs must belong to canonical VS-0001")
+        for value, label in (
+            (self.source_publication_sha256, "source_publication_sha256"),
+            (self.aggregate_publication_sha256, "aggregate_publication_sha256"),
+            (self.outcome_set_sha256, "outcome_set_sha256"),
+            (self.input_set_sha256, "input_set_sha256"),
+        ):
+            _require_sha256(value, label)
+        if type(self.rows) is not tuple or any(
+            type(row) is not RawPrimaryOpportunityRowV2 for row in self.rows
+        ):
+            raise TypeError("candidate input rows must be exact raw primary rows")
+        if any(row.control_role != "candidate" for row in self.rows):
+            raise ValueError("candidate input authority cannot contain control rows")
+        if len(self.rows) > _VS0001_MAX_ELIGIBLE_EVENTS:
+            raise ValueError("candidate input authority exceeds the frozen event ceiling")
+        if type(self.unavailable_outcomes) is not tuple or any(
+            type(item) is not tuple
+            or len(item) != 2
+            or any(type(value) is not str or value == "" for value in item)
+            for item in self.unavailable_outcomes
+        ):
+            raise TypeError("unavailable outcomes must be exact non-empty string pairs")
+        if self.final_holdout_access_count != 0:
+            raise ValueError("candidate input authority cannot contain final access")
+        if self.input_set_sha256 != _vs0001_candidate_inputs_content_sha256_v2(self):
+            raise ValueError("candidate input authority identity differs")
+
+    def verify_original(self) -> VerifiedVs0001CandidateInputsV2:
+        """Revalidate this authority and every retained publication parent."""
+
+        return _verify_vs0001_candidate_inputs_v2(self)
+
+
 @dataclass(frozen=True, slots=True)
 class _PublicationOutcomeReaderRegistrationV2:
     reader: weakref.ReferenceType[VerifiedPublicationOutcomeReaderV2]
@@ -1027,6 +1088,16 @@ class _PublicationOutcomeReaderRegistrationV2:
 
 
 _VERIFIED_PUBLICATION_OUTCOME_READERS: dict[int, _PublicationOutcomeReaderRegistrationV2] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class _Vs0001CandidateInputsRegistrationV2:
+    inputs: weakref.ReferenceType[VerifiedVs0001CandidateInputsV2]
+    snapshot: tuple[object, ...]
+    reader: VerifiedPublicationOutcomeReaderV2
+
+
+_VERIFIED_VS0001_CANDIDATE_INPUTS: dict[int, _Vs0001CandidateInputsRegistrationV2] = {}
 
 
 def _publication_outcome_reader_snapshot(
@@ -1234,6 +1305,297 @@ def _verify_publication_outcome_reader_v2(
             "publication outcome reader claims differ from retained computation parents"
         )
     return reader
+
+
+def _vs0001_candidate_inputs_sha256_v2(
+    *,
+    programme_id: str,
+    slot_id: str,
+    source_publication_sha256: str,
+    aggregate_publication_sha256: str,
+    outcome_set_sha256: str,
+    rows: tuple[RawPrimaryOpportunityRowV2, ...],
+    unavailable_outcomes: tuple[tuple[str, str], ...],
+    final_holdout_access_count: int,
+) -> str:
+    return hash_json(
+        "phase5-validation-vs0001-candidate-inputs-v2",
+        {
+            "programme_id": programme_id,
+            "slot_id": slot_id,
+            "source_publication_sha256": source_publication_sha256,
+            "aggregate_publication_sha256": aggregate_publication_sha256,
+            "outcome_set_sha256": outcome_set_sha256,
+            "rows": [row.to_dict() for row in rows],
+            "unavailable_outcomes": [list(item) for item in unavailable_outcomes],
+            "final_holdout_access_count": final_holdout_access_count,
+        },
+    )
+
+
+def _vs0001_candidate_inputs_content_sha256_v2(
+    inputs: VerifiedVs0001CandidateInputsV2,
+) -> str:
+    return _vs0001_candidate_inputs_sha256_v2(
+        programme_id=inputs.programme_id,
+        slot_id=inputs.slot_id,
+        source_publication_sha256=inputs.source_publication_sha256,
+        aggregate_publication_sha256=inputs.aggregate_publication_sha256,
+        outcome_set_sha256=inputs.outcome_set_sha256,
+        rows=inputs.rows,
+        unavailable_outcomes=inputs.unavailable_outcomes,
+        final_holdout_access_count=inputs.final_holdout_access_count,
+    )
+
+
+def _vs0001_candidate_inputs_snapshot_v2(
+    inputs: VerifiedVs0001CandidateInputsV2,
+) -> tuple[object, ...]:
+    return (
+        inputs.programme_id,
+        inputs.slot_id,
+        inputs.source_publication_sha256,
+        inputs.aggregate_publication_sha256,
+        inputs.outcome_set_sha256,
+        tuple(
+            hash_json("phase5-validation-vs0001-candidate-input-row-v2", row.to_dict())
+            for row in inputs.rows
+        ),
+        inputs.unavailable_outcomes,
+        inputs.input_set_sha256,
+        inputs.final_holdout_access_count,
+    )
+
+
+def _vs0001_utc_week_start(value: datetime) -> datetime:
+    value = _require_utc(value, "VS-0001 label start")
+    midnight = datetime(value.year, value.month, value.day, tzinfo=UTC)
+    return midnight - timedelta(days=midnight.weekday())
+
+
+def _vs0001_delay_model_sha256(slot: ValidationSlot) -> str:
+    return hash_json(
+        "phase5-validation-vs0001-delay-model-v2",
+        {
+            "slot_id": slot.slot_id,
+            "timeframe": slot.timeframe,
+            "delay_bars": 1,
+            "horizon_hours": slot.horizon_hours,
+            "entry_price": "delayed_contiguous_bar_open",
+            "exit_price": "same_horizon_delayed_contiguous_bar_open",
+        },
+    )
+
+
+def _derive_vs0001_candidate_input_material_v2(
+    reader: VerifiedPublicationOutcomeReaderV2,
+) -> tuple[tuple[RawPrimaryOpportunityRowV2, ...], tuple[tuple[str, str], ...]]:
+    _verify_publication_outcome_reader_v2(reader)
+    registered = _VERIFIED_PUBLICATION_OUTCOME_READERS[id(reader)]
+    slot = next(item for item in VALIDATION_SLOT_ROSTER if item.slot_id == "VS-0001")
+    if slot.timeframe != "1h" or slot.horizon_hours != _VS0001_HORIZON_HOURS:
+        raise ValueError("canonical VS-0001 differs from the frozen delay model")
+    if (
+        registered.sources.cost_authority.allowed_origin != "https://data.binance.vision"
+        or registered.sources.cost_authority.instrument_kind != "spot"
+    ):
+        raise ValueError("VS-0001 candidate inputs require verified Binance spot parents")
+
+    rows: list[RawPrimaryOpportunityRowV2] = []
+    unavailable: list[tuple[str, str]] = []
+    delay_model_sha256 = _vs0001_delay_model_sha256(slot)
+    for series, signal, assignment, outcome in zip(
+        registered.aggregate_series,
+        registered.signals,
+        registered.assignments,
+        registered.outcomes,
+        strict=True,
+    ):
+        try:
+            entry_index = next(
+                index
+                for index, row in enumerate(series.rows)
+                if row.timestamp == outcome.entry_time
+            )
+        except StopIteration:
+            raise ValueError(
+                "candidate input entry row is absent from its verified series"
+            ) from None
+        horizon_bars = outcome.horizon_hours
+        delayed_entry_index = entry_index + 1
+        delayed_exit_index = entry_index + horizon_bars + 1
+        if entry_index < 2:
+            unavailable.append((outcome.outcome_id, "prior_completed_close_return_unavailable"))
+            continue
+        if delayed_exit_index >= len(series.rows):
+            unavailable.append((outcome.outcome_id, "delayed_path_unavailable"))
+            continue
+        expected_step = timedelta(hours=1)
+        relevant = series.rows[entry_index - 2 : delayed_exit_index + 1]
+        if any(
+            current.timestamp != previous.timestamp + expected_step
+            or current.symbol != outcome.symbol
+            or current.target_timeframe != outcome.timeframe
+            or current.interval_index != outcome.aggregate_interval_index
+            or current.segment_id != outcome.segment_id
+            for previous, current in zip(relevant, relevant[1:])
+        ):
+            unavailable.append((outcome.outcome_id, "delayed_path_not_contiguous"))
+            continue
+        prior_previous = series.rows[entry_index - 2]
+        prior_completed = series.rows[entry_index - 1]
+        delayed_entry = series.rows[delayed_entry_index]
+        delayed_exit = series.rows[delayed_exit_index]
+        prior_close_return = float(prior_completed.close / prior_previous.close - Decimal(1))
+        week_start = _vs0001_utc_week_start(outcome.entry_time)
+        identity_payload = {
+            "programme_id": reader.programme_id,
+            "slot_id": slot.slot_id,
+            "signal_id": signal.signal_id,
+            "assignment_id": assignment.assignment_id,
+            "outcome_id": outcome.outcome_id,
+            "aggregate_series_identity": series.series_identity,
+            "entry_row_sha256": series.rows[entry_index].row_sha256,
+            "exit_row_sha256": series.rows[entry_index + horizon_bars].row_sha256,
+            "delayed_entry_row_sha256": delayed_entry.row_sha256,
+            "delayed_exit_row_sha256": delayed_exit.row_sha256,
+            "delay_model_sha256": delay_model_sha256,
+        }
+        rows.append(
+            RawPrimaryOpportunityRowV2(
+                row_identity="VPI2-"
+                + hash_json("phase5-validation-vs0001-candidate-input-row-v2", identity_payload),
+                event_id=signal.signal_id,
+                candidate_id=signal.candidate_id,
+                family=signal.family,
+                detector_role=slot.role,
+                detector_parameters=slot.parameters,
+                control_role="candidate",
+                symbol=signal.symbol,
+                timeframe=signal.timeframe,
+                fold_id=assignment.fold_id,
+                utc_week_start=week_start,
+                direction=signal.direction,
+                horizon_hours=outcome.horizon_hours,
+                segment_id=signal.segment_id,
+                feature_time=signal.feature_start,
+                signal_time=signal.information_cutoff,
+                legal_entry_time=outcome.entry_time,
+                label_start=outcome.entry_time,
+                label_end=outcome.exit_time,
+                programme_id=reader.programme_id,
+                publication_sha256=reader.source_publication_sha256,
+                component=outcome.component,
+                block_id=week_start.date().isoformat(),
+                venue="binance_spot",
+                entry_price=float(outcome.entry_price),
+                exit_price=float(outcome.exit_price),
+                delayed_entry_price=float(delayed_entry.open),
+                delayed_exit_price=float(delayed_exit.open),
+                delayed_entry_time=delayed_entry.timestamp,
+                delayed_exit_time=delayed_exit.timestamp,
+                delay_evidence_sha256=delay_model_sha256,
+                prior_completed_close_return=prior_close_return,
+            )
+        )
+    return tuple(rows), tuple(unavailable)
+
+
+def derive_verified_vs0001_candidate_inputs_v2(
+    reader: VerifiedPublicationOutcomeReaderV2,
+) -> VerifiedVs0001CandidateInputsV2:
+    """Derive bounded real base/delay candidate inputs without inventing costs or controls."""
+
+    if type(reader) is not VerifiedPublicationOutcomeReaderV2:
+        raise TypeError("candidate inputs require the exact publication outcome reader")
+    reader = _verify_publication_outcome_reader_v2(reader)
+    rows, unavailable = _derive_vs0001_candidate_input_material_v2(reader)
+    input_set_sha256 = _vs0001_candidate_inputs_sha256_v2(
+        programme_id=reader.programme_id,
+        slot_id="VS-0001",
+        source_publication_sha256=reader.source_publication_sha256,
+        aggregate_publication_sha256=reader.aggregate_publication_sha256,
+        outcome_set_sha256=reader.outcome_set_sha256,
+        rows=rows,
+        unavailable_outcomes=unavailable,
+        final_holdout_access_count=0,
+    )
+    expected_snapshot = (
+        reader.programme_id,
+        "VS-0001",
+        reader.source_publication_sha256,
+        reader.aggregate_publication_sha256,
+        reader.outcome_set_sha256,
+        tuple(
+            hash_json("phase5-validation-vs0001-candidate-input-row-v2", row.to_dict())
+            for row in rows
+        ),
+        unavailable,
+        input_set_sha256,
+        0,
+    )
+    issuance_token = object()
+    _CANDIDATE_INPUT_ISSUANCE[id(issuance_token)] = (issuance_token, expected_snapshot)
+    try:
+        inputs = VerifiedVs0001CandidateInputsV2(
+            programme_id=reader.programme_id,
+            slot_id="VS-0001",
+            source_publication_sha256=reader.source_publication_sha256,
+            aggregate_publication_sha256=reader.aggregate_publication_sha256,
+            outcome_set_sha256=reader.outcome_set_sha256,
+            rows=rows,
+            unavailable_outcomes=unavailable,
+            input_set_sha256=input_set_sha256,
+            final_holdout_access_count=0,
+            _factory_token=issuance_token,
+        )
+    finally:
+        _CANDIDATE_INPUT_ISSUANCE.pop(id(issuance_token), None)
+    identifier = id(inputs)
+
+    def cleanup(reference: weakref.ReferenceType[VerifiedVs0001CandidateInputsV2]) -> None:
+        current = _VERIFIED_VS0001_CANDIDATE_INPUTS.get(identifier)
+        if current is not None and current.inputs is reference:
+            _VERIFIED_VS0001_CANDIDATE_INPUTS.pop(identifier, None)
+
+    reference = weakref.ref(inputs, cleanup)
+    _VERIFIED_VS0001_CANDIDATE_INPUTS[identifier] = _Vs0001CandidateInputsRegistrationV2(
+        inputs=reference,
+        snapshot=expected_snapshot,
+        reader=reader,
+    )
+    return inputs
+
+
+def _verify_vs0001_candidate_inputs_v2(
+    inputs: VerifiedVs0001CandidateInputsV2,
+) -> VerifiedVs0001CandidateInputsV2:
+    if type(inputs) is not VerifiedVs0001CandidateInputsV2:
+        raise TypeError("candidate inputs must be the exact verifier-issued type")
+    registered = _VERIFIED_VS0001_CANDIDATE_INPUTS.get(id(inputs))
+    if registered is None or registered.inputs() is not inputs:
+        raise ValueError("candidate input authority is not the registered original")
+    if _vs0001_candidate_inputs_snapshot_v2(inputs) != registered.snapshot:
+        raise ValueError("candidate input authority differs from its immutable snapshot")
+    reader = _verify_publication_outcome_reader_v2(registered.reader)
+    expected_rows, expected_unavailable = _derive_vs0001_candidate_input_material_v2(reader)
+    expected_sha256 = _vs0001_candidate_inputs_sha256_v2(
+        programme_id=reader.programme_id,
+        slot_id="VS-0001",
+        source_publication_sha256=reader.source_publication_sha256,
+        aggregate_publication_sha256=reader.aggregate_publication_sha256,
+        outcome_set_sha256=reader.outcome_set_sha256,
+        rows=expected_rows,
+        unavailable_outcomes=expected_unavailable,
+        final_holdout_access_count=0,
+    )
+    if (
+        inputs.rows != expected_rows
+        or inputs.unavailable_outcomes != expected_unavailable
+        or inputs.input_set_sha256 != expected_sha256
+    ):
+        raise ValueError("candidate input authority differs from retained computation parents")
+    return inputs
 
 
 def _aggregate_read_budget_v2(

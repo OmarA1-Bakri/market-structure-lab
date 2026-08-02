@@ -25,6 +25,7 @@ from market_structure_lab.research.models import (
 from market_structure_lab.research.outcomes import DevelopmentOutcomeRowV2
 from market_structure_lab.research.validation_v2 import (
     ValidationV2SourceBundle,
+    derive_verified_vs0001_candidate_inputs_v2,
     development_access_ledger_identity_v2,
     run_validation_programme_v2,
     verify_original_validation_slot_result_v2,
@@ -907,6 +908,34 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     assert outcome.final_access_records == 0
     assert sources.source_publication.final_access_records == 0
     assert sources.aggregate_publication.final_access_records == 0
+
+    candidate_inputs = derive_verified_vs0001_candidate_inputs_v2(reader)  # type: ignore[arg-type]
+    assert candidate_inputs.verify_original() is candidate_inputs
+    assert candidate_inputs.slot_id == "VS-0001"
+    assert candidate_inputs.final_holdout_access_count == 0
+    assert candidate_inputs.unavailable_outcomes == ()
+    [candidate_row] = candidate_inputs.rows
+    assert candidate_row.event_id == outcome.signal_id
+    assert candidate_row.control_role == "candidate"
+    assert candidate_row.detector_role == "moving_average_crossover"
+    assert candidate_row.entry_price == 120.0
+    assert candidate_row.exit_price == 120.0
+    assert candidate_row.delayed_entry_price == 120.0
+    assert candidate_row.delayed_exit_price == 120.0
+    assert candidate_row.delayed_entry_time == outcome.entry_time + timedelta(hours=1)
+    assert candidate_row.delayed_exit_time == outcome.exit_time + timedelta(hours=1)
+    assert candidate_row.prior_completed_close_return == pytest.approx(0.2)
+    with pytest.raises(TypeError, match="verifier factory"):
+        replace(candidate_inputs, rows=candidate_inputs.rows)
+
+    original_delayed_exit = candidate_row.delayed_exit_price
+    object.__setattr__(candidate_row, "delayed_exit_price", 999.0)
+    try:
+        with pytest.raises(ValueError, match="candidate input"):
+            candidate_inputs.verify_original()
+    finally:
+        object.__setattr__(candidate_row, "delayed_exit_price", original_delayed_exit)
+
     assert run.execution_scope == "development-only-full-roster"
     assert run.planned_slot_count == 1_104
     assert run.executed_slot_count == 1_104

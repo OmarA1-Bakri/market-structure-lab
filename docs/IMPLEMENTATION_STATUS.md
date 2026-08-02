@@ -721,6 +721,15 @@ one ordered publication authority. An authenticated empty population remains
 dimensions are unavailable. This is synthetic enabling evidence only: 1,103 slots remain
 unavailable, no promotion statistic is computed, and final-holdout access remains prohibited.
 
+The verified VS-0001 outcome reader can now derive a separate factory-issued candidate-input
+authority for the exact base entry/exit, one-contiguous-bar delayed entry/exit, and immediately prior
+completed-bar close return. The authority is bounded by the 256-event ceiling, records any missing
+prior-bar or delayed-path parent instead of dropping it silently, and replays against the retained
+aggregate, signal, assignment, and outcome parents. It contains no caller-supplied costs or control
+rows and records zero final-holdout access. This closes only the candidate base/delay input seam;
+authenticated unconditional/persistence opportunity pools and numeric promotion-grade cost evidence
+remain required before Gate D inference can execute.
+
 Exact identities, exclusions, missing prerequisites, receipt hashes, replay evidence, and
 verification are recorded in
 [`PHASE5_VALIDATION_EVIDENCE.md`](PHASE5_VALIDATION_EVIDENCE.md). This is not validation failure

@@ -154,8 +154,8 @@ class RawPrimaryOpportunityRowV2:
             "venue",
         ):
             _require_non_empty(getattr(self, label), label)
-        if self.family != "A" or self.candidate_id != "HC-A-001":
-            raise ValueError("raw primary row must be the canonical A candidate")
+        if self.family != "A" or not self.candidate_id.startswith("HC-"):
+            raise ValueError("raw primary row must be a registered family A candidate")
         if type(self.detector_parameters) is not tuple or any(
             type(item) is not tuple
             or len(item) != 2
