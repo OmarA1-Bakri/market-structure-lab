@@ -22,7 +22,7 @@ _PROGRAMME_ID = "VP-0d65fef04ca44dfc5ba7c7705e0be197480d7456b51178702a0011a18ab4
 _REAL_PROGRAMME_ROOT = (
     _ROOT / "data/exports/validation-programmes" / f"programme_id={_PROGRAMME_ID}"
 )
-_REAL_PUBLICATION = _ROOT / "data/exports/phase5-terminal/terminal_state=no-validated-edge-v2"
+_REAL_PUBLICATION = _ROOT / "data/exports/phase5-terminal/terminal_state=no-validated-edge-v3"
 
 
 def _sha256(content: bytes) -> str:

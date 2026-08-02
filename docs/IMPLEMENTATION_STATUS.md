@@ -759,7 +759,7 @@ publication reverified the original exact 1,104-slot VP/VR tree, assigned conser
 `p=1` to all 64 unevaluable primaries, froze an empty eligible batch, published
 `final_holdout_not_opened_empty_batch`, and retained zero final-access attempts, rows, and records.
 The authoritative closure identity is
-`001b13d03dacf5e3b5a1888ee1cd223dd2b07168303ff1ecbe29ac7ac4366be4`.
+`22dd64540283402275324dfd6c8849fb89d4500b7ed2b8a9de06f78c70852f0b`.
 
 No candidate is supported, validated, or promoted. There is no edge-catalogue record. Phase 6 and
 Phase 7 are scientifically gated because the prerequisite validated edge does not exist. The
