@@ -517,7 +517,8 @@ def publish_phase5_terminal_closure(
         write_synced(stage / _PUBLICATION_FILE, canonical_bytes)
         success_bytes = (str(payload["closure_sha256"]) + "\n").encode()
         write_synced(stage / _SUCCESS_FILE, success_bytes)
-        fsync_directory_posix(stage)
+        if os.name != "nt":
+            fsync_directory_posix(stage)
         try:
             durable_move_no_replace(stage, output)
         except OSError as error:
@@ -536,7 +537,8 @@ def publish_phase5_terminal_closure(
             except BaseException:
                 shutil.rmtree(output, ignore_errors=True)
                 raise
-        fsync_directory_posix(output.parent)
+        if os.name != "nt":
+            fsync_directory_posix(output.parent)
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
