@@ -445,9 +445,10 @@ def test_definition_and_signal_bind_exact_v2_publication_series_segment_and_time
     definition = api["candidate_definition_for_verified_series"](_vs_0001(), bridged)
     [signal] = detect_candidate_signals(definition, bridged)
 
-    assert bridged.publication_sha256 == hashlib.sha256(
-        aggregate_publication.canonical_bytes
-    ).hexdigest()
+    assert (
+        bridged.publication_sha256
+        == hashlib.sha256(aggregate_publication.canonical_bytes).hexdigest()
+    )
     assert bridged.aggregate_identity == aggregate_publication.aggregate_identity.value
     assert bridged.aggregate_budget_sha256 == aggregate_publication.budget_sha256
     assert bridged.interval_index == 0

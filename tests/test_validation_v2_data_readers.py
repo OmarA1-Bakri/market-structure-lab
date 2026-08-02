@@ -176,7 +176,8 @@ def test_minute_path_maps_tampered_partition_to_public_value_error_and_stops_aud
         item
         for item in publication.partitions
         if item.symbol == request.symbol
-        and item.min_timestamp <= request.start.isoformat().replace("+00:00", "Z")
+        and item.min_timestamp
+        <= request.start.isoformat().replace("+00:00", "Z")
         <= item.max_timestamp
     )
     partition_path = publication.publication_root / partition.path

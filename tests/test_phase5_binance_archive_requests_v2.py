@@ -81,15 +81,17 @@ def test_manifest_is_offline_content_addressed_and_development_only(
     assert all(request.symbol in boundary.allowed_symbols for request in manifest.requests)
     assert all(
         any(
-            request.start >= interval.start
-            and request.end <= interval.end + timedelta(days=1)
+            request.start >= interval.start and request.end <= interval.end + timedelta(days=1)
             for interval in boundary.allowed_intervals
         )
         for request in manifest.requests
     )
-    assert verify_binance_archive_request_manifest_v2(
-        manifest,
-        boundary=boundary,
-        source_availability=unavailable_source_v2,
-        publication_path=tmp_path / "requests.json",
-    ) == manifest
+    assert (
+        verify_binance_archive_request_manifest_v2(
+            manifest,
+            boundary=boundary,
+            source_availability=unavailable_source_v2,
+            publication_path=tmp_path / "requests.json",
+        )
+        == manifest
+    )

@@ -29,9 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> int:
-    coverage_path, split_path = locate_boundary_parent_publications_v2(
-        args.boundary_publication
-    )
+    coverage_path, split_path = locate_boundary_parent_publications_v2(args.boundary_publication)
     _, _, boundary = load_v2_boundary_publications(
         coverage_path=coverage_path,
         split_path=split_path,
@@ -49,11 +47,10 @@ def run(args: argparse.Namespace) -> int:
         cache_root=args.cache_root,
         output_root=args.output_root,
     )
-    print(
-        f"{result.status} {result.publication_sha256} "
-        f"objects={result.object_count} final_rows=0"
-    )
+    print(f"{result.status} {result.publication_sha256} objects={result.object_count} final_rows=0")
     return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     return run(build_parser().parse_args(argv))
 

@@ -656,9 +656,7 @@ def freeze_development_folds_v2(
                 test_block_index=block_index,
                 test=test,
                 inner_folds=inner_folds,
-                fold_sha256=hash_json(
-                    "phase5-validation-development-outer-fold-v2", payload
-                ),
+                fold_sha256=hash_json("phase5-validation-development-outer-fold-v2", payload),
             )
         )
     identity_payload = {
@@ -676,9 +674,7 @@ def freeze_development_folds_v2(
         purge_hours=split.policy.purge_hours,
         embargo_hours=split.policy.embargo_hours,
         outer_folds=tuple(outer_folds),
-        fold_set_sha256=hash_json(
-            "phase5-validation-development-fold-set-v2", identity_payload
-        ),
+        fold_set_sha256=hash_json("phase5-validation-development-fold-set-v2", identity_payload),
         _factory_token=_FOLD_SET_FACTORY,
     )
     _register_fold_set_v2(folds, split)
@@ -1129,9 +1125,7 @@ class DevelopmentAccessAttemptLedgerV2:
             or registered[3] != self._attempt_id
             or self._boundary is not boundary
         ):
-            raise ValueError(
-                "access audit is not the registered original for this boundary"
-            )
+            raise ValueError("access audit is not the registered original for this boundary")
         records = self._verified_records()
         terminal = records[-1] if records else None
         if completed_request is not None and (
@@ -1140,17 +1134,13 @@ class DevelopmentAccessAttemptLedgerV2:
             or not terminal.allowed
             or terminal.request != completed_request
         ):
-            raise ValueError(
-                "access audit terminal record is not the requested completion"
-            )
+            raise ValueError("access audit terminal record is not the requested completion")
         payload = {
             "programme_id": self._programme_id,
             "attempt_id": self._attempt_id,
             "boundary_sha256": boundary.boundary_sha256,
             "record_count": len(records),
-            "terminal_record_sha256": (
-                terminal.record_sha256 if terminal is not None else None
-            ),
+            "terminal_record_sha256": (terminal.record_sha256 if terminal is not None else None),
         }
         return DevelopmentAccessAuditBindingV2(
             programme_id=self._programme_id,

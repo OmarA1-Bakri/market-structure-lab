@@ -154,13 +154,9 @@ def iter_verified_regular_lines(
                 line_count += 1
                 byte_count += len(line)
                 if line_count > expected_line_count:
-                    raise RuntimeError(
-                        "artifact file bytes or line count exceed expected bounds"
-                    )
+                    raise RuntimeError("artifact file bytes or line count exceed expected bounds")
                 if byte_count > expected_byte_count:
-                    raise RuntimeError(
-                        "artifact file bytes or line count exceed expected bounds"
-                    )
+                    raise RuntimeError("artifact file bytes or line count exceed expected bounds")
                 if len(line) > maximum_line_bytes + 1 or not line.endswith(b"\n"):
                     raise RuntimeError("artifact record exceeds its bound or lacks a newline")
                 digest.update(line)

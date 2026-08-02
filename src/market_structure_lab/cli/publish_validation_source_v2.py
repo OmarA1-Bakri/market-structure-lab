@@ -24,9 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--max-rows-per-partition", type=int, default=100_000)
     parser.add_argument("--max-total-rows", type=int, default=50_000_000)
-    parser.add_argument(
-        "--max-total-bytes", type=int, default=64 * 1024 * 1024 * 1024
-    )
+    parser.add_argument("--max-total-bytes", type=int, default=64 * 1024 * 1024 * 1024)
     parser.add_argument("--max-partitions", type=int, default=99_998)
     return parser
 

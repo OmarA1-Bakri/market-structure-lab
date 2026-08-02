@@ -26,9 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-redirects", type=int, required=True)
     parser.add_argument("--tls-min-version", required=True)
     parser.add_argument("--require-ca-validation", action="store_true", required=True)
-    parser.add_argument(
-        "--require-binance-sha256-sidecar", action="store_true", required=True
-    )
+    parser.add_argument("--require-binance-sha256-sidecar", action="store_true", required=True)
     parser.add_argument("--require-local-sha256", action="store_true", required=True)
     for name in (
         "max_requests",
@@ -50,9 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> int:
-    coverage_path, split_path = locate_boundary_parent_publications_v2(
-        args.boundary_publication
-    )
+    coverage_path, split_path = locate_boundary_parent_publications_v2(args.boundary_publication)
     _, _, boundary = load_v2_boundary_publications(
         coverage_path=coverage_path,
         split_path=split_path,
@@ -63,10 +59,7 @@ def run(args: argparse.Namespace) -> int:
         boundary=boundary,
     )
     budgets = ArchiveBudgetsV2(
-        **{
-            name: getattr(args, name)
-            for name in ArchiveBudgetsV2.__dataclass_fields__
-        }
+        **{name: getattr(args, name) for name in ArchiveBudgetsV2.__dataclass_fields__}
     )
     manifest = freeze_binance_archive_requests_v2(
         boundary=boundary,
@@ -93,9 +86,7 @@ def run(args: argparse.Namespace) -> int:
 
 def locate_boundary_parent_publications_v2(boundary: Path) -> tuple[Path, Path]:
     parent = boundary.parent
-    coverage = parent / boundary.name.replace(
-        "development-boundary", "source-coverage"
-    )
+    coverage = parent / boundary.name.replace("development-boundary", "source-coverage")
     split = parent / boundary.name.replace("development-boundary", "split")
     if coverage == boundary or split == boundary:
         coverage_matches = tuple(sorted(parent.glob("*source-coverage-v2.json")))

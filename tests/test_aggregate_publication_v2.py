@@ -688,9 +688,10 @@ def test_sealed_series_exposes_exact_original_publication_provenance(
     )
     series = open_verified_aggregate_series_v2(publication, key, _budget())
 
-    assert series.aggregate_publication_sha256 == hashlib.sha256(
-        publication.canonical_bytes
-    ).hexdigest()
+    assert (
+        series.aggregate_publication_sha256
+        == hashlib.sha256(publication.canonical_bytes).hexdigest()
+    )
     assert series.aggregate_publication_sha256 != series.series_identity
     assert series.aggregate_identity == publication.aggregate_identity
     assert series.aggregate_identity.value == publication.aggregate_identity.value
@@ -722,8 +723,7 @@ def test_aggregate_readers_never_yield_replaced_partition_bytes(
     replacement_path = tmp_path / f"{reader_kind}-replacement.jsonl"
     replacement_path.write_bytes(_coherent_alternative_partition(original_bytes))
     original_rows = tuple(
-        module.AggregateRowV2.from_dict(json.loads(line))
-        for line in original_bytes.splitlines()
+        module.AggregateRowV2.from_dict(json.loads(line)) for line in original_bytes.splitlines()
     )
 
     original_verify = module.verify_validation_aggregate_publication_v2

@@ -265,9 +265,7 @@ def test_available_publication_is_bounded_canonical_and_byte_identical(
     assert loaded == first
 
 
-def test_unavailable_publication_never_touches_reader(
-    source_chain, tmp_path: Path
-) -> None:
+def test_unavailable_publication_never_touches_reader(source_chain, tmp_path: Path) -> None:
     coverage, split, boundary, _, _ = source_chain
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -391,9 +389,7 @@ def test_capability_reopens_original_source_evidence_before_read(
     assert not (tmp_path / "audit").exists()
 
 
-def test_verifier_rejects_mutation_and_symlink_substitution(
-    source_chain, tmp_path: Path
-) -> None:
+def test_verifier_rejects_mutation_and_symlink_substitution(source_chain, tmp_path: Path) -> None:
     coverage, split, boundary, availability, _ = source_chain
     publication, _ = _publish(source_chain, tmp_path)
     partition = next((tmp_path / "source" / "partitions").rglob("*.jsonl"))
@@ -504,9 +500,7 @@ def _reauthor_origin_proof(
                 "phase5-validation-minute-request-partitions-v2", members
             )
         record["prior_record_sha256"] = prior
-        record_payload = {
-            key: value for key, value in record.items() if key != "record_sha256"
-        }
+        record_payload = {key: value for key, value in record.items() if key != "record_sha256"}
         record["record_sha256"] = hash_json(
             module._MINUTE_PUBLICATION_AUDIT_RECORD_DOMAIN,  # noqa: SLF001
             record_payload,
@@ -518,9 +512,7 @@ def _reauthor_origin_proof(
     audit = json.loads(audit_path.read_bytes())
     audit["origin_proof_sha256"] = replacement
     audit["terminal_record_sha256"] = prior
-    audit["bytes_admitted"] = sum(
-        item["byte_count"] for item in manifest["partitions"]
-    )
+    audit["bytes_admitted"] = sum(item["byte_count"] for item in manifest["partitions"])
     audit_payload = {
         key: value for key, value in audit.items() if key != "audit_publication_sha256"
     }
@@ -572,12 +564,12 @@ def test_loader_rejects_self_hashed_scope_and_aggregate_only_audit_attacks(
             manifest["partitions"][0]["symbol"] = boundary.forbidden_asset_symbols[0]
         elif attack == "moved_interval":
             forbidden = boundary.forbidden_temporal_intervals[0]
-            manifest["partitions"][0]["interval_start"] = (
-                forbidden.start.isoformat(timespec="seconds").replace("+00:00", "Z")
-            )
-            manifest["partitions"][0]["interval_end"] = (
-                forbidden.end.isoformat(timespec="seconds").replace("+00:00", "Z")
-            )
+            manifest["partitions"][0]["interval_start"] = forbidden.start.isoformat(
+                timespec="seconds"
+            ).replace("+00:00", "Z")
+            manifest["partitions"][0]["interval_end"] = forbidden.end.isoformat(
+                timespec="seconds"
+            ).replace("+00:00", "Z")
         else:
             prior = None
             records = sorted((audit_root / "records").glob("*.json"))
@@ -589,9 +581,7 @@ def test_loader_rejects_self_hashed_scope_and_aggregate_only_audit_attacks(
                     changed = True
                 record["prior_record_sha256"] = prior
                 record_payload = {
-                    key: value
-                    for key, value in record.items()
-                    if key != "record_sha256"
+                    key: value for key, value in record.items() if key != "record_sha256"
                 }
                 record["record_sha256"] = hash_json(
                     module._MINUTE_PUBLICATION_AUDIT_RECORD_DOMAIN,  # noqa: SLF001
@@ -603,18 +593,14 @@ def test_loader_rejects_self_hashed_scope_and_aggregate_only_audit_attacks(
             audit = json.loads(audit_path.read_bytes())
             audit["terminal_record_sha256"] = prior
             audit_payload = {
-                key: value
-                for key, value in audit.items()
-                if key != "audit_publication_sha256"
+                key: value for key, value in audit.items() if key != "audit_publication_sha256"
             }
             audit["audit_publication_sha256"] = hash_json(
                 module._MINUTE_PUBLICATION_AUDIT_DOMAIN,  # noqa: SLF001
                 audit_payload,
             )
             audit_path.write_bytes(publication_json_bytes(audit))
-            manifest["audit_publication_sha256"] = audit[
-                "audit_publication_sha256"
-            ]
+            manifest["audit_publication_sha256"] = audit["audit_publication_sha256"]
         _rehash_source_manifest(manifest_path, manifest)
 
         with pytest.raises(ValueError, match="scope|partition|audit|source"):
