@@ -25,6 +25,7 @@ from market_structure_lab.research.validation_v2_costs import (
 )
 from market_structure_lab.research.validation_v2_models import (
     PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+    PHASE5_VS0001_POPULATION_POLICY_IDENTITY,
     ValidationProgrammeConfigV2,
     ValidationRosterIdentityV2,
 )
@@ -126,9 +127,9 @@ def public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.Monkey
         symbols=len(boundary.allowed_symbols),
         ranges=len(boundary.allowed_intervals),
         candidates=1,
-        events=1,
-        outcomes=1,
-        path_cells=24 * 60,
+        events=512,
+        outcomes=256,
+        path_cells=256 * 24 * 60,
         outer_folds=4,
         inner_folds=3,
     )
@@ -144,7 +145,10 @@ def public_programme_inputs(v2_chain, tmp_path: Path, monkeypatch: pytest.Monkey
             [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
         ),
         access_ledger_identity=development_access_ledger_identity_v2(sources),
-        policy_identities=(PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,),
+        policy_identities=(
+            PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+            PHASE5_VS0001_POPULATION_POLICY_IDENTITY,
+        ),
         work_budget_sha256=budget.sha256,
     )
     assert minute.row_count > 0
@@ -210,17 +214,59 @@ def test_public_runner_rejects_over_budget_before_source_revalidation(
         )
 
 
-def test_public_runner_rejects_missing_or_ambiguous_bootstrap_holm_amendment_before_reads(
+def test_public_runner_requires_frozen_vs0001_population_capacity_before_reads(
+    v2_chain,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, sources, budget, demand = public_programme_inputs(
+        v2_chain,
+        tmp_path,
+        monkeypatch,
+    )
+    monkeypatch.setattr(
+        ValidationV2SourceBundle,
+        "revalidate",
+        lambda _self: pytest.fail("under-admitted population reopened source publications"),
+    )
+
+    for field_name, underdeclared in (
+        ("events", replace(demand, events=511)),
+        ("outcomes", replace(demand, outcomes=255)),
+        ("path_cells", replace(demand, path_cells=(256 * 24 * 60) - 1)),
+    ):
+        with pytest.raises(ValidationWorkBudgetViolation, match=field_name):
+            run_validation_programme_v2(
+                config=config,
+                sources=sources,
+                budget=budget,
+                demand=underdeclared,
+            )
+
+
+def test_public_runner_rejects_missing_or_ambiguous_required_policies_before_reads(
     v2_chain,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     invalid_policy_identities = (
-        (),
-        (("MSL-P5-SR-001", "0" * 64),),
+        ((), "MSL-P5-SR-001"),
+        ((("MSL-P5-SR-001", "0" * 64),), "MSL-P5-SR-001"),
         (
-            ("MSL-P5-SR-001", "0" * 64),
-            PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+            (
+                ("MSL-P5-SR-001", "0" * 64),
+                PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+                PHASE5_VS0001_POPULATION_POLICY_IDENTITY,
+            ),
+            "MSL-P5-SR-001",
+        ),
+        ((PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,), "MSL-P5-VS0001-POP-001"),
+        (
+            (
+                PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+                ("MSL-P5-VS0001-POP-001", "0" * 64),
+            ),
+            "MSL-P5-VS0001-POP-001",
         ),
     )
     config, sources, budget, demand = public_programme_inputs(
@@ -234,9 +280,9 @@ def test_public_runner_rejects_missing_or_ambiguous_bootstrap_holm_amendment_bef
         lambda _self: pytest.fail("unbound amendment reached protected source revalidation"),
     )
 
-    for policy_identities in invalid_policy_identities:
+    for policy_identities, expected_policy_id in invalid_policy_identities:
         unbound_config = replace(config, policy_identities=policy_identities)
-        with pytest.raises(ValueError, match="MSL-P5-SR-001"):
+        with pytest.raises(ValueError, match=expected_policy_id):
             run_validation_programme_v2(
                 config=unbound_config,
                 sources=sources,

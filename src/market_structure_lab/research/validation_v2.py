@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 import hashlib
 import json
 from math import isfinite
@@ -96,6 +97,9 @@ from market_structure_lab.research.validation_v2_models import (
     DevelopmentSplitIdentityV2,
     PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
     PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
+    PHASE5_VS0001_POPULATION_POLICY_ID,
+    PHASE5_VS0001_POPULATION_POLICY_PAYLOAD,
+    PHASE5_VS0001_POPULATION_POLICY_SHA256,
     PrecisionAuthorityIdentityV2,
     SourceCoverageIdentityV2,
     SourceCoveragePublicationV2,
@@ -124,6 +128,19 @@ _RUNNER_VERSION = "phase5-validation-slot-runner-v2"
 _PRIMARY_COUNT = 64
 _FAMILY_ALPHA = 0.01
 _PRECISION_REQUIRED_FAMILIES = frozenset({"B"})
+_VS0001_MAX_DETECTED_EVENTS = cast(
+    int,
+    PHASE5_VS0001_POPULATION_POLICY_PAYLOAD["max_detected_events"],
+)
+_VS0001_MAX_ELIGIBLE_EVENTS = cast(
+    int,
+    PHASE5_VS0001_POPULATION_POLICY_PAYLOAD["max_eligible_events"],
+)
+_VS0001_HORIZON_HOURS = cast(
+    int,
+    PHASE5_VS0001_POPULATION_POLICY_PAYLOAD["horizon_hours"],
+)
+_VS0001_PATH_ROWS = _VS0001_HORIZON_HOURS * 60
 _OUTCOME_FACTORY = object()
 _OUTCOME_READER_FACTORY = object()
 _PUBLICATION_OUTCOME_READER_ISSUANCE: dict[int, tuple[object, tuple[object, ...]]] = {}
@@ -212,6 +229,25 @@ class ValidationV2SourceBundlePaths:
                 raise ValueError(f"{field_name} must be an absolute Path")
 
 
+def _require_production_policy_identities_v2(config: ValidationProgrammeConfigV2) -> None:
+    required = (
+        (
+            PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+            PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
+        ),
+        (
+            PHASE5_VS0001_POPULATION_POLICY_ID,
+            PHASE5_VS0001_POPULATION_POLICY_SHA256,
+        ),
+    )
+    for required_id, required_digest in required:
+        digests = tuple(
+            digest for policy_id, digest in config.policy_identities if policy_id == required_id
+        )
+        if digests != (required_digest,):
+            raise ValueError(f"programme must bind exactly one {required_id} policy identity")
+
+
 def load_validation_v2_source_bundle(
     *,
     config: ValidationProgrammeConfigV2,
@@ -248,15 +284,7 @@ def load_validation_v2_source_bundle(
         budget.max_bootstrap_cells,
     ) != (4_800, 4_800, 307_200):
         raise ValueError("source loading requires the amended 4,800-draw bootstrap policy")
-    amendment_digests = tuple(
-        digest
-        for policy_id, digest in config.policy_identities
-        if policy_id == PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID
-    )
-    if amendment_digests != (PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,):
-        raise ValueError(
-            f"programme must bind exactly one {PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID} policy identity"
-        )
+    _require_production_policy_identities_v2(config)
     expected_roster = ValidationRosterIdentityV2.from_payload(
         [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
     )
@@ -901,7 +929,7 @@ def _issue_fixture_outcome_reader_v2(
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
 class VerifiedPublicationOutcomeReaderV2:
-    """Exact real-development outcome capability rooted in verified publications."""
+    """Ordered VS-0001 development outcomes rooted in verified publications."""
 
     programme_id: str
     split_sha256: str
@@ -936,8 +964,8 @@ class VerifiedPublicationOutcomeReaderV2:
             _require_sha256(value, label)
         if self.slot_ids != ("VS-0001",) or tuple(self._outcomes_by_slot) != self.slot_ids:
             raise ValueError("publication outcome reader must contain exactly the VS-0001 slice")
-        if any(len(rows) != 1 for rows in self._outcomes_by_slot.values()):
-            raise ValueError("publication outcome reader requires one exact outcome per slot")
+        if any(len(rows) > _VS0001_MAX_ELIGIBLE_EVENTS for rows in self._outcomes_by_slot.values()):
+            raise ValueError("publication outcome reader exceeds the frozen eligible-event cap")
         if hashlib.sha256(self.canonical_bytes).hexdigest() != self.outcome_set_sha256:
             raise ValueError("publication outcome reader bytes differ from identity")
 
@@ -984,13 +1012,18 @@ class _PublicationOutcomeReaderRegistrationV2:
     aggregate_budget_payload: Mapping[str, int]
     minute_budget: MinutePathReadBudgetV2
     minute_budget_payload: Mapping[str, int]
-    aggregate_series: VerifiedAggregateSeriesV2
-    candidate_series: VerifiedCandidateSeriesV2
-    signal: CandidateSignal
+    aggregate_series: tuple[VerifiedAggregateSeriesV2, ...]
+    candidate_series: tuple[VerifiedCandidateSeriesV2, ...]
+    signals: tuple[CandidateSignal, ...]
     folds: DevelopmentFoldSetV2
-    assignment: DevelopmentEventAssignmentV2
-    minute_path: VerifiedMinutePathV2
-    outcome: DevelopmentOutcomeRowV2
+    assignments: tuple[DevelopmentEventAssignmentV2, ...]
+    minute_paths: tuple[VerifiedMinutePathV2, ...]
+    outcomes: tuple[DevelopmentOutcomeRowV2, ...]
+    detected_event_count: int
+    eligible_event_count: int
+    skipped_signal_ids: tuple[str, ...]
+    population_sha256: str
+    population: _Vs0001PopulationV2
 
 
 _VERIFIED_PUBLICATION_OUTCOME_READERS: dict[int, _PublicationOutcomeReaderRegistrationV2] = {}
@@ -1024,22 +1057,38 @@ def _expected_publication_outcome_reader_snapshot_v2(
     actual_demand: ValidationWorkDemand,
     aggregate_budget: AggregatePublicationBudgetV2,
     minute_budget: MinutePathReadBudgetV2,
-    aggregate_series: VerifiedAggregateSeriesV2,
-    signal: CandidateSignal,
-    assignment: DevelopmentEventAssignmentV2,
-    minute_path: VerifiedMinutePathV2,
-    outcome: DevelopmentOutcomeRowV2,
+    aggregate_series: tuple[VerifiedAggregateSeriesV2, ...],
+    signals: tuple[CandidateSignal, ...],
+    assignments: tuple[DevelopmentEventAssignmentV2, ...],
+    minute_paths: tuple[VerifiedMinutePathV2, ...],
+    outcomes: tuple[DevelopmentOutcomeRowV2, ...],
+    detected_event_count: int,
+    eligible_event_count: int,
+    detected_signal_ids: tuple[str, ...],
+    eligible_signal_ids: tuple[str, ...],
+    skipped_signal_ids: tuple[str, ...],
+    population_sha256: str,
 ) -> tuple[object, ...]:
     slot_id = "VS-0001"
+    aggregate_publication_sha256 = hashlib.sha256(
+        sources.aggregate_publication.canonical_bytes
+    ).hexdigest()
     payload = {
-        "schema_version": "validation-v2-publication-outcome-reader-v1",
+        "schema_version": "validation-v2-publication-outcome-reader-v2",
         "programme_id": config.programme_id,
         "slot_ids": [slot_id],
-        "outcome_ids": [outcome.outcome_id],
+        "detected_event_count": detected_event_count,
+        "eligible_event_count": eligible_event_count,
+        "detected_signal_ids": list(detected_signal_ids),
+        "eligible_signal_ids": list(eligible_signal_ids),
+        "retained_event_count": len(outcomes),
+        "skipped_signal_ids": list(skipped_signal_ids),
+        "population_sha256": population_sha256,
+        "outcome_ids": [outcome.outcome_id for outcome in outcomes],
         "source_publication_sha256": hashlib.sha256(
             sources.source_publication.canonical_bytes
         ).hexdigest(),
-        "aggregate_publication_sha256": aggregate_series.aggregate_publication_sha256,
+        "aggregate_publication_sha256": aggregate_publication_sha256,
         "work_budget_sha256": work_budget.sha256,
         "admitted_demand_sha256": hash_json(
             "phase5-validation-admitted-work-demand-v2",
@@ -1053,9 +1102,23 @@ def _expected_publication_outcome_reader_snapshot_v2(
         "minute_budget": {
             name: getattr(minute_budget, name) for name in minute_budget.__dataclass_fields__
         },
-        "signal_id": signal.signal_id,
-        "assignment_id": assignment.assignment_id,
-        "minute_path_identity": minute_path.path_identity,
+        "ordered_parents": [
+            {
+                "signal_id": signal.signal_id,
+                "assignment_id": assignment.assignment_id,
+                "aggregate_series_identity": series.series_identity,
+                "minute_path_identity": minute_path.path_identity,
+                "outcome_id": outcome.outcome_id,
+            }
+            for series, signal, assignment, minute_path, outcome in zip(
+                aggregate_series,
+                signals,
+                assignments,
+                minute_paths,
+                outcomes,
+                strict=True,
+            )
+        ],
     }
     canonical_bytes = json.dumps(
         payload,
@@ -1069,11 +1132,11 @@ def _expected_publication_outcome_reader_snapshot_v2(
         sources.boundary.boundary_sha256,
         sources.cost_authority.cost_identity.value.removeprefix("CSTV2-"),
         source_sha256,
-        aggregate_series.aggregate_publication_sha256,
+        aggregate_publication_sha256,
         (slot_id,),
         hashlib.sha256(canonical_bytes).hexdigest(),
         canonical_bytes,
-        ((slot_id, (outcome.outcome_id,)),),
+        ((slot_id, tuple(outcome.outcome_id for outcome in outcomes)),),
     )
 
 
@@ -1110,19 +1173,42 @@ def _verify_publication_outcome_reader_v2(
     } != dict(registered.minute_budget_payload):
         raise ValueError("publication outcome reader minute budget parent changed")
     _revalidate_source_bundle_v2(registered.sources)
-    verify_original_aggregate_series_v2(registered.aggregate_series)
-    verify_candidate_series_v2(registered.candidate_series)
-    verify_candidate_signal(registered.signal)
+    _verify_vs0001_population_v2(registered.population)
+    if (
+        registered.detected_event_count != len(registered.population.detected_signal_ids)
+        or registered.eligible_event_count != len(registered.population.eligible_signal_ids)
+        or registered.skipped_signal_ids != registered.population.skipped_signal_ids
+        or registered.population_sha256 != registered.population.population_sha256
+    ):
+        raise ValueError("publication outcome reader population authority changed")
     registered.folds.verify_original()
-    registered.assignment.verify_original()
-    if type(registered.minute_path) is not VerifiedMinutePathV2:
-        raise TypeError("publication outcome reader minute path parent is not exact")
-    verify_original_minute_path_v2(registered.minute_path)
-    if type(registered.outcome) is not DevelopmentOutcomeRowV2:
-        raise TypeError("publication outcome reader outcome parent is not exact")
-    registered.outcome.verify_original()
-    if registered.outcome is not reader._outcomes_by_slot["VS-0001"][0]:
-        raise ValueError("publication outcome reader outcome parent changed")
+    parent_counts = {
+        len(registered.aggregate_series),
+        len(registered.candidate_series),
+        len(registered.signals),
+        len(registered.assignments),
+        len(registered.minute_paths),
+        len(registered.outcomes),
+    }
+    if len(parent_counts) != 1:
+        raise ValueError("publication outcome reader parent population differs")
+    for aggregate_series, candidate_series, signal, assignment, minute_path, outcome in zip(
+        registered.aggregate_series,
+        registered.candidate_series,
+        registered.signals,
+        registered.assignments,
+        registered.minute_paths,
+        registered.outcomes,
+        strict=True,
+    ):
+        if type(minute_path) is not VerifiedMinutePathV2:
+            raise TypeError("publication outcome reader minute path parent is not exact")
+        verify_original_minute_path_v2(minute_path)
+        if type(outcome) is not DevelopmentOutcomeRowV2:
+            raise TypeError("publication outcome reader outcome parent is not exact")
+        outcome.verify_original()
+    if registered.outcomes != reader._outcomes_by_slot["VS-0001"]:
+        raise ValueError("publication outcome reader outcome parent order changed")
     expected_snapshot = _expected_publication_outcome_reader_snapshot_v2(
         config=registered.config,
         sources=registered.sources,
@@ -1132,10 +1218,16 @@ def _verify_publication_outcome_reader_v2(
         aggregate_budget=registered.aggregate_budget,
         minute_budget=registered.minute_budget,
         aggregate_series=registered.aggregate_series,
-        signal=registered.signal,
-        assignment=registered.assignment,
-        minute_path=registered.minute_path,
-        outcome=registered.outcome,
+        signals=registered.signals,
+        assignments=registered.assignments,
+        minute_paths=registered.minute_paths,
+        outcomes=registered.outcomes,
+        detected_event_count=registered.detected_event_count,
+        eligible_event_count=registered.eligible_event_count,
+        detected_signal_ids=registered.population.detected_signal_ids,
+        eligible_signal_ids=registered.population.eligible_signal_ids,
+        skipped_signal_ids=registered.skipped_signal_ids,
+        population_sha256=registered.population_sha256,
     )
     if _publication_outcome_reader_snapshot(reader) != expected_snapshot:
         raise ValueError(
@@ -1201,38 +1293,78 @@ def _require_actual_demand_admitted_v2(
             raise ValidationWorkBudgetViolation(field_name, observed, declared)
 
 
-def _find_vs0001_event_v2(
+@dataclass(frozen=True, slots=True)
+class _Vs0001PopulationMemberV2:
+    aggregate_series: VerifiedAggregateSeriesV2
+    candidate_series: VerifiedCandidateSeriesV2
+    signal: CandidateSignal
+    assignment: DevelopmentEventAssignmentV2
+
+
+@dataclass(frozen=True, slots=True)
+class _Vs0001PopulationV2:
+    slot: ValidationSlot
+    folds: DevelopmentFoldSetV2
+    detected: tuple[
+        tuple[VerifiedAggregateSeriesV2, VerifiedCandidateSeriesV2, CandidateSignal], ...
+    ]
+    detected_signal_ids: tuple[str, ...]
+    eligible: tuple[_Vs0001PopulationMemberV2, ...]
+    eligible_signal_ids: tuple[str, ...]
+    retained: tuple[_Vs0001PopulationMemberV2, ...]
+    skipped_signal_ids: tuple[str, ...]
+    population_sha256: str
+
+
+def _vs0001_population_sha256_v2(
+    *,
+    detected_signal_ids: tuple[str, ...],
+    eligible_signal_ids: tuple[str, ...],
+    retained_signal_ids: tuple[str, ...],
+    skipped_signal_ids: tuple[str, ...],
+) -> str:
+    return hash_json(
+        "phase5-vs0001-event-population-v1",
+        {
+            "policy_sha256": PHASE5_VS0001_POPULATION_POLICY_SHA256,
+            "detected_signal_ids": list(detected_signal_ids),
+            "eligible_signal_ids": list(eligible_signal_ids),
+            "retained_signal_ids": list(retained_signal_ids),
+            "skipped_signal_ids": list(skipped_signal_ids),
+        },
+    )
+
+
+def _find_vs0001_population_v2(
     *,
     sources: ValidationV2SourceBundle,
     aggregate_budget: AggregatePublicationBudgetV2,
-    event_emission_ceiling: int,
-) -> tuple[
-    ValidationSlot,
-    VerifiedAggregateSeriesV2,
-    VerifiedCandidateSeriesV2,
-    CandidateSignal,
-    DevelopmentFoldSetV2,
-    DevelopmentEventAssignmentV2,
-    int,
-]:
+) -> _Vs0001PopulationV2:
+    """Freeze the bounded, globally ordered VS-0001 development population."""
+
     slot = next(item for item in VALIDATION_SLOT_ROSTER if item.slot_id == "VS-0001")
+    if slot.horizon_hours != _VS0001_HORIZON_HOURS or slot.timeframe != "1h":
+        raise ValueError("canonical VS-0001 differs from the frozen population policy")
     folds = freeze_development_folds_v2(split=sources.split, timeframe=slot.timeframe)
-    events: list[
-        tuple[
-            VerifiedAggregateSeriesV2,
-            VerifiedCandidateSeriesV2,
-            CandidateSignal,
-            DevelopmentEventAssignmentV2,
-        ]
+    detected: list[
+        tuple[VerifiedAggregateSeriesV2, VerifiedCandidateSeriesV2, CandidateSignal]
     ] = []
-    detected_signal_count = 0
-    members = tuple(
-        member
-        for member in sources.aggregate_publication.members
-        if (
-            member.symbol in sources.split.development_symbols
-            and member.target_timeframe == slot.timeframe
-        )
+    signal_ids: set[str] = set()
+    opportunity_keys: set[tuple[object, ...]] = set()
+    members = sorted(
+        (
+            member
+            for member in sources.aggregate_publication.members
+            if (
+                member.symbol in sources.split.development_symbols
+                and member.target_timeframe == slot.timeframe
+            )
+        ),
+        key=lambda member: (
+            member.symbol,
+            member.target_timeframe,
+            member.interval_index,
+        ),
     )
     for member in members:
         for segment_id in sorted({item.segment_id for item in member.partitions}):
@@ -1253,32 +1385,203 @@ def _find_vs0001_event_v2(
             for signal in detect_candidate_signals(
                 definition,
                 candidate_series,
-                max_emitted_signals=event_emission_ceiling - detected_signal_count,
+                max_emitted_signals=_VS0001_MAX_DETECTED_EVENTS - len(detected),
             ):
-                detected_signal_count += 1
-                label_end = signal.legal_entry + timedelta(hours=slot.horizon_hours)
-                if not any(
-                    fold.test.start <= signal.legal_entry < label_end <= fold.test.end
-                    for fold in folds.outer_folds
-                ):
-                    continue
-                assignment = assign_development_event_v2(folds=folds, signal=signal)
-                events.append((aggregate_series, candidate_series, signal, assignment))
-    if len(events) != 1:
-        raise ValueError(
-            "real VS-0001 slice requires exactly one development-assigned event; "
-            f"observed {len(events)}"
+                if signal.signal_id in signal_ids:
+                    raise ValueError("VS-0001 population contains a duplicate signal_id")
+                opportunity_key = (
+                    slot.slot_id,
+                    signal.symbol,
+                    signal.timeframe,
+                    signal.segment_id,
+                    signal.source_series_sha256,
+                    signal.legal_entry,
+                )
+                if opportunity_key in opportunity_keys:
+                    raise ValueError("VS-0001 population contains a duplicate opportunity")
+                signal_ids.add(signal.signal_id)
+                opportunity_keys.add(opportunity_key)
+                detected.append((aggregate_series, candidate_series, signal))
+
+    ordered_detected = tuple(
+        sorted(
+            detected,
+            key=lambda item: (
+                item[2].legal_entry,
+                item[2].symbol,
+                item[2].timeframe,
+                item[2].segment_id,
+                item[2].source_series_sha256,
+                item[2].signal_id,
+            ),
         )
-    aggregate_series, candidate_series, signal, assignment = events[0]
-    return (
-        slot,
-        aggregate_series,
-        candidate_series,
-        signal,
-        folds,
-        assignment,
-        detected_signal_count,
     )
+    eligible: list[_Vs0001PopulationMemberV2] = []
+    for aggregate_series, candidate_series, signal in ordered_detected:
+        label_end = signal.legal_entry + timedelta(hours=slot.horizon_hours)
+        if not any(
+            fold.test.start <= signal.legal_entry < label_end <= fold.test.end
+            for fold in folds.outer_folds
+        ):
+            continue
+        assignment = assign_development_event_v2(folds=folds, signal=signal)
+        eligible.append(
+            _Vs0001PopulationMemberV2(
+                aggregate_series=aggregate_series,
+                candidate_series=candidate_series,
+                signal=signal,
+                assignment=assignment,
+            )
+        )
+        if len(eligible) > _VS0001_MAX_ELIGIBLE_EVENTS:
+            raise ValueError("VS-0001 population exceeds the frozen eligible-event cap")
+
+    retained: list[_Vs0001PopulationMemberV2] = []
+    skipped_signal_ids: list[str] = []
+    frozen_until_by_key: dict[tuple[str, str, int], datetime] = {}
+    for item in eligible:
+        overlap_key = (slot.slot_id, item.signal.symbol, item.signal.direction)
+        frozen_until = frozen_until_by_key.get(overlap_key)
+        if frozen_until is not None and item.signal.legal_entry < frozen_until:
+            skipped_signal_ids.append(item.signal.signal_id)
+            continue
+        retained.append(item)
+        frozen_until_by_key[overlap_key] = item.signal.legal_entry + timedelta(
+            hours=slot.horizon_hours
+        )
+
+    detected_signal_ids = tuple(item[2].signal_id for item in ordered_detected)
+    eligible_frozen = tuple(eligible)
+    eligible_signal_ids = tuple(item.signal.signal_id for item in eligible_frozen)
+    retained_frozen = tuple(retained)
+    skipped_frozen = tuple(skipped_signal_ids)
+    population_sha256 = _vs0001_population_sha256_v2(
+        detected_signal_ids=detected_signal_ids,
+        eligible_signal_ids=eligible_signal_ids,
+        retained_signal_ids=tuple(item.signal.signal_id for item in retained_frozen),
+        skipped_signal_ids=skipped_frozen,
+    )
+    return _Vs0001PopulationV2(
+        slot=slot,
+        folds=folds,
+        detected=ordered_detected,
+        detected_signal_ids=detected_signal_ids,
+        eligible=eligible_frozen,
+        eligible_signal_ids=eligible_signal_ids,
+        retained=retained_frozen,
+        skipped_signal_ids=skipped_frozen,
+        population_sha256=population_sha256,
+    )
+
+
+def _verify_vs0001_population_v2(population: _Vs0001PopulationV2) -> None:
+    """Revalidate the complete detected population and every frozen exclusion decision."""
+
+    if type(population) is not _Vs0001PopulationV2:
+        raise TypeError("VS-0001 population authority must use the exact frozen type")
+    expected_slot = next(item for item in VALIDATION_SLOT_ROSTER if item.slot_id == "VS-0001")
+    if type(population.slot) is not ValidationSlot or population.slot != expected_slot:
+        raise ValueError("VS-0001 population slot authority changed")
+    population.folds.verify_original()
+    expected_detected = tuple(
+        sorted(
+            population.detected,
+            key=lambda item: (
+                item[2].legal_entry,
+                item[2].symbol,
+                item[2].timeframe,
+                item[2].segment_id,
+                item[2].source_series_sha256,
+                item[2].signal_id,
+            ),
+        )
+    )
+    if population.detected != expected_detected:
+        raise ValueError("VS-0001 detected population order changed")
+    detected_signal_ids = tuple(item[2].signal_id for item in population.detected)
+    if detected_signal_ids != population.detected_signal_ids:
+        raise ValueError("VS-0001 detected population identities changed")
+    if len(detected_signal_ids) > _VS0001_MAX_DETECTED_EVENTS:
+        raise ValueError("VS-0001 detected population exceeds its frozen cap")
+
+    signal_ids: set[str] = set()
+    opportunity_keys: set[tuple[object, ...]] = set()
+    expected_eligible: list[
+        tuple[VerifiedAggregateSeriesV2, VerifiedCandidateSeriesV2, CandidateSignal]
+    ] = []
+    for aggregate_series, candidate_series, signal in population.detected:
+        verify_original_aggregate_series_v2(aggregate_series)
+        verify_candidate_series_v2(candidate_series)
+        verify_candidate_signal(signal)
+        if signal.signal_id in signal_ids:
+            raise ValueError("VS-0001 population contains a duplicate signal_id")
+        opportunity_key = (
+            population.slot.slot_id,
+            signal.symbol,
+            signal.timeframe,
+            signal.segment_id,
+            signal.source_series_sha256,
+            signal.legal_entry,
+        )
+        if opportunity_key in opportunity_keys:
+            raise ValueError("VS-0001 population contains a duplicate opportunity")
+        signal_ids.add(signal.signal_id)
+        opportunity_keys.add(opportunity_key)
+        label_end = signal.legal_entry + timedelta(hours=population.slot.horizon_hours)
+        if any(
+            fold.test.start <= signal.legal_entry < label_end <= fold.test.end
+            for fold in population.folds.outer_folds
+        ):
+            expected_eligible.append((aggregate_series, candidate_series, signal))
+
+    if len(expected_eligible) > _VS0001_MAX_ELIGIBLE_EVENTS:
+        raise ValueError("VS-0001 eligible population exceeds its frozen cap")
+    eligible_signal_ids = tuple(item[2].signal_id for item in expected_eligible)
+    if eligible_signal_ids != population.eligible_signal_ids or len(population.eligible) != len(
+        expected_eligible
+    ):
+        raise ValueError("VS-0001 eligibility decisions changed")
+    for expected, member in zip(expected_eligible, population.eligible, strict=True):
+        aggregate_series, candidate_series, signal = expected
+        if (
+            member.aggregate_series is not aggregate_series
+            or member.candidate_series is not candidate_series
+            or member.signal is not signal
+        ):
+            raise ValueError("VS-0001 eligible population parents changed")
+        member.assignment.verify_original()
+
+    expected_retained: list[_Vs0001PopulationMemberV2] = []
+    expected_skipped: list[str] = []
+    frozen_until_by_key: dict[tuple[str, str, int], datetime] = {}
+    for member in population.eligible:
+        overlap_key = (
+            population.slot.slot_id,
+            member.signal.symbol,
+            member.signal.direction,
+        )
+        frozen_until = frozen_until_by_key.get(overlap_key)
+        if frozen_until is not None and member.signal.legal_entry < frozen_until:
+            expected_skipped.append(member.signal.signal_id)
+            continue
+        expected_retained.append(member)
+        frozen_until_by_key[overlap_key] = member.signal.legal_entry + timedelta(
+            hours=population.slot.horizon_hours
+        )
+    if (
+        tuple(id(item) for item in expected_retained)
+        != tuple(id(item) for item in population.retained)
+        or tuple(expected_skipped) != population.skipped_signal_ids
+    ):
+        raise ValueError("VS-0001 overlap decisions changed")
+    expected_sha256 = _vs0001_population_sha256_v2(
+        detected_signal_ids=population.detected_signal_ids,
+        eligible_signal_ids=population.eligible_signal_ids,
+        retained_signal_ids=tuple(item.signal.signal_id for item in population.retained),
+        skipped_signal_ids=population.skipped_signal_ids,
+    )
+    if population.population_sha256 != expected_sha256:
+        raise ValueError("VS-0001 population identity changed")
 
 
 def _build_real_vs0001_reader_v2(
@@ -1290,28 +1593,20 @@ def _build_real_vs0001_reader_v2(
     authenticated_demand: ValidationWorkDemand,
 ) -> VerifiedPublicationOutcomeReaderV2:
     aggregate_budget = _aggregate_read_budget_v2(budget)
-    (
-        slot,
-        aggregate_series,
-        candidate_series,
-        signal,
-        folds,
-        assignment,
-        detected_signal_count,
-    ) = _find_vs0001_event_v2(
+    population = _find_vs0001_population_v2(
         sources=sources,
         aggregate_budget=aggregate_budget,
-        event_emission_ceiling=min(admitted_demand.events, budget.max_events),
     )
+    slot = population.slot
     expected_rows = slot.horizon_hours * 60
     actual_demand = replace(
         authenticated_demand,
         candidates=1,
-        events=detected_signal_count,
-        outcomes=1,
-        path_cells=expected_rows,
-        outer_folds=len(folds.outer_folds),
-        inner_folds=len(folds.outer_folds[0].inner_folds),
+        events=len(population.detected_signal_ids),
+        outcomes=len(population.retained),
+        path_cells=len(population.retained) * expected_rows,
+        outer_folds=len(population.folds.outer_folds),
+        inner_folds=len(population.folds.outer_folds[0].inner_folds),
     )
     _require_actual_demand_admitted_v2(admitted=admitted_demand, actual=actual_demand)
     ValidationWorkBudget.preflight(budget, actual_demand)
@@ -1320,53 +1615,75 @@ def _build_real_vs0001_reader_v2(
         budget=budget,
         expected_row_count=expected_rows,
     )
-    request = BoundaryRequestV2(
-        symbol=signal.symbol,
-        timeframe="1m",
-        start=signal.legal_entry,
-        end=signal.legal_entry + timedelta(hours=slot.horizon_hours),
-        operation_kind=AccessOperationKindV2.FILE,
-        target_identity=sources.source_publication.origin_sha256 or "",
-    )
-    audit = DevelopmentAccessAttemptLedgerV2(
-        programme_id=config.programme_id,
-        attempt_id="VA-"
-        + hash_json(
-            "phase5-validation-real-vs0001-minute-attempt-v2",
-            {
-                "programme_id": config.programme_id,
-                "access_ledger_identity": config.access_ledger_identity.value,
-                "signal_id": signal.signal_id,
-                "request": {
-                    "symbol": request.symbol,
-                    "timeframe": request.timeframe,
-                    "start": request.start,
-                    "end": request.end,
-                    "target_identity": request.target_identity,
+    aggregate_series: list[VerifiedAggregateSeriesV2] = []
+    candidate_series: list[VerifiedCandidateSeriesV2] = []
+    signals: list[CandidateSignal] = []
+    assignments: list[DevelopmentEventAssignmentV2] = []
+    minute_paths: list[VerifiedMinutePathV2] = []
+    outcomes: list[DevelopmentOutcomeRowV2] = []
+    for item in population.retained:
+        signal = item.signal
+        request = BoundaryRequestV2(
+            symbol=signal.symbol,
+            timeframe="1m",
+            start=signal.legal_entry,
+            end=signal.legal_entry + timedelta(hours=slot.horizon_hours),
+            operation_kind=AccessOperationKindV2.FILE,
+            target_identity=sources.source_publication.origin_sha256 or "",
+        )
+        audit = DevelopmentAccessAttemptLedgerV2(
+            programme_id=config.programme_id,
+            attempt_id="VA-"
+            + hash_json(
+                "phase5-validation-real-vs0001-minute-attempt-v2",
+                {
+                    "programme_id": config.programme_id,
+                    "access_ledger_identity": config.access_ledger_identity.value,
+                    "population_sha256": population.population_sha256,
+                    "signal_id": signal.signal_id,
+                    "request": {
+                        "symbol": request.symbol,
+                        "timeframe": request.timeframe,
+                        "start": request.start,
+                        "end": request.end,
+                        "target_identity": request.target_identity,
+                    },
                 },
-            },
-        ),
-        boundary=sources.boundary,
-    )
-    minute_path = read_verified_minute_path_v2(
-        sources.source_publication,
-        sources.coverage,
-        sources.split,
-        sources.boundary,
-        sources.availability,
-        request,
-        expected_rows,
-        minute_budget,
-        audit,
-    )
-    outcome = attach_development_outcome_v2(
-        signal,
-        aggregate_series=aggregate_series,
-        minute_path=minute_path,
-        assignment=assignment,
-        cost_authority=sources.cost_authority,
-        horizon_hours=slot.horizon_hours,
-    )
+            ),
+            boundary=sources.boundary,
+        )
+        minute_path = read_verified_minute_path_v2(
+            sources.source_publication,
+            sources.coverage,
+            sources.split,
+            sources.boundary,
+            sources.availability,
+            request,
+            expected_rows,
+            minute_budget,
+            audit,
+        )
+        outcome = attach_development_outcome_v2(
+            signal,
+            aggregate_series=item.aggregate_series,
+            minute_path=minute_path,
+            assignment=item.assignment,
+            cost_authority=sources.cost_authority,
+            horizon_hours=slot.horizon_hours,
+        )
+        aggregate_series.append(item.aggregate_series)
+        candidate_series.append(item.candidate_series)
+        signals.append(signal)
+        assignments.append(item.assignment)
+        minute_paths.append(minute_path)
+        outcomes.append(outcome)
+
+    aggregate_series_frozen = tuple(aggregate_series)
+    candidate_series_frozen = tuple(candidate_series)
+    signals_frozen = tuple(signals)
+    assignments_frozen = tuple(assignments)
+    minute_paths_frozen = tuple(minute_paths)
+    outcomes_frozen = tuple(outcomes)
     expected_snapshot = _expected_publication_outcome_reader_snapshot_v2(
         config=config,
         sources=sources,
@@ -1375,11 +1692,17 @@ def _build_real_vs0001_reader_v2(
         actual_demand=actual_demand,
         aggregate_budget=aggregate_budget,
         minute_budget=minute_budget,
-        aggregate_series=aggregate_series,
-        signal=signal,
-        assignment=assignment,
-        minute_path=minute_path,
-        outcome=outcome,
+        aggregate_series=aggregate_series_frozen,
+        signals=signals_frozen,
+        assignments=assignments_frozen,
+        minute_paths=minute_paths_frozen,
+        outcomes=outcomes_frozen,
+        detected_event_count=len(population.detected_signal_ids),
+        eligible_event_count=len(population.eligible_signal_ids),
+        detected_signal_ids=population.detected_signal_ids,
+        eligible_signal_ids=population.eligible_signal_ids,
+        skipped_signal_ids=population.skipped_signal_ids,
+        population_sha256=population.population_sha256,
     )
     issuance_token = object()
     _PUBLICATION_OUTCOME_READER_ISSUANCE[id(issuance_token)] = (
@@ -1396,7 +1719,7 @@ def _build_real_vs0001_reader_v2(
             slot_ids=expected_snapshot[5],  # type: ignore[arg-type]
             outcome_set_sha256=expected_snapshot[6],  # type: ignore[arg-type]
             canonical_bytes=expected_snapshot[7],  # type: ignore[arg-type]
-            _outcomes_by_slot=MappingProxyType({slot.slot_id: (outcome,)}),
+            _outcomes_by_slot=MappingProxyType({slot.slot_id: outcomes_frozen}),
             _factory_token=issuance_token,
         )
     finally:
@@ -1433,13 +1756,18 @@ def _build_real_vs0001_reader_v2(
         minute_budget_payload=MappingProxyType(
             {name: getattr(minute_budget, name) for name in minute_budget.__dataclass_fields__}
         ),
-        aggregate_series=aggregate_series,
-        candidate_series=candidate_series,
-        signal=signal,
-        folds=folds,
-        assignment=assignment,
-        minute_path=minute_path,
-        outcome=outcome,
+        aggregate_series=aggregate_series_frozen,
+        candidate_series=candidate_series_frozen,
+        signals=signals_frozen,
+        folds=population.folds,
+        assignments=assignments_frozen,
+        minute_paths=minute_paths_frozen,
+        outcomes=outcomes_frozen,
+        detected_event_count=len(population.detected_signal_ids),
+        eligible_event_count=len(population.eligible_signal_ids),
+        skipped_signal_ids=population.skipped_signal_ids,
+        population_sha256=population.population_sha256,
+        population=population,
     )
     return reader
 
@@ -1452,7 +1780,7 @@ def _issue_publication_outcome_reader_v2(
     admitted_demand: ValidationWorkDemand,
     authenticated_demand: ValidationWorkDemand,
 ) -> VerifiedPublicationOutcomeReaderV2:
-    """Execute and seal the one authorised real VS-0001 development slice."""
+    """Execute and seal the bounded VS-0001 development population."""
 
     return _build_real_vs0001_reader_v2(
         config=config,
@@ -1982,13 +2310,7 @@ def _verify_result_receipt_authority_v2(result: ValidationSlotComputationResultV
         raise ValueError("production receipt result lacks exact programme config authority")
     if config.programme_id != result.programme_id:
         raise ValueError("production receipt result programme differs from config authority")
-    amendment_digests = tuple(
-        digest
-        for policy_id, digest in config.policy_identities
-        if policy_id == PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID
-    )
-    if amendment_digests != (PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,):
-        raise ValueError("production receipt config lacks exact amendment authority")
+    _require_production_policy_identities_v2(config)
     if type(authority) is not VerifiedPublicationOutcomeReaderV2:
         raise ValueError("production receipt result lacks publication outcome authority")
     reader_registration = _VERIFIED_PUBLICATION_OUTCOME_READERS.get(id(authority))
@@ -2564,28 +2886,43 @@ def _compute_real_vs0001_material_v2(
     slot = next(item for item in VALIDATION_SLOT_ROSTER if item.slot_id == "VS-0001")
     if reader_already_verified:
         outcomes = reader._outcomes_by_slot.get(slot.slot_id)
-        if outcomes is None or len(outcomes) != 1:
+        if outcomes is None:
             raise ValueError("verified VS-0001 outcome authority differs")
-        outcome = outcomes[0]
     else:
-        outcome = reader.read_slot(
+        outcomes = reader.read_slot(
             slot,
             programme_id=config.programme_id,
             split_sha256=reader.split_sha256,
             cost_authority_sha256=reader.cost_authority_sha256,
-        )[0]
-    if not outcome.incomplete_cost_dimensions:
+        )
+    registration = _VERIFIED_PUBLICATION_OUTCOME_READERS.get(id(reader))
+    if registration is None or registration.reader() is not reader:
+        raise ValueError("VS-0001 population registration is unavailable")
+    if any(not outcome.incomplete_cost_dimensions for outcome in outcomes):
         raise ValueError(
-            "bounded VS-0001 slice requires authenticated incomplete cost dimensions; "
+            "bounded VS-0001 population requires authenticated incomplete cost dimensions; "
             "complete-cost inference belongs to the later exact-statistics gate"
         )
+    path_cells = sum(outcome.path_row_count for outcome in outcomes)
+    gross_signed_return = sum(
+        (outcome.gross_signed_return for outcome in outcomes),
+        start=Decimal(0),
+    )
+    incomplete_cost_dimensions = tuple(
+        sorted(
+            {dimension for outcome in outcomes for dimension in outcome.incomplete_cost_dimensions}
+        )
+    )
     metrics: dict[str, float | int | str] = {
-        "event_count": 1,
-        "outcome_count": 1,
-        "path_cells": outcome.path_row_count,
-        "gross_signed_return": str(outcome.gross_signed_return),
-        "cost_status": ("incomplete" if outcome.incomplete_cost_dimensions else "complete"),
-        "incomplete_cost_dimension_count": len(outcome.incomplete_cost_dimensions),
+        "detected_event_count": registration.detected_event_count,
+        "eligible_event_count": registration.eligible_event_count,
+        "event_count": len(outcomes),
+        "outcome_count": len(outcomes),
+        "skipped_overlap_count": len(registration.skipped_signal_ids),
+        "path_cells": path_cells,
+        "gross_signed_return": str(gross_signed_return),
+        "cost_status": "incomplete" if outcomes else "not_evaluated",
+        "incomplete_cost_dimension_count": len(incomplete_cost_dimensions),
     }
     input_sha = hash_json(
         "phase5-validation-slot-input-v2",
@@ -2603,13 +2940,32 @@ def _compute_real_vs0001_material_v2(
     evidence_sha = hash_json(
         "phase5-validation-real-vs0001-evidence-v2",
         {
-            "outcome_id": outcome.outcome_id,
-            "signal_id": outcome.signal_id,
-            "assignment_id": outcome.assignment_id,
-            "minute_path_identity": outcome.minute_path_identity,
-            "aggregate_series_identity": outcome.aggregate_series_identity,
+            "population_sha256": registration.population_sha256,
+            "skipped_signal_ids": list(registration.skipped_signal_ids),
+            "ordered_parents": [
+                {
+                    "outcome_id": outcome.outcome_id,
+                    "signal_id": outcome.signal_id,
+                    "assignment_id": outcome.assignment_id,
+                    "minute_path_identity": outcome.minute_path_identity,
+                    "aggregate_series_identity": outcome.aggregate_series_identity,
+                }
+                for outcome in outcomes
+            ],
         },
     )
+    if not outcomes:
+        return _SlotResultMaterialV2(
+            input_sha256=input_sha,
+            attempt_sha256=attempt_sha,
+            evidence_sha256=evidence_sha,
+            execution_status="failed",
+            decision="not_evaluated",
+            computation_completed=False,
+            reason="no eligible non-overlapping VS-0001 development events were observed",
+            p_value=None,
+            metrics=tuple(sorted(metrics.items())),
+        )
     return _SlotResultMaterialV2(
         input_sha256=input_sha,
         attempt_sha256=attempt_sha,
@@ -2618,8 +2974,7 @@ def _compute_real_vs0001_material_v2(
         decision="inconclusive",
         computation_completed=True,
         reason=(
-            "promotion-grade cost evidence is incomplete: "
-            + ",".join(outcome.incomplete_cost_dimensions)
+            "promotion-grade cost evidence is incomplete: " + ",".join(incomplete_cost_dimensions)
         ),
         p_value=None,
         metrics=tuple(sorted(metrics.items())),
@@ -2949,15 +3304,7 @@ def run_validation_programme_v2(
         budget.max_bootstrap_cells,
     ) != (4_800, 4_800, 307_200):
         raise ValueError("V2 execution requires the amended 4,800-draw bootstrap policy")
-    amendment_digests = tuple(
-        digest
-        for policy_id, digest in config.policy_identities
-        if policy_id == PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID
-    )
-    if amendment_digests != (PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,):
-        raise ValueError(
-            f"programme must bind exactly one {PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID} policy identity"
-        )
+    _require_production_policy_identities_v2(config)
     verify_validation_source_publication_metadata_v2(sources.source_publication)
     verify_validation_aggregate_publication_metadata_v2(sources.aggregate_publication)
     verify_validation_precision_authority_metadata_v2(sources.precision_authority)
@@ -3002,9 +3349,9 @@ def run_validation_programme_v2(
     logical_demand = replace(
         physical_demand,
         candidates=1,
-        events=1,
-        outcomes=1,
-        path_cells=24 * 60,
+        events=_VS0001_MAX_DETECTED_EVENTS,
+        outcomes=_VS0001_MAX_ELIGIBLE_EVENTS,
+        path_cells=_VS0001_MAX_ELIGIBLE_EVENTS * _VS0001_PATH_ROWS,
         outer_folds=4,
         inner_folds=3,
     )
@@ -3015,8 +3362,8 @@ def run_validation_programme_v2(
         raise ValueError(
             "programme access ledger identity differs from the frozen development policy"
         )
-    # Only after metadata-sized physical and frozen VS-0001 logical demand and
-    # the access policy are admitted may source observations be reopened.
+    # Only after metadata-sized physical demand and the full frozen VS-0001
+    # population ceiling are admitted may aggregate/source observations reopen.
     ValidationV2SourceBundle.revalidate(sources)
     outcome_reader = _issue_publication_outcome_reader_v2(
         config=config,
@@ -3030,6 +3377,7 @@ def run_validation_programme_v2(
         reader=outcome_reader,
         runner_version=runner_version,
     )
+    observed_vs0001 = bool(outcome_reader._outcomes_by_slot["VS-0001"])
     return _issue_validation_programme_run_v2(
         results=results,
         execution_scope="development-only-full-roster",
@@ -3040,8 +3388,15 @@ def run_validation_programme_v2(
         execution_status="failed",
         decision="not_evaluated",
         terminal_reason=(
-            "authenticated exact quantitative prerequisites are unavailable for 1,103 "
-            "frozen slots; the real VS-0001 cost evidence remains incomplete"
+            (
+                "authenticated exact quantitative prerequisites are unavailable for 1,103 "
+                "frozen slots; the real VS-0001 cost evidence remains incomplete"
+            )
+            if observed_vs0001
+            else (
+                "no eligible non-overlapping VS-0001 development events were observed; "
+                "1,103 frozen slots remain unavailable"
+            )
         ),
         final_holdout_access_count=0,
     )

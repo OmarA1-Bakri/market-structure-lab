@@ -45,6 +45,53 @@ PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY = (
     PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
 )
 
+PHASE5_VS0001_POPULATION_POLICY_ID = "MSL-P5-VS0001-POP-001"
+PHASE5_VS0001_POPULATION_POLICY_PAYLOAD = MappingProxyType(
+    {
+        "schema_version": "phase5-vs0001-event-population-policy-v1",
+        "policy_id": PHASE5_VS0001_POPULATION_POLICY_ID,
+        "slot_id": "VS-0001",
+        "horizon_hours": 24,
+        "partition_component": "development",
+        "partition_role": "outer_diagnostic",
+        "max_detected_events": 512,
+        "max_eligible_events": 256,
+        "canonical_order": (
+            "legal_entry",
+            "symbol",
+            "timeframe",
+            "segment_id",
+            "source_series_sha256",
+            "signal_id",
+        ),
+        "duplicate_signal_policy": "reject",
+        "duplicate_opportunity_policy": "reject",
+        "opportunity_key": (
+            "slot_id",
+            "symbol",
+            "timeframe",
+            "segment_id",
+            "source_series_sha256",
+            "legal_entry",
+        ),
+        "overlap_key": ("slot_id", "symbol", "direction"),
+        "overlap_policy": "retain-first-skip-until-half-open-label-end",
+        "skipped_signal_ids_bound": True,
+        "cap_policy": "reject-cap-plus-one-without-truncation",
+        "series_boundary_policy": "symbol-timeframe-segment-source-series",
+        "gap_policy": "verified-aggregate-and-minute-series-only",
+        "outcome_attachment": "all-or-nothing-after-actual-demand-admission",
+    }
+)
+PHASE5_VS0001_POPULATION_POLICY_SHA256 = hash_json(
+    "phase5-vs0001-event-population-policy-v1",
+    PHASE5_VS0001_POPULATION_POLICY_PAYLOAD,
+)
+PHASE5_VS0001_POPULATION_POLICY_IDENTITY = (
+    PHASE5_VS0001_POPULATION_POLICY_ID,
+    PHASE5_VS0001_POPULATION_POLICY_SHA256,
+)
+
 
 def _require_sha256(value: object, label: str) -> str:
     if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
@@ -699,6 +746,10 @@ __all__ = [
     "PHASE5_BOOTSTRAP_HOLM_AMENDMENT_PAYLOAD",
     "PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256",
     "PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY",
+    "PHASE5_VS0001_POPULATION_POLICY_ID",
+    "PHASE5_VS0001_POPULATION_POLICY_IDENTITY",
+    "PHASE5_VS0001_POPULATION_POLICY_PAYLOAD",
+    "PHASE5_VS0001_POPULATION_POLICY_SHA256",
     "PrecisionAuthorityIdentityV2",
     "RawDumpIdentityV2",
     "ReconciliationAuthorityV2",

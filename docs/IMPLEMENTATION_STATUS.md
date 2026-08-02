@@ -712,6 +712,15 @@ authority's archive parents before cache verification, and rejects any final-sco
 is an enabling authority boundary exercised with synthetic publications only; it is not new Gate D
 evidence, a validated behaviour, an edge, or permission to access the final holdout.
 
+The V2 runner now also binds the frozen `MSL-P5-VS0001-POP-001` population policy. Before aggregate
+or minute observation it admits ceilings of 512 detected events, 256 eligible outcomes, and 368,640
+minute-path cells. It rejects duplicate opportunities and cap-plus-one populations, orders events
+canonically, records deterministic 24-hour overlap exclusions, and seals every retained outcome in
+one ordered publication authority. An authenticated empty population remains
+`failed/not_evaluated`; a non-empty population remains `completed/inconclusive` while required cost
+dimensions are unavailable. This is synthetic enabling evidence only: 1,103 slots remain
+unavailable, no promotion statistic is computed, and final-holdout access remains prohibited.
+
 Exact identities, exclusions, missing prerequisites, receipt hashes, replay evidence, and
 verification are recorded in
 [`PHASE5_VALIDATION_EVIDENCE.md`](PHASE5_VALIDATION_EVIDENCE.md). This is not validation failure

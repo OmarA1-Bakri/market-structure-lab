@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Context, Decimal
 import hashlib
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -33,6 +34,7 @@ from market_structure_lab.research.validation_v2_costs import (
 )
 from market_structure_lab.research.validation_v2_models import (
     PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+    PHASE5_VS0001_POPULATION_POLICY_IDENTITY,
     SourceCoverageIdentityV2,
     ValidationProgrammeConfigV2,
     ValidationRosterIdentityV2,
@@ -47,6 +49,288 @@ pytest_plugins = ("test_aggregate_publication_v2",)
 
 def _vs0001() -> ValidationSlot:
     return next(slot for slot in VALIDATION_SLOT_ROSTER if slot.slot_id == "VS-0001")
+
+
+def _stub_population_sources() -> Any:
+    partition = SimpleNamespace(segment_id="segment-1")
+    member = SimpleNamespace(
+        symbol="BTCUSDT",
+        target_timeframe="1h",
+        interval_index=0,
+        partitions=(partition,),
+    )
+    return SimpleNamespace(
+        split=SimpleNamespace(development_symbols=("BTCUSDT",)),
+        aggregate_publication=SimpleNamespace(members=(member,)),
+    )
+
+
+def _stub_population_signal(
+    signal_id: str,
+    legal_entry: datetime,
+    *,
+    symbol: str = "BTCUSDT",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        signal_id=signal_id,
+        symbol=symbol,
+        timeframe="1h",
+        segment_id="segment-1",
+        source_series_sha256="a" * 64,
+        legal_entry=legal_entry,
+        direction=1,
+    )
+
+
+def _stub_population_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    module: Any,
+) -> None:
+    test_window = SimpleNamespace(
+        start=datetime(2025, 1, 1, tzinfo=UTC),
+        end=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        module,
+        "freeze_development_folds_v2",
+        lambda **_kwargs: SimpleNamespace(outer_folds=(SimpleNamespace(test=test_window),)),
+    )
+    monkeypatch.setattr(module, "issue_aggregate_series_key_v2", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(module, "open_verified_aggregate_series_v2", lambda *_args: object())
+    monkeypatch.setattr(module, "bridge_verified_aggregate_series_v2", lambda _series: object())
+    monkeypatch.setattr(
+        module,
+        "candidate_definition_for_verified_series",
+        lambda *_args: object(),
+    )
+
+
+def test_vs0001_population_propagates_detector_cap_plus_one_without_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    _stub_population_dependencies(monkeypatch, module)
+
+    def reject_cap_plus_one(
+        *_args: object,
+        max_emitted_signals: int,
+        **_kwargs: object,
+    ) -> tuple[object, ...]:
+        assert max_emitted_signals == 512
+        raise ValueError("candidate signal emission exceeds the admitted event ceiling")
+
+    monkeypatch.setattr(module, "detect_candidate_signals", reject_cap_plus_one)
+
+    with pytest.raises(ValueError, match="signal emission.*ceiling"):
+        module._find_vs0001_population_v2(  # noqa: SLF001
+            sources=_stub_population_sources(),
+            aggregate_budget=cast(Any, object()),
+        )
+
+
+def test_vs0001_population_rejects_duplicate_opportunity_and_eligible_cap_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    _stub_population_dependencies(monkeypatch, module)
+    base = datetime(2025, 2, 1, tzinfo=UTC)
+    duplicate_opportunity = (
+        _stub_population_signal("CS-1", base),
+        _stub_population_signal("CS-2", base),
+    )
+    monkeypatch.setattr(
+        module,
+        "detect_candidate_signals",
+        lambda *_args, **_kwargs: duplicate_opportunity,
+    )
+    with pytest.raises(ValueError, match="duplicate opportunity"):
+        module._find_vs0001_population_v2(  # noqa: SLF001
+            sources=_stub_population_sources(),
+            aggregate_budget=cast(Any, object()),
+        )
+
+    eligible_cap_plus_one = tuple(
+        _stub_population_signal(f"CS-{index:03d}", base + timedelta(hours=25 * index))
+        for index in range(257)
+    )
+    monkeypatch.setattr(
+        module,
+        "detect_candidate_signals",
+        lambda *_args, **_kwargs: eligible_cap_plus_one,
+    )
+    monkeypatch.setattr(
+        module,
+        "assign_development_event_v2",
+        lambda **_kwargs: object(),
+    )
+    with pytest.raises(ValueError, match="eligible-event cap"):
+        module._find_vs0001_population_v2(  # noqa: SLF001
+            sources=_stub_population_sources(),
+            aggregate_budget=cast(Any, object()),
+        )
+
+
+def test_vs0001_population_issues_no_reader_when_a_later_minute_path_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    base = datetime(2025, 2, 1, tzinfo=UTC)
+    signals = (
+        _stub_population_signal("CS-1", base),
+        _stub_population_signal("CS-2", base + timedelta(hours=25)),
+    )
+    members = tuple(
+        module._Vs0001PopulationMemberV2(  # noqa: SLF001
+            aggregate_series=cast(Any, object()),
+            candidate_series=cast(Any, object()),
+            signal=cast(Any, signal),
+            assignment=cast(Any, object()),
+        )
+        for signal in signals
+    )
+    folds = SimpleNamespace(
+        outer_folds=tuple(
+            SimpleNamespace(inner_folds=(object(), object(), object())) for _ in range(4)
+        ),
+        verify_original=lambda: None,
+    )
+    population = module._Vs0001PopulationV2(  # noqa: SLF001
+        slot=_vs0001(),
+        folds=cast(Any, folds),
+        detected=tuple(
+            (member.aggregate_series, member.candidate_series, member.signal) for member in members
+        ),
+        detected_signal_ids=tuple(signal.signal_id for signal in signals),
+        eligible=members,
+        eligible_signal_ids=tuple(signal.signal_id for signal in signals),
+        retained=members,
+        skipped_signal_ids=(),
+        population_sha256="b" * 64,
+    )
+    over_cap_detected = (population.detected[0],) * 513
+    over_cap_population = replace(
+        population,
+        detected=over_cap_detected,
+        detected_signal_ids=tuple(item[2].signal_id for item in over_cap_detected),
+    )
+    with pytest.raises(ValueError, match="detected population exceeds"):
+        module._verify_vs0001_population_v2(over_cap_population)  # noqa: SLF001
+    monkeypatch.setattr(module, "_find_vs0001_population_v2", lambda **_kwargs: population)
+    monkeypatch.setattr(
+        module,
+        "BoundaryRequestV2",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        module,
+        "DevelopmentAccessAttemptLedgerV2",
+        lambda **_kwargs: object(),
+    )
+    read_count = 0
+
+    def fail_second_minute_path(*_args: object, **_kwargs: object) -> object:
+        nonlocal read_count
+        read_count += 1
+        if read_count == 2:
+            raise RuntimeError("second minute path failed")
+        return object()
+
+    monkeypatch.setattr(module, "read_verified_minute_path_v2", fail_second_minute_path)
+    monkeypatch.setattr(module, "attach_development_outcome_v2", lambda *_args, **_kwargs: object())
+    config: Any = SimpleNamespace(
+        programme_id="VP-" + "1" * 64,
+        access_ledger_identity=SimpleNamespace(value="AUDV2-" + "2" * 64),
+    )
+    sources: Any = SimpleNamespace(
+        source_publication=SimpleNamespace(origin_sha256="3" * 64),
+        coverage=object(),
+        split=object(),
+        boundary=object(),
+        availability=object(),
+        cost_authority=object(),
+    )
+    admitted = ValidationWorkDemand(
+        candidates=1,
+        events=512,
+        outcomes=256,
+        path_cells=256 * 24 * 60,
+        outer_folds=4,
+        inner_folds=3,
+    )
+    registered_before = set(module._VERIFIED_PUBLICATION_OUTCOME_READERS)  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="second minute path failed"):
+        module._build_real_vs0001_reader_v2(  # noqa: SLF001
+            config=config,
+            sources=sources,
+            budget=ValidationWorkBudget(),
+            admitted_demand=admitted,
+            authenticated_demand=admitted,
+        )
+
+    assert read_count == 2
+    assert set(module._VERIFIED_PUBLICATION_OUTCOME_READERS) == registered_before  # noqa: SLF001
+
+
+def test_vs0001_population_overlap_is_half_open_and_symbol_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    _stub_population_dependencies(monkeypatch, module)
+    monkeypatch.setattr(
+        module,
+        "assign_development_event_v2",
+        lambda **_kwargs: object(),
+    )
+    base = datetime(2025, 2, 1, tzinfo=UTC)
+
+    def population_for(signals: tuple[SimpleNamespace, ...]) -> Any:
+        monkeypatch.setattr(
+            module,
+            "detect_candidate_signals",
+            lambda *_args, **_kwargs: signals,
+        )
+        return module._find_vs0001_population_v2(  # noqa: SLF001
+            sources=_stub_population_sources(),
+            aggregate_budget=cast(Any, object()),
+        )
+
+    overlap = population_for(
+        (
+            _stub_population_signal("CS-1", base),
+            _stub_population_signal("CS-2", base + timedelta(hours=12)),
+        )
+    )
+    assert tuple(item.signal.signal_id for item in overlap.retained) == ("CS-1",)
+    assert overlap.skipped_signal_ids == ("CS-2",)
+
+    exact_boundary = population_for(
+        (
+            _stub_population_signal("CS-1", base),
+            _stub_population_signal("CS-2", base + timedelta(hours=24)),
+        )
+    )
+    assert tuple(item.signal.signal_id for item in exact_boundary.retained) == (
+        "CS-1",
+        "CS-2",
+    )
+    assert exact_boundary.skipped_signal_ids == ()
+
+    cross_symbol = population_for(
+        (
+            _stub_population_signal("CS-1", base),
+            _stub_population_signal("CS-2", base + timedelta(hours=12), symbol="ETHUSDT"),
+        )
+    )
+    assert tuple(item.signal.signal_id for item in cross_symbol.retained) == (
+        "CS-1",
+        "CS-2",
+    )
+    assert cross_symbol.skipped_signal_ids == ()
 
 
 def test_public_runner_rejects_nominal_boundary_subclasses_before_io() -> None:
@@ -327,35 +611,46 @@ def _real_unavailable_archive_parents(
     return manifest, manifest_path, acquisition
 
 
-def _vs0001_minute_rows(boundary: Any) -> tuple[tuple[CanonicalMinuteRowV2, ...], ...]:
+def _vs0001_minute_rows(
+    boundary: Any,
+    *,
+    breakout_hours: tuple[int, ...] = (72,),
+    event_interval_indexes: tuple[int, ...] = (1,),
+) -> tuple[tuple[CanonicalMinuteRowV2, ...], ...]:
+    if (
+        tuple(sorted(set(breakout_hours))) != breakout_hours
+        or any(hour < 72 for hour in breakout_hours)
+        or any(right <= left for left, right in zip(breakout_hours, breakout_hours[1:]))
+    ):
+        raise ValueError("breakout_hours must be unique, sorted, and increasing")
+    if tuple(sorted(set(event_interval_indexes))) != event_interval_indexes or any(
+        not 0 <= index < len(boundary.allowed_intervals) for index in event_interval_indexes
+    ):
+        raise ValueError("event_interval_indexes must be unique sorted allowed indexes")
     requests: list[tuple[CanonicalMinuteRowV2, ...]] = []
-    event_interval = boundary.allowed_intervals[1]
     for symbol in boundary.allowed_symbols:
-        for interval in boundary.allowed_intervals:
-            hours = 100 if interval == event_interval else 4
+        for interval_index, interval in enumerate(boundary.allowed_intervals):
+            selected_breakouts = breakout_hours if interval_index in event_interval_indexes else ()
+            hours = max(selected_breakouts, default=72) + 28 if selected_breakouts else 4
             rows: list[CanonicalMinuteRowV2] = []
+            level = Decimal("100")
             for hour in range(hours):
-                if hour < 72:
+                if hour not in selected_breakouts:
                     open_, high, low, close = (
-                        Decimal("100"),
-                        Decimal("101"),
-                        Decimal("99"),
-                        Decimal("100"),
-                    )
-                elif hour == 72:
-                    open_, high, low, close = (
-                        Decimal("100"),
-                        Decimal("121"),
-                        Decimal("99"),
-                        Decimal("120"),
+                        level,
+                        level + 1,
+                        level - 1,
+                        level,
                     )
                 else:
+                    next_level = level * Decimal("1.2")
                     open_, high, low, close = (
-                        Decimal("120"),
-                        Decimal("121"),
-                        Decimal("119"),
-                        Decimal("120"),
+                        level,
+                        next_level + 1,
+                        level - 1,
+                        next_level,
                     )
+                    level = next_level
                 for minute in range(60):
                     rows.append(
                         CanonicalMinuteRowV2(
@@ -376,6 +671,9 @@ def _vs0001_minute_rows(boundary: Any) -> tuple[tuple[CanonicalMinuteRowV2, ...]
 def _real_public_programme_inputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    breakout_hours: tuple[int, ...] = (72,),
+    event_interval_indexes: tuple[int, ...] = (1,),
 ) -> tuple[
     ValidationProgrammeConfigV2,
     ValidationV2SourceBundle,
@@ -396,7 +694,11 @@ def _real_public_programme_inputs(
     minute = aggregate_tests._publish_minute(  # noqa: SLF001
         chain,
         tmp_path,
-        rows=_vs0001_minute_rows(boundary),
+        rows=_vs0001_minute_rows(
+            boundary,
+            breakout_hours=breakout_hours,
+            event_interval_indexes=event_interval_indexes,
+        ),
         suffix="-real-vs0001",
     )
     aggregate = aggregate_tests._publish_aggregate(  # noqa: SLF001
@@ -471,9 +773,9 @@ def _real_public_programme_inputs(
         symbols=len(boundary.allowed_symbols),
         ranges=len(boundary.allowed_intervals),
         candidates=1,
-        events=1,
-        outcomes=1,
-        path_cells=24 * 60,
+        events=512,
+        outcomes=256,
+        path_cells=256 * 24 * 60,
         outer_folds=4,
         inner_folds=3,
     )
@@ -489,7 +791,10 @@ def _real_public_programme_inputs(
             [slot.to_dict() for slot in VALIDATION_SLOT_ROSTER]
         ),
         access_ledger_identity=development_access_ledger_identity_v2(sources),
-        policy_identities=(PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,),
+        policy_identities=(
+            PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
+            PHASE5_VS0001_POPULATION_POLICY_IDENTITY,
+        ),
         work_budget_sha256=budget.sha256,
     )
     assert minute.final_rows == aggregate.final_rows == 0
@@ -670,6 +975,121 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     monkeypatch.setattr(module, "_compute_real_vs0001_material_v2", fabricated_replay)
     with pytest.raises(ValueError, match="computation replay differs"):
         verify_original_validation_slot_result_v2(result)
+
+
+def test_public_runner_executes_three_ordered_vs0001_development_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+        breakout_hours=(72,),
+        event_interval_indexes=(1, 2, 3),
+    )
+    issued_readers: list[module.VerifiedPublicationOutcomeReaderV2] = []
+    real_issuer = module._issue_publication_outcome_reader_v2  # noqa: SLF001
+
+    def capture_reader(**kwargs: object) -> module.VerifiedPublicationOutcomeReaderV2:
+        reader = real_issuer(**kwargs)  # type: ignore[arg-type]
+        issued_readers.append(reader)
+        return reader
+
+    monkeypatch.setattr(module, "_issue_publication_outcome_reader_v2", capture_reader)
+
+    run = run_validation_programme_v2(
+        config=config,
+        sources=sources,
+        budget=budget,
+        demand=demand,
+    )
+
+    [reader] = issued_readers
+    outcomes = reader.read_slot(
+        _vs0001(),
+        programme_id=config.programme_id,
+        split_sha256=sources.boundary.boundary_sha256,
+        cost_authority_sha256=sources.cost_authority.cost_identity.value.removeprefix("CSTV2-"),
+    )
+    assert len(outcomes) == 3
+    assert tuple(outcome.entry_time for outcome in outcomes) == tuple(
+        sorted(outcome.entry_time for outcome in outcomes)
+    )
+    assert len({outcome.signal_id for outcome in outcomes}) == 3
+    assert all(outcome.path_row_count == 24 * 60 for outcome in outcomes)
+    result = next(item for item in run.results if item.slot_id == "VS-0001")
+    assert result.execution_status == "completed"
+    assert result.decision == "inconclusive"
+    assert result.metrics["event_count"] == 3
+    assert result.metrics["outcome_count"] == 3
+    assert result.metrics["detected_event_count"] == 3
+    assert result.metrics["eligible_event_count"] == 3
+    assert result.metrics["skipped_overlap_count"] == 0
+    assert result.metrics["path_cells"] == 3 * 24 * 60
+    assert sum(item.execution_status == "completed" for item in run.results) == 1
+    assert run.final_holdout_access_count == 0
+
+    registration = module._VERIFIED_PUBLICATION_OUTCOME_READERS[id(reader)]  # noqa: SLF001
+    population = registration.population
+    original_detected_ids = population.detected_signal_ids
+    object.__setattr__(population, "detected_signal_ids", tuple(reversed(original_detected_ids)))
+    try:
+        with pytest.raises(ValueError, match="detected population identities"):
+            reader.verify_original()
+        with pytest.raises(ValueError):
+            verify_original_validation_slot_result_v2(result)
+    finally:
+        object.__setattr__(population, "detected_signal_ids", original_detected_ids)
+
+    original_mapping = reader._outcomes_by_slot  # noqa: SLF001
+    object.__setattr__(
+        reader,
+        "_outcomes_by_slot",
+        MappingProxyType({"VS-0001": tuple(reversed(outcomes))}),
+    )
+    try:
+        with pytest.raises(ValueError):
+            reader.verify_original()
+        with pytest.raises(ValueError):
+            verify_original_validation_slot_result_v2(result)
+    finally:
+        object.__setattr__(reader, "_outcomes_by_slot", original_mapping)
+
+
+def test_public_runner_authenticates_empty_vs0001_population_without_minute_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    config, sources, budget, demand = _real_public_programme_inputs(
+        tmp_path,
+        monkeypatch,
+        breakout_hours=(),
+    )
+    monkeypatch.setattr(
+        module,
+        "read_verified_minute_path_v2",
+        lambda *_args, **_kwargs: pytest.fail("empty population opened minute outcomes"),
+    )
+
+    run = run_validation_programme_v2(
+        config=config,
+        sources=sources,
+        budget=budget,
+        demand=demand,
+    )
+
+    result = next(item for item in run.results if item.slot_id == "VS-0001")
+    assert result.execution_status == "failed"
+    assert result.decision == "not_evaluated"
+    assert result.metrics["event_count"] == 0
+    assert result.metrics["outcome_count"] == 0
+    assert result.metrics["path_cells"] == 0
+    assert run.scientific_terminal is True
+    assert run.final_holdout_access_count == 0
 
 
 def test_source_bundle_construction_is_passive_until_runner_budget_admission(
