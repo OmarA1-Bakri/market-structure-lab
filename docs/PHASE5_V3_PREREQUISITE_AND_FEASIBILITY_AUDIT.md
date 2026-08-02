@@ -12,9 +12,11 @@ The Phase 5-v3 closure and its original VP/VR tree were independently reopened a
 and reverified the complete 1,104-receipt tree without reading the final holdout.
 
 No successor programme is ready to preregister. The trusted development-source parent is absent,
-the 1h/4h aggregate parent is consequently absent, the V2 cost publisher is stricter than the
-accepted Task 15 contract, and the production V2 path computes only `VS-0001` before marking the
-remaining 1,103 slots unavailable. These are readiness findings, not hypothesis rejections.
+the 1h/4h aggregate parent is consequently absent, and the production V2 path computes only
+`VS-0001` before marking the remaining 1,103 slots unavailable. The V2 cost publisher is stricter
+than the accepted Task 15 contract, but an additive policy-rooted successor authority now corrects
+that implementation over-constraint without changing historical V2 evidence. These are readiness
+findings, not hypothesis rejections.
 
 ## Exact closure funnel
 
@@ -67,7 +69,7 @@ The closure identity is
 | MSL-P5-SR-001 | locally implementable | Implemented and tested: 4,800 draws, denominator 4,801, CI indices 119/4,679, cell ceiling 307,200, alpha 0.01. | New policy/config/programme identities binding amendment ID and content hash. | No external evidence. | Historical 4,096-draw evidence cannot enter an amended batch. | Required for every new computation. |
 | Untouched split and holdout | locally implementable | Split, boundary, purging/embargo, and access primitives exist. | A new programme-scoped split identity after common parents are frozen. | No external source beyond the admitted dataset. | Locally freezeable; no historical attempt identity may be reused. | Programme-global gate. |
 | Final-access authority | locally implementable | Every-and-only batch, commit-before-read, single-attempt concurrency, and crash-consumption primitives are implemented and tested. | A complete eligible batch and new programme-scoped receipt authority. | No external evidence. | Empty batch creates zero attempts. A committed crash consumes the attempt. | Gate remains closed until development completes. |
-| V2 cost-policy authority | implementation defect | The older Task 15 policy primitives are correct, but `validation_v2_costs.py` forbids numeric dimension values, requires actual-execution evidence, and counts capacity as incomplete. | A new immutable policy-rooted authority and consumption path that preserves historical cost publications. | No spend is necessary for a conservative policy; provenance still must be reviewed. | Correct under classification A without changing scientific gates. | Programme-global readiness blocker until corrected. |
+| V2 cost-policy authority | implementation defect, corrected additively | `validation_v3_cost_policy.py` now durably publishes and reloads an externally identity-bound policy snapshot, preserves historical V2 publications, and applies the accepted Task 15 cost primitives without capacity. | A future successor must publish its own reviewed policy and bind the externally frozen CPPV3/programme identities before outcomes. | No spend is necessary for a conservative policy; provenance and remote chronology still require review. | Corrected under classification A without changing scientific gates. | Implementation blocker resolved; the successor-specific preregistration publication remains a future readiness gate. |
 
 ## Cost and execution-evidence contract
 
@@ -80,9 +82,11 @@ latency measurements, or strategy-specific capacity before scientific validation
 The current V2 publisher truthfully demonstrates that public-trade proxies are not actual execution
 evidence. Its defect is using that fact to replace the accepted model-policy lane and treating
 promotion-only capacity as a programme-wide cost preflight condition. Historical V2 publications
-remain immutable and must not be relabelled. A corrected successor must use a new cost-policy
-identity, seal parameters before outcome access, prohibit zero/non-finite costs and outcome-derived
-calibration, bind event coverage, and preserve base, doubled, missed-fill, and delay scenarios.
+remain immutable and must not be relabelled. The additive V3 policy authority now persists canonical
+policy bytes, requires externally frozen programme and publication identities when reloading them,
+rejects mutation or identity substitution, prohibits non-positive/non-finite aggregate costs, binds
+exact event coverage, and preserves base, doubled, squared-fill, missed-fill, and delay scenarios.
+Git/remote chronology remains an explicit workflow gate rather than a claim made by the local code.
 
 Status semantics remain:
 
@@ -116,8 +120,9 @@ and unevaluable `p=1`.
   archives and checksums are a possible no-cost historical source but require a reviewed identity,
   provenance, scope, effective-time, and data-rights decision. Current-only precision metadata is
   not historical evidence.
-- **Implementation review:** closure verifier passed; cost-policy authority and full real roster
-  remain substantive implementation blockers.
+- **Implementation review:** closure verifier passed; the classification-A cost-policy correction
+  passed independent code review and adversarial tests. The full real roster remains a substantive,
+  source-dependent implementation blocker.
 
 Official reference surfaces inspected without account creation, credentials, downloads, or terms
 acceptance: the Binance public-data archive README, market-data-only endpoint documentation, and
@@ -127,9 +132,10 @@ Spot REST security documentation.
 
 The repository cannot truthfully preregister a successor today. No successor is selected, no final
 attempt is created, and Phase 6/7 remain closed. The immediate common external authority gate is an
-admitted development-source trust root. Independent local blockers also remain: the V2 cost-policy
-over-constraint and incomplete real 1,104-slot execution path. Aggregate construction is local work
-after source admission; Family B precision absence is family-local and must not block A/G/E/D.
+admitted development-source trust root. The remaining local blocker is the incomplete real
+1,104-slot execution path, whose truthful implementation and verification require admitted source
+parents. Aggregate construction is local work after source admission; Family B precision absence is
+family-local and must not block A/G/E/D.
 
 This conclusion is `no_ready_successor`, not `hypothesis_rejected`, `mixed`, or
 `hypothesis_limited`.

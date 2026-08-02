@@ -7,6 +7,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).parents[1]
 _AUDIT = _ROOT / "docs/PHASE5_V3_PREREQUISITE_AND_FEASIBILITY_AUDIT.json"
+_NO_SUCCESSOR = _ROOT / "docs/PHASE5_NO_SUCCESSOR_SELECTED.json"
 
 
 def test_phase5_v3_prerequisite_audit_is_canonical_and_truthful() -> None:
@@ -56,13 +57,11 @@ def test_phase5_v3_prerequisite_audit_is_canonical_and_truthful() -> None:
     assert payload["family_b_precision_semantics"] == "family_local_unevaluable_p_equals_1"
     assert payload["successor_readiness"] == {
         "common_external_blockers": ["source_trust_root"],
-        "local_implementation_blockers": [
-            "v2_cost_policy_authority",
-            "complete_1104_slot_implementation",
-        ],
+        "local_implementation_blockers": ["complete_1104_slot_implementation"],
         "phase6": "closed",
         "phase7": "closed",
         "ready": False,
+        "resolved_local_implementation": ["v3_cost_policy_authority"],
         "status": "no_ready_successor",
         "successor_selected": False,
     }
@@ -100,3 +99,46 @@ def test_phase5_v3_audit_covers_required_prerequisites_and_classifications() -> 
         "implementation defect"
     )
     assert prerequisites["v2_cost_policy_authority"]["classification"] == ("implementation defect")
+    assert prerequisites["v2_cost_policy_authority"]["resolution_status"] == (
+        "corrected_additively_v3"
+    )
+
+
+def test_no_successor_publication_is_canonical_and_preserves_terminal_boundaries() -> None:
+    content = _NO_SUCCESSOR.read_bytes()
+    payload = json.loads(content)
+    assert (
+        content
+        == (
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+    )
+    artifact_sha256 = payload.pop("artifact_sha256")
+    expected = hashlib.sha256(
+        (
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+    ).hexdigest()
+    assert artifact_sha256 == expected
+    assert payload["audit_anchor"]["audit_sha256"] == (
+        "e43d329a53ead792dd18e10dd19acf8b7d257a7e54d0ba7a77e795d78983ce13"
+    )
+    assert payload["decision"] == {
+        "final_access_attempt_created": False,
+        "final_holdout_accessed": False,
+        "performance_inference": "none",
+        "phase6": "closed",
+        "phase7": "closed",
+        "preregistration_created": False,
+        "status": "no_ready_successor",
+        "successor_selected": False,
+    }
+    assert [item["id"] for item in payload["blockers"]["local_implementation"]] == [
+        "complete_1104_slot_implementation"
+    ]
+    assert [item["id"] for item in payload["resolved_local_implementation"]] == [
+        "v2_cost_policy_authority"
+    ]
+    assert payload["closure"]["final_access_attempts"] == 0
+    assert payload["closure"]["final_rows"] == 0
+    assert payload["closure"]["final_access_records"] == 0
