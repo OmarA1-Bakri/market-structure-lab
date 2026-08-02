@@ -847,24 +847,24 @@ def evaluate_motif_stability(
         tie_seed=primary_seed,
         tie_policy=primary_tie_policy,
     )
-    seed_rankings: tuple[
-        tuple[int, MotifTiePolicy, tuple[MultivariateMotifMatch, ...]], ...
-    ] = tuple(
-        (
-            seed,
-            tie_policy,
-            discover_multivariate_motifs(
-                discovery,
-                window_length=primary_window,
-                exclusion_zone=primary_zone,
-                max_windows=policy.max_windows,
-                top_k=policy.top_k,
-                tie_seed=seed,
-                tie_policy=tie_policy,
-            ),
+    seed_rankings: tuple[tuple[int, MotifTiePolicy, tuple[MultivariateMotifMatch, ...]], ...] = (
+        tuple(
+            (
+                seed,
+                tie_policy,
+                discover_multivariate_motifs(
+                    discovery,
+                    window_length=primary_window,
+                    exclusion_zone=primary_zone,
+                    max_windows=policy.max_windows,
+                    top_k=policy.top_k,
+                    tie_seed=seed,
+                    tie_policy=tie_policy,
+                ),
+            )
+            for seed in policy.tie_seeds
+            for tie_policy in policy.tie_policies
         )
-        for seed in policy.tie_seeds
-        for tie_policy in policy.tie_policies
     )
     subsample_rankings: tuple[
         tuple[
