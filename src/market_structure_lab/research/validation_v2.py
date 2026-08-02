@@ -1911,8 +1911,13 @@ def _derive_vs0001_control_input_material_v2(
     ):
         members.sort(key=lambda item: (item[0].legal_entry_time, item[0].event_id))
         candidate, series = members[0]
-        if any(item_series.key.interval_index != interval_index for _, item_series in members):
-            raise ValueError("candidate control stratum mixes aggregate series")
+        selected_series: VerifiedAggregateSeriesV2 = series
+        if any(
+            item_series.key.interval_index != interval_index
+            or item_series.series_identity != selected_series.series_identity
+            for _, item_series in members
+        ):
+            raise ValueError("candidate control stratum mixes aggregate series identity")
         fold = fold_by_id.get(candidate.fold_id)
         if fold is None:
             raise ValueError("candidate control fold is unavailable")
@@ -1938,25 +1943,14 @@ def _derive_vs0001_control_input_material_v2(
             ("unconditional", unconditional),
             ("persistence", persistence),
         ):
-            if role == "persistence":
-                incompatible = sum(
-                    item.prior_completed_close_return is None
-                    or item.prior_completed_close_return == 0
-                    or (1 if item.prior_completed_close_return > 0 else -1) != item.direction
-                    for item, _ in members
-                )
-                if incompatible:
-                    unavailable.append(
-                        (stratum_sha256, f"persistence_direction_shortage:{incompatible}")
-                    )
             eligible_indices: list[int] = []
-            for index in range(2, len(series.rows) - candidate.horizon_hours - 1):
-                prior_previous = series.rows[index - 2]
-                prior_completed = series.rows[index - 1]
-                entry = series.rows[index]
-                exit_row = series.rows[index + candidate.horizon_hours]
-                delayed_exit = series.rows[index + candidate.horizon_hours + 1]
-                relevant = series.rows[index - 2 : index + candidate.horizon_hours + 2]
+            for index in range(2, len(selected_series.rows) - candidate.horizon_hours - 1):
+                prior_previous = selected_series.rows[index - 2]
+                prior_completed = selected_series.rows[index - 1]
+                entry = selected_series.rows[index]
+                exit_row = selected_series.rows[index + candidate.horizon_hours]
+                delayed_exit = selected_series.rows[index + candidate.horizon_hours + 1]
+                relevant = selected_series.rows[index - 2 : index + candidate.horizon_hours + 2]
                 if any(
                     current.timestamp != previous.timestamp + timedelta(hours=1)
                     or current.symbol != candidate.symbol
@@ -1997,14 +1991,14 @@ def _derive_vs0001_control_input_material_v2(
                         "candidate_id": candidate.candidate_id,
                         "stratum_sha256": stratum_sha256,
                         "role": role,
-                        "entry_time": series.rows[index].timestamp,
+                        "entry_time": selected_series.rows[index].timestamp,
                     },
                 ),
             )
             selected_indices: list[int] = []
             for index in ordered_indices:
-                entry_time = series.rows[index].timestamp
-                exit_time = series.rows[index + candidate.horizon_hours].timestamp
+                entry_time = selected_series.rows[index].timestamp
+                exit_time = selected_series.rows[index + candidate.horizon_hours].timestamp
                 if any(
                     _intervals_overlap_v2(entry_time, exit_time, start, end)
                     for start, end in selected_donor_intervals
@@ -2024,7 +2018,7 @@ def _derive_vs0001_control_input_material_v2(
             output.extend(
                 _control_row_from_series_v2(
                     candidate=candidate,
-                    series=series,
+                    series=selected_series,
                     entry_index=index,
                     role=role,
                     candidate_input_set_sha256=candidate_inputs.input_set_sha256,

@@ -246,5 +246,52 @@ Python/documentation close-out changed no dashboard dependency file and did not 
 dependency rewrite.
 
 Phase 5 cannot claim candidate support, validation, or promotion. The correct scientific conclusion
-is `not_evaluated`. Phase 6 remains closed until the user explicitly approves it after reviewing
-this evidence.
+is `not_evaluated`. Phase 6 remains scientifically closed because no validated edge exists.
+
+## 2026-08-02 terminal decision publication
+
+The hardened receipt tree was reopened from its original bytes after the subsequent V2 enabling
+work. Every VP/VR receipt was revalidated against the exact frozen config and canonical 1,104-slot
+roster. The terminal publisher then issued a separate immutable decision under:
+
+```text
+data/exports/phase5-terminal/terminal_state=no-validated-edge-v2/
+```
+
+The new publication supersedes the earlier absence of an explicit empty-batch marker; it does not
+rewrite the historical VP/VR tree. Its authenticated facts are:
+
+| Field | Value |
+|---|---|
+| Closure identity | `001b13d03dacf5e3b5a1888ee1cd223dd2b07168303ff1ecbe29ac7ac4366be4` |
+| Publication file SHA-256 | `fe13da24f9ac4d223442dcf43ffbfccb1a350e8941b0089d908429f37f1097b9` |
+| Original programme-tree identity | `85063429a5e644922d33041b314d43b3936624874fbc4fc0f50933c05b107f1d` |
+| Parent programme receipt | `2b1629261a8b2559daff4fe6fc6a9c31f48ae6432fdc114f3ecb5020ab3d8ed7` |
+| Terminal implementation identity | `ab782073bd3dc192ca11e8117be09e71277837ddc18e75de9eb804566007ecc9` |
+| Empty eligible-batch identity | `25eb650e11480bedf66bf64c74a8f3542aae8a552f53fc3a52e36abef1ce904f` |
+| Planned / terminal slots | `1,104 / 1,104` |
+| Primary Holm entries | `64`; every unevaluable primary has effective `p=1` |
+| Eligible development candidates | `0` |
+| Final marker | `final_holdout_not_opened_empty_batch` |
+| Final access attempts / rows / records | `0 / 0 / 0` |
+| Phase 6 / Phase 7 | `scientifically_gated_no_validated_edge` |
+
+The exact authenticated unavailable parents remain `aggregate_publications`,
+`event_level_cost_evidence`, and `profile_price_precision_evidence`. Current source archives do not
+contain truthful historical paid fees, bid/ask spread, execution slippage, fill probability,
+latency, missed fills, or capacity. No zero-cost substitution, OHLCV microstructure inference, or
+current-only metadata was used. This is a truthful Terminal A result: no candidate was evaluated,
+validated, or promoted, and the final holdout was not opened.
+
+The V2 legal-control path was also tightened without changing the scientific conclusion. Donor
+horizons are now disjoint across unconditional and persistence roles, all members of a control
+stratum must bind the same aggregate-series identity, and candidate-side direction diagnostics are
+not misreported as donor shortages. Exact persistence-donor shortage remains terminal evidence only
+when the complete bounded donor search finds no legal different-clock, non-overlapping donor.
+
+An earlier same-session closure at `terminal_state=no-validated-edge` is preserved as superseded
+audit evidence. Independent security review found that its generic V2 disk-reader path could accept
+self-hashed fixture provenance and that its parent generation was not rechecked after commit. The
+V2 path was removed. The authoritative `-v2` closure accepts only the exact frozen legacy programme,
+config bytes, and parent receipt; verifies every slot-evidence artifact; proves a stable tree before,
+during, and after publication; and binds the exact implementation-source bytes.

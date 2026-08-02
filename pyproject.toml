@@ -30,6 +30,7 @@ msl-db-inspect = "market_structure_lab.cli.inspect_database:main"
 msl-reconcile-candles = "market_structure_lab.cli.reconcile_candles:main"
 msl-run-discovery-program = "market_structure_lab.cli.run_discovery_program:main"
 msl-run-validation-program = "market_structure_lab.cli.run_validation_program:main"
+msl-publish-phase5-terminal = "market_structure_lab.cli.publish_phase5_terminal:main"
 msl-sync-candles = "market_structure_lab.cli.sync_candles:main"
 
 [tool.hatch.build.targets.wheel]

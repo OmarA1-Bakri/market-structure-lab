@@ -227,6 +227,60 @@ def test_control_donor_horizons_never_overlap_across_roles() -> None:
     )
 
 
+def test_candidate_direction_is_not_misreported_as_persistence_donor_shortage() -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    candidate_inputs, registration = _control_material_fixture(
+        price_offset=Decimal("0"),
+        input_sha256="d" * 64,
+    )
+    candidate = replace(candidate_inputs.rows[0], prior_completed_close_return=-0.01)
+    candidate_inputs = SimpleNamespace(**{**vars(candidate_inputs), "rows": (candidate,)})
+
+    unconditional, persistence, unavailable = module._derive_vs0001_control_input_material_v2(  # noqa: SLF001
+        candidate_inputs,
+        registration,
+    )
+
+    assert len(unconditional) == 1
+    assert len(persistence) == 1
+    assert unavailable == ()
+
+
+def test_control_stratum_rejects_distinct_aggregate_series_with_same_interval() -> None:
+    from market_structure_lab.research import validation_v2 as module
+
+    candidate_inputs, registration = _control_material_fixture(
+        price_offset=Decimal("0"),
+        input_sha256="d" * 64,
+    )
+    first = candidate_inputs.rows[0]
+    second = replace(first, row_identity="VPI2-second", event_id="CS-second")
+    second_series = SimpleNamespace(
+        **{
+            **vars(registration.aggregate_series[0]),
+            "series_identity": "f" * 64,
+        }
+    )
+    candidate_inputs = SimpleNamespace(**{**vars(candidate_inputs), "rows": (first, second)})
+    registration = SimpleNamespace(
+        **{
+            **vars(registration),
+            "signals": (
+                registration.signals[0],
+                SimpleNamespace(signal_id=second.event_id),
+            ),
+            "aggregate_series": (registration.aggregate_series[0], second_series),
+        }
+    )
+
+    with pytest.raises(ValueError, match="aggregate series identity"):
+        module._derive_vs0001_control_input_material_v2(  # noqa: SLF001
+            candidate_inputs,
+            registration,
+        )
+
+
 def _stub_population_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     module: Any,

@@ -752,6 +752,20 @@ verification are recorded in
 [`PHASE5_VALIDATION_EVIDENCE.md`](PHASE5_VALIDATION_EVIDENCE.md). This is not validation failure
 after an evaluated backtest; it is a truthful preflight refusal to evaluate. Phase 6 remains closed.
 
+### Phase 5 terminal state: no validated edge
+
+Phase 5 reached its truthful Terminal A state on 2026-08-02. A separate immutable terminal-decision
+publication reverified the original exact 1,104-slot VP/VR tree, assigned conservative effective
+`p=1` to all 64 unevaluable primaries, froze an empty eligible batch, published
+`final_holdout_not_opened_empty_batch`, and retained zero final-access attempts, rows, and records.
+The authoritative closure identity is
+`001b13d03dacf5e3b5a1888ee1cd223dd2b07168303ff1ecbe29ac7ac4366be4`.
+
+No candidate is supported, validated, or promoted. There is no edge-catalogue record. Phase 6 and
+Phase 7 are scientifically gated because the prerequisite validated edge does not exist. The
+remaining unavailable real-world evidence is recorded rather than fabricated; it does not authorize
+proxy inference, final-holdout access, strategy construction, or live activity.
+
 Task 11 close-out verification reached 1,748 passing tests and 8 skips. The only 13 failures were
 the already documented WSL refusal to execute unsigned temporary PowerShell scripts. Ruff
 format/lint, Mypy, locked sync, package build from an exact tracked Linux-filesystem mirror,
