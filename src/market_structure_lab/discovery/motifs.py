@@ -847,7 +847,9 @@ def evaluate_motif_stability(
         tie_seed=primary_seed,
         tie_policy=primary_tie_policy,
     )
-    seed_rankings = tuple(
+    seed_rankings: tuple[
+        tuple[int, MotifTiePolicy, tuple[MultivariateMotifMatch, ...]], ...
+    ] = tuple(
         (
             seed,
             tie_policy,
@@ -864,7 +866,15 @@ def evaluate_motif_stability(
         for seed in policy.tie_seeds
         for tie_policy in policy.tie_policies
     )
-    subsample_rankings = tuple(
+    subsample_rankings: tuple[
+        tuple[
+            int,
+            MotifTiePolicy,
+            tuple[MotifSequence, ...],
+            tuple[MultivariateMotifMatch, ...],
+        ],
+        ...,
+    ] = tuple(
         (
             seed,
             tie_policy,

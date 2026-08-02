@@ -242,9 +242,11 @@ def freeze_discovery_provenance(
         development.partition_records != expected_development
     ):
         raise ValueError("discovery input feature partition hashes mismatch")
-    if discovery.content_sha256 != _input_sha256(discovery) or (
-        development.content_sha256 != _input_sha256(development)
-    ):
+    discovery_input_sha256 = _input_sha256(discovery)
+    if discovery.content_sha256 != discovery_input_sha256:
+        raise ValueError("discovery input row content identity mismatch")
+    development_input_sha256 = _input_sha256(development)
+    if development.content_sha256 != development_input_sha256:
         raise ValueError("discovery input row content identity mismatch")
     feature_partitions = tuple(
         sorted(
@@ -267,8 +269,8 @@ def freeze_discovery_provenance(
         "lock_sha256": lock_sha256,
         "motif_regime_assignment_sha256": motif_regime_assignment_sha256,
         "feature_partitions": [list(item) for item in feature_partitions],
-        "discovery_input_sha256": discovery.content_sha256,
-        "development_input_sha256": development.content_sha256,
+        "discovery_input_sha256": discovery_input_sha256,
+        "development_input_sha256": development_input_sha256,
     }
     return DiscoveryProvenance(
         snapshot_manifest_sha256=snapshot_manifest.snapshot_sha256,
@@ -281,8 +283,8 @@ def freeze_discovery_provenance(
         lock_sha256=lock_sha256,
         motif_regime_assignment_sha256=motif_regime_assignment_sha256,
         feature_partitions=feature_partitions,
-        discovery_input_sha256=discovery.content_sha256,
-        development_input_sha256=development.content_sha256,
+        discovery_input_sha256=discovery_input_sha256,
+        development_input_sha256=development_input_sha256,
         sha256=hashlib.sha256(_canonical_json(payload)).hexdigest(),
         _factory_token=_DISCOVERY_PROVENANCE_FACTORY,
     )

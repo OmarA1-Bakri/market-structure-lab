@@ -154,6 +154,7 @@ class AuctionEngine:
         accumulator_transaction: ProfileAccumulatorTransaction | None = None
         cache_removed: list[tuple[datetime, BinContribution]] = []
         cache_added = False
+        replacement_cache: dict[datetime, BinContribution] = {}
         try:
             window_checkpoint = self._window_policy.transaction_checkpoint()
             binning_checkpoint = self._binning.transaction_checkpoint()

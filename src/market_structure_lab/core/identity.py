@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 import re
-from typing import Any
+from typing import Any, cast
 
 
 class CanonicalIdentityError(ValueError):
@@ -136,7 +136,7 @@ def _canonical_decimal(value: Decimal | float) -> str:
             raise CanonicalIdentityError("identity decimals must be finite")
         decimal = Decimal(str(value))
     else:
-        decimal = value
+        decimal = cast(Decimal, value)
     if not decimal.is_finite():
         raise CanonicalIdentityError("identity decimals must be finite")
     try:

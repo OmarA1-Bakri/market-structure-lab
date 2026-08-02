@@ -25,7 +25,7 @@ from market_structure_lab.data.recovery import RECOVERY_ADVISORY_LOCK_NAME, Reco
 
 
 class _Digest(Protocol):
-    def update(self, value: bytes) -> None: ...
+    def update(self, value: bytes, /) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
