@@ -359,10 +359,19 @@ def _control_rows(
             (candidate_cases[family].definition or candidate_cases["A"].definition).candidate_id,  # type: ignore[union-attr]
             family,
             role,
-            **kwargs,
+            **(
+                kwargs
+                | {
+                    "feature_time": start + timedelta(hours=25 * (role_index + 1) - 24),
+                    "signal_time": start + timedelta(hours=25 * (role_index + 1)),
+                    "legal_entry_time": start + timedelta(hours=25 * (role_index + 1)),
+                    "label_start": start + timedelta(hours=25 * (role_index + 1)),
+                    "label_end": start + timedelta(hours=25 * (role_index + 1) + 24),
+                }
+            ),
         )
         for family in EXPECTED_FAMILIES
-        for role in roles_by_family[family]
+        for role_index, role in enumerate(roles_by_family[family])
     )
     selectors = tuple(
         SelectorInput(row.row_identity, publication, row.feature_time)

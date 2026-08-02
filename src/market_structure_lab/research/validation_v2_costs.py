@@ -607,7 +607,9 @@ def verify_validation_cost_authority_metadata_v2(
         or authority.cost_identity != identity
         or authority.publication_root != registered.publication_root
     ):
-        raise ValueError("cost authority serialization or identity differs from original")
+        raise ValueError(
+            "cost authority original bytes, dimensions, serialization, or identity differ"
+        )
     return authority
 
 
