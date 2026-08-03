@@ -1,0 +1,1387 @@
+{
+  "collection_sha256": "17f59f9087af668c1cc19f9956f7acbe46724960a8e14c54d17e5d0a35558f85",
+  "command": [
+    "/tmp/msl-shard-repo-057a4a7-zF2YCV/.venv/bin/python3",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "market_structure_lab.research.pytest_result_plugin",
+    "tests/integration/test_freshness_postgres.py::test_isolated_postgres_freshness_invariants",
+    "tests/test_aggregate_bars.py::test_aggregate_row_schema_and_serialized_byte_tampering_reject",
+    "tests/test_aggregate_bars.py::test_mixed_source_series_or_segment_is_rejected[symbol]",
+    "tests/test_aggregate_bars.py::test_over_budget_declaration_rejects_before_source_iteration[demand_override2-budget_override2-aggregate_bars]",
+    "tests/test_aggregate_bars.py::test_spool_rejects_symlink_in_earlier_trusted_root_descendant",
+    "tests/test_aggregate_publication.py::test_failed_claim_enumeration_rejects_external_link_and_retry_stays_terminal",
+    "tests/test_aggregate_publication.py::test_manifest_must_be_exact_canonical_json_bytes[whitespace]",
+    "tests/test_aggregate_publication.py::test_partition_row_buffer_is_explicitly_capped_before_source_iteration",
+    "tests/test_aggregate_publication.py::test_publication_rejects_rows_not_proven_by_parent_snapshot[arbitrary]",
+    "tests/test_aggregate_publication.py::test_verified_aggregate_series_is_read_only_from_exact_publication_bytes",
+    "tests/test_aggregate_publication_v2.py::test_aggregate_readers_never_yield_replaced_partition_bytes[public_iterator]",
+    "tests/test_aggregate_publication_v2.py::test_original_parent_output_and_origin_mutations_reject",
+    "tests/test_aggregate_publication_v2.py::test_sealed_series_retains_registered_parents_until_series_collection",
+    "tests/test_artifact_io.py::test_read_bounded_regular_rejects_a_file_larger_than_the_limit",
+    "tests/test_auction_engine.py::test_commit_after_mutation_failure_restores_window_and_retries_cleanly",
+    "tests/test_auction_engine.py::test_failed_update_restores_every_mutable_collaborator_and_retries_cleanly[node-detection]",
+    "tests/test_auction_engine.py::test_missing_cached_eviction_failure_leaves_exact_pre_call_state",
+    "tests/test_auction_engine.py::test_profile_work_budget_rejects_invalid_or_unsafe_limits[changes0]",
+    "tests/test_auction_engine.py::test_release_fault_is_non_throwing_cleanup_after_successful_commit[False-accumulator]",
+    "tests/test_auction_engine.py::test_source_and_window_reset_causes_are_both_preserved[segment-and-window]",
+    "tests/test_auction_replay.py::test_gap_rejects_by_default_without_mutating_state",
+    "tests/test_auction_replay.py::test_rolling_duration_engine_evicts_expired_contributions",
+    "tests/test_auction_windows.py::test_auction_candle_rejects_invalid_data[updates2-timeframe]",
+    "tests/test_auction_windows.py::test_fixed_window_normalizes_bounds_and_has_stable_version_id",
+    "tests/test_auction_windows.py::test_utc_session_windows_reset_at_calendar_boundary[UTCMonthWindow-before2-after2-utc-month-window-v1]",
+    "tests/test_backfill_candles_cli.py::test_database_errors_do_not_leak_sql_parameters_or_secrets",
+    "tests/test_behaviour_catalogue.py::test_event_binding_requires_canonical_event_id_and_positive_duration[EV-1-60.0-canonical]",
+    "tests/test_behaviour_catalogue.py::test_freeze_behaviours_rejects_inconsistent_cluster_identity",
+    "tests/test_behaviour_catalogue.py::test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes[changes15-outcome]",
+    "tests/test_behaviour_catalogue.py::test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes[changes7-outcome]",
+    "tests/test_binance_archive_v2.py::test_loaded_manifest_rejects_coherent_scope_and_path_forgery_before_io[final_period]",
+    "tests/test_binance_archive_v2.py::test_observed_trade_tape_has_narrow_authority",
+    "tests/test_binance_recovery_source.py::test_archive_batches_have_distinct_resume_ranges",
+    "tests/test_binance_recovery_source.py::test_archive_quarantines_off_grid_rows_with_durable_provenance",
+    "tests/test_binance_recovery_source.py::test_parse_kline_preserves_exact_decimals_and_optional_fields",
+    "tests/test_candle_freshness.py::test_every_symbol_has_one_status_and_blocked_sources_have_no_eligible_ranges",
+    "tests/test_candle_reconciliation.py::test_reconciliation_hashes_source_and_dump_rows_canonically",
+    "tests/test_candle_reconciliation.py::test_reconciliation_rejects_invalid_input_streams[dump_rows7-source_rows7-60000-market boundary]",
+    "tests/test_candle_recovery.py::test_every_gap_ends_with_an_explicit_terminal_classification[kwargs1-partially_recovered]",
+    "tests/test_candle_recovery.py::test_recovery_report_enforces_coverage_conservation_and_source_immutability",
+    "tests/test_canonical_export.py::test_completed_export_is_idempotent_and_detects_tampering",
+    "tests/test_canonical_export.py::test_research_snapshot_identity_rejects_partial_or_mismatched_boundary_binding",
+    "tests/test_canonical_loader.py::test_loader_normalizes_offset_bounds_to_utc",
+    "tests/test_canonical_loader.py::test_materializing_loader_requires_both_bounds",
+    "tests/test_config.py::test_environment_builds_fresh_settings_without_a_global_singleton",
+    "tests/test_dashboard_evidence.py::test_browser_trial_count_validator_rejects_extra_keys",
+    "tests/test_dashboard_evidence.py::test_dashboard_rejects_nonexact_phase4_v4_fixture_contract[extra-raw-source]",
+    "tests/test_dashboard_evidence.py::test_dashboard_trial_ledger_fails_closed_on_any_malformed_entry[artifact_tamper]",
+    "tests/test_dashboard_evidence.py::test_generator_rejects_noncanonical_publication_timestamps[2026-07-17T03:00:00.123Z]",
+    "tests/test_dashboard_evidence.py::test_node_contract_rejects_stale_phase4_approval_gate",
+    "tests/test_dashboard_evidence.py::test_task14_checkpoint_rejects_exact_boundary_and_cap_drift[discovery-end]",
+    "tests/test_dataset_layer.py::test_load_symbol_defaults_to_one_minute_dataset_for_symbol",
+    "tests/test_derived_publication.py::test_duplicate_and_out_of_order_event_rows_fail_closed",
+    "tests/test_derived_publication.py::test_event_source_linkage_is_rejected_before_event_iteration[manifest_change2]",
+    "tests/test_derived_publication.py::test_feature_partition_binding_is_timeframe_aware_for_overlapping_timestamps",
+    "tests/test_derived_publication.py::test_feature_publication_rejects_every_nonexact_or_mutated_batch_before_replay[donor]",
+    "tests/test_derived_publication.py::test_interrupted_publication_releases_owner_and_removes_unique_staging",
+    "tests/test_derived_publication.py::test_preexisting_publication_lock_is_never_stolen_or_consumed",
+    "tests/test_derived_publication.py::test_published_event_binding_reader_rejects_manifest_and_schema_mismatch",
+    "tests/test_derived_publication.py::test_published_event_bindings_stream_in_deterministic_bounded_batches",
+    "tests/test_derived_publication.py::test_verifier_rejects_a_supplied_manifest_that_differs_from_disk",
+    "tests/test_discovery_clustering.py::test_kmeans_fails_loudly_when_iteration_cap_prevents_consistent_result",
+    "tests/test_discovery_clustering.py::test_kmeans_rejects_invalid_configuration[kwargs0]",
+    "tests/test_discovery_clustering.py::test_kmeans_uses_stable_lowest_label_for_equal_distance_ties",
+    "tests/test_discovery_clustering.py::test_pca_rejects_empty_insufficient_nonfinite_or_ragged_values[values0]",
+    "tests/test_discovery_clustering.py::test_pca_rejects_invalid_component_count[True]",
+    "tests/test_discovery_clustering.py::test_pca_rejects_selected_implicit_wide_null_space",
+    "tests/test_discovery_matrix.py::test_matrix_applies_cap_before_null_dropping",
+    "tests/test_discovery_matrix.py::test_matrix_rejects_invalid_row_cap[0]",
+    "tests/test_discovery_matrix.py::test_matrix_rejects_unsafe_feature_selection[names4-registered]",
+    "tests/test_discovery_motifs.py::test_bounded_multivariate_selection_matches_complete_sort[canonical]",
+    "tests/test_discovery_motifs.py::test_contiguous_motif_sequences_split_at_every_canonical_boundary[rows4]",
+    "tests/test_discovery_motifs.py::test_motif_exclusion_zone_removes_overlapping_neighbours",
+    "tests/test_discovery_motifs.py::test_motifs_reject_invalid_inputs[sequence4-kwargs4-TypeError]",
+    "tests/test_discovery_motifs.py::test_multivariate_motifs_retain_identity_and_use_every_feature",
+    "tests/test_discovery_motifs.py::test_unstable_motifs_are_retained_as_rejected_not_published",
+    "tests/test_discovery_program.py::test_control_execution_binds_null_projection_evidence_to_manifest_and_budget[source_matrix]",
+    "tests/test_discovery_program.py::test_selected_universe_binds_verified_promotion_and_exact_scope",
+    "tests/test_discovery_reliability.py::test_reliability_contracts_reject_invalid_result_invariants[single_cluster-result2]",
+    "tests/test_discovery_runs.py::test_dirty_runtime_worktree_is_rejected_before_matrix_construction",
+    "tests/test_discovery_runs.py::test_discovery_run_is_atomic_reproducible_and_idempotent",
+    "tests/test_discovery_runs.py::test_discovery_work_budget_rejects_before_matrix_construction[maximum_pca_cells-23-PCA cells-24]",
+    "tests/test_discovery_runs.py::test_discovery_work_budget_rejects_invalid_or_unsafe_limits[maximum_materialized_rows-0]",
+    "tests/test_discovery_runs.py::test_discovery_work_budget_serializes_exact_versioned_identity",
+    "tests/test_discovery_runs.py::test_input_artifact_symlinks_are_rejected_before_matrix_construction[marker-feature publication]",
+    "tests/test_discovery_runs.py::test_input_artifact_symlinks_are_rejected_before_matrix_construction[tree-feature publication]",
+    "tests/test_discovery_runs.py::test_motif_window_budget_rejects_before_provenance_or_matrix_construction",
+    "tests/test_discovery_runs.py::test_public_discovery_cannot_select_an_unrelated_runtime_repository",
+    "tests/test_discovery_runs.py::test_run_rejects_incomplete_or_unknown_regime_row_ids_before_motif_construction[extra]",
+    "tests/test_discovery_splits.py::test_direct_discovery_input_construction_is_rejected",
+    "tests/test_discovery_splits.py::test_make_discovery_input_rejects_empty_rows_and_unknown_purpose",
+    "tests/test_discovery_splits.py::test_make_discovery_input_rejects_out_of_partition_symbol_cutoff_and_row_limit",
+    "tests/test_discovery_stability.py::test_adjacent_period_software_fixture_policy_validates_every_threshold[maximum_assignment_margin_drift-True]",
+    "tests/test_discovery_stability.py::test_adjusted_rand_index_rejects_invalid_partitions[left1-right1-same length]",
+    "tests/test_discovery_stability.py::test_minimum_event_support_is_independent_from_asset_coverage",
+    "tests/test_discovery_stability.py::test_stability_evaluation_rejects_invalid_identity_lengths_and_bounds[changes5-subsample_fraction]",
+    "tests/test_discovery_stability.py::test_stability_rejects_inconsistent_base_kmeans_evidence[assignments]",
+    "tests/test_discovery_transitions.py::test_cluster_observation_rejects_invalid_or_future_unsafe_identity",
+    "tests/test_discovery_transitions.py::test_long_dwells_and_multiple_boundaries_are_explicit_dependence_diagnostics",
+    "tests/test_discovery_transitions.py::test_transition_estimate_direct_construction_fails_closed[changes10]",
+    "tests/test_discovery_transitions.py::test_transition_estimate_direct_construction_fails_closed[changes18]",
+    "tests/test_discovery_transitions.py::test_transition_estimate_direct_construction_fails_closed[changes7]",
+    "tests/test_discovery_transitions.py::test_transition_matrix_capacity_accounts_for_horizon",
+    "tests/test_discovery_transitions.py::test_transition_uncertainty_policy_fails_closed[changes11]",
+    "tests/test_discovery_transitions.py::test_transition_uncertainty_policy_fails_closed[changes19]",
+    "tests/test_discovery_transitions.py::test_transition_uncertainty_policy_fails_closed[changes7]",
+    "tests/test_discovery_transitions.py::test_transitions_never_cross_symbol_timeframe_segment_session_or_gap[boundary_rows3-session_break_count]",
+    "tests/test_event_detectors.py::test_feature_identity_drift_cannot_reuse_detector_history[feature_set_id]",
+    "tests/test_event_detectors.py::test_snapshot_identity_drift_cannot_reuse_detector_history[profile_definition_id]",
+    "tests/test_event_overlap.py::test_overlap_report_matches_naive_half_open_reference",
+    "tests/test_event_windows.py::test_fixed_windows_discard_partial_tail_at_each_segment_boundary",
+    "tests/test_event_windows.py::test_segmenters_fail_closed_on_identity_order_gap_and_segment_errors[rows3-segment identifiers]",
+    "tests/test_experiments.py::test_attempt_boundary_classifies_output_validation_or_publication_failure[invalid-artifact]",
+    "tests/test_experiments.py::test_attempt_preflight_rejects_stale_stage_before_algorithm_invocation",
+    "tests/test_experiments.py::test_identical_trial_replay_is_byte_idempotent",
+    "tests/test_experiments.py::test_metrics_json_is_mandatory_even_for_terminal_failure",
+    "tests/test_experiments.py::test_run_id_reserves_staging_path_token[TR-staging-001]",
+    "tests/test_experiments.py::test_trial_publication_rejects_dangling_links_before_writes[dangling-final]",
+    "tests/test_experiments.py::test_trial_verification_rejects_stale_or_extra_files[stale]",
+    "tests/test_feature_builder.py::test_builder_emits_immutable_replayable_producer_bound_batch",
+    "tests/test_feature_builder.py::test_explicit_reset_events_clear_history_before_current_row[window_reset]",
+    "tests/test_feature_builder.py::test_only_exact_issued_batch_instance_can_replay[copy]",
+    "tests/test_feature_builder.py::test_producer_bound_batch_uses_sealed_row_construction_despite_method_overrides[subclass]",
+    "tests/test_feature_builder.py::test_stream_identity_drift_cannot_reuse_trailing_history[window_version]",
+    "tests/test_feature_normalization.py::test_fit_rejects_empty_rows_and_invalid_registry_row",
+    "tests/test_feature_normalization.py::test_holdout_values_cannot_poison_training_fit",
+    "tests/test_feature_normalization.py::test_transform_rejects_rows_from_other_artifact_identity",
+    "tests/test_feature_registry.py::test_discovery_registry_rejects_prohibited_future_or_outcome_names[outcome_label]",
+    "tests/test_feature_registry.py::test_feature_definition_rejects_unsafe_or_incomplete_metadata[changes2-units]",
+    "tests/test_feature_registry.py::test_feature_row_requires_non_negative_integer_segment_id[True]",
+    "tests/test_feature_registry.py::test_float_features_reject_non_finite_or_wrong_types[True]",
+    "tests/test_feature_registry.py::test_innocent_feature_names_cannot_hide_semantic_leakage[changes5-after declared cutoff]",
+    "tests/test_feature_registry.py::test_registry_requires_manually_allocated_decimal_feature_set_id[FS-1]",
+    "tests/test_freeze_validation_boundary_v2_cli.py::test_freezer_is_byte_deterministic_and_no_clobber",
+    "tests/test_freshness_snapshot.py::test_provenance_policy_does_not_admit_recovery_failures[partially_recovered]",
+    "tests/test_freshness_snapshot.py::test_snapshot_identity_pins_all_freshness_evidence",
+    "tests/test_freshness_sync.py::test_latest_pointer_rejects_report_linked_to_a_different_plan",
+    "tests/test_freshness_sync.py::test_legacy_latest_directory_without_commit_receipts_remains_readable",
+    "tests/test_freshness_sync.py::test_report_retains_explicit_unresolved_recovery_reason[unresolved-unresolved]",
+    "tests/test_fs_durability.py::test_windows_durable_move_uses_secure_write_through_without_directory_open",
+    "tests/test_identity.py::test_identity_payload_mutations_change_hash[canonical-row-payload0-mutation0]",
+    "tests/test_inspect_database.py::test_candidate_detection_rejects_incomplete_tables",
+    "tests/test_migration_callers.py::test_cli_migration_callers_use_centralized_schema_preparation[src/market_structure_lab/cli/reconcile_candles.py-_run-prepare_reconciliation_schema]",
+    "tests/test_phase4_golden.py::test_phase4_fixture_producer_exactly_owns_fs_000601_rows",
+    "tests/test_phase5_terminal_closure.py::test_terminal_closure_factory_and_exact_terminal_payload",
+    "tests/test_phase5_v1_immutability.py::test_v1_receipt_count_is_not_v2_slot_computation_evidence",
+    "tests/test_phase5_verification.py::test_manifest_rejects_empty_non_windows_shards",
+    "tests/test_phase5_verification_cli.py::test_dirty_worktree_is_rejected",
+    "tests/test_profile_accumulator.py::test_accumulator_rejects_invalid_value_area_fraction_at_construction[0.0]",
+    "tests/test_profile_allocations.py::test_allocation_models_reject_invalid_ohlcv[candle0]",
+    "tests/test_profile_allocations.py::test_triangular_close_allocation_is_close_weighted_and_conserves_volume",
+    "tests/test_profile_bins.py::test_fixed_bins_representative_prices_round_trip[-1-0.0001]",
+    "tests/test_profile_bins.py::test_fixed_bins_representative_prices_round_trip[-7-0.3333333333333333]",
+    "tests/test_profile_bins.py::test_fixed_bins_representative_prices_round_trip[10000-0.1]",
+    "tests/test_profile_bins.py::test_fixed_bins_use_deterministic_integer_indices[0.3-3]",
+    "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[-1000-0.0001]",
+    "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[-16-1e-06]",
+    "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[1-0.01]",
+    "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[1000-1e-08]",
+    "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[4-0.1]",
+    "tests/test_profile_bins.py::test_log_bins_round_trip_representative_prices",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[13]",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[21]",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[29]",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[36]",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[43]",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[50]",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[58]",
+    "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[6]",
+    "tests/test_profile_bins.py::test_target_count_factory_rejects_unrepresentable_public_boundaries",
+    "tests/test_profile_nodes.py::test_smoothing_radius_must_be_a_non_negative_integer",
+    "tests/test_profile_value_area.py::test_value_area_fraction_is_validated[0.0]",
+    "tests/test_publish_validation_cost_authority_v2_cli.py::test_cli_requires_disabled_network",
+    "tests/test_reconcile_candles_cli.py::test_plan_full_envelopes_uses_each_symbols_first_observation_to_cutoff",
+    "tests/test_reconciliation_manifests.py::test_freeze_reconciliation_run_is_canonical_and_complete",
+    "tests/test_reconciliation_migration.py::test_reconciliation_migration_is_append_only_and_promotion_gated",
+    "tests/test_reconciliation_orchestrator.py::test_execute_work_unit_publishes_provenance_replacements_and_split_coverage",
+    "tests/test_reconciliation_preflight.py::test_promotion_apply_rejects_database_replacements_that_differ_from_candidate_before_writes",
+    "tests/test_reconciliation_publication.py::test_coverage_validation_rejects_overlap_before_promotion",
+    "tests/test_reconciliation_publication.py::test_run_verifier_accepts_exact_match_with_ignored_optional_dump_fields",
+    "tests/test_reconciliation_publication.py::test_run_verifier_rejects_stages_missing_markers_and_failed_units",
+    "tests/test_recovery_gaps.py::test_plan_reports_reviewed_baseline_mismatches_explicitly",
+    "tests/test_research_candidates.py::test_a_atr24_uses_prior_exact_true_ranges_and_is_long_short_symmetric[long-103.0]",
+    "tests/test_research_candidates.py::test_arbitrary_time_signal_issuer_is_not_public",
+    "tests/test_research_candidates.py::test_candidate_signal_verifier_reopens_original_v1_parent_bytes",
+    "tests/test_research_candidates.py::test_flat_donchian_cannot_direct_mint_through_models_index_helper",
+    "tests/test_research_candidates.py::test_hour_windows_convert_to_exact_integral_target_bars[4h-8-2]",
+    "tests/test_research_candidates.py::test_series_helper_rebuilds_independent_v1_identities_from_causal_inputs",
+    "tests/test_research_controls.py::test_named_controls_and_prior_week_pseudo_levels_require_exact_causal_strata",
+    "tests/test_research_controls.py::test_unconditional_controls_are_exact_stratified_hash_ordered_and_count_shortage_is_explicit",
+    "tests/test_research_costs.py::test_event_coverage_is_keyed_by_event_venue_symbol_timeframe_and_utc_interval",
+    "tests/test_research_costs.py::test_policy_identity_is_canonical_and_rejects_tamper_replay",
+    "tests/test_research_models.py::test_each_independent_work_limit_rejects_before_iteration_or_allocation[bootstrap_blocks-max_bootstrap_blocks]",
+    "tests/test_research_models.py::test_each_independent_work_limit_rejects_before_iteration_or_allocation[inner_folds-max_inner_folds]",
+    "tests/test_research_models.py::test_each_independent_work_limit_rejects_before_iteration_or_allocation[profile_serialized_bytes-max_profile_serialized_bytes]",
+    "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_aggregate_bars]",
+    "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_events]",
+    "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_placebos]",
+    "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_source_rows]",
+    "tests/test_research_models.py::test_every_configurable_maximum_rejects_values_above_authoritative_ceiling[max_bootstrap_draws]",
+    "tests/test_research_models.py::test_every_configurable_maximum_rejects_values_above_authoritative_ceiling[max_inner_folds]",
+    "tests/test_research_models.py::test_every_configurable_maximum_rejects_values_above_authoritative_ceiling[max_profile_serialized_bytes]",
+    "tests/test_research_models.py::test_exact_evaluation_and_bootstrap_counts_reject_before_work[bootstrap_draws-4799]",
+    "tests/test_research_models.py::test_programme_config_rejects_changed_authoritative_lineage_or_family_order[families-value7]",
+    "tests/test_research_models.py::test_programme_identity_is_frozen_once_for_repeated_evaluation_ids",
+    "tests/test_research_models.py::test_roster_rejects_every_shape_mutation_even_when_total_is_1104[wrong_parameter]",
+    "tests/test_research_models.py::test_validation_programme_identity_requires_pinned_profile_artifact_hashes",
+    "tests/test_research_models.py::test_work_budget_rejects_changed_exact_counts_or_invalid_limits[max_source_bytes-1.5]",
+    "tests/test_research_outcomes.py::test_entry_minute_is_included_and_exit_minute_is_excluded",
+    "tests/test_research_outcomes.py::test_outcome_api_is_available_from_the_narrow_research_boundary",
+    "tests/test_research_receipts.py::test_concurrent_identical_publication_converges_on_verified_final",
+    "tests/test_research_receipts.py::test_evaluation_verification_requires_config_hashes_slot_ownership_and_vr_derivation",
+    "tests/test_research_receipts.py::test_publication_budgets_come_from_config_work_budget_before_staging",
+    "tests/test_research_robustness.py::test_ols_exposure_uses_one_intercept_train_only_scaling_references_and_unseen_zero_encoding",
+    "tests/test_research_robustness.py::test_regime_positive_support_requires_mean_strictly_above_zero_not_threshold",
+    "tests/test_research_splits.py::test_common_grid_accepts_every_complete_span_at_or_above_730_days[1h-731]",
+    "tests/test_research_splits.py::test_final_access_enforces_temporal_asset_and_unused_component_boundaries",
+    "tests/test_research_splits.py::test_final_access_rejects_reordered_incomplete_or_extra_batch_metadata[eligibility_receipt_sha256s-replacement4]",
+    "tests/test_research_splits.py::test_final_access_verification_rejects_tampered_capability[programme_id-VP-2222222222222222222222222222222222222222222222222222222222222222]",
+    "tests/test_research_splits.py::test_final_batch_rejects_wrong_programme_and_changed_grid_bounds",
+    "tests/test_research_splits.py::test_purge_excludes_training_intervals_inside_the_protected_test_fold",
+    "tests/test_research_splits.py::test_split_and_selection_outputs_cannot_be_replaced_or_directly_forged",
+    "tests/test_research_statistics.py::test_amended_draw_floor_preserves_each_frozen_family_holm_attainability[E-8]",
+    "tests/test_research_statistics.py::test_bootstrap_uses_exact_4800_sha_seeded_draws_and_indices",
+    "tests/test_research_validation.py::test_clean_root_replay_is_byte_identical",
+    "tests/test_research_validation.py::test_typed_source_preflight_rejects_before_deferred_iteration[btc]",
+    "tests/test_run_discovery_program_cli.py::test_main_returns_nonzero_for_failed_or_inconclusive_terminal_evidence[None-accepted-1]",
+    "tests/test_run_discovery_program_cli.py::test_main_returns_nonzero_for_failed_or_inconclusive_terminal_evidence[rejected-rejected-0]",
+    "tests/test_run_validation_program_cli.py::test_programme_config_loader_requires_exact_frozen_identity",
+    "tests/test_run_validation_program_cli.py::test_task10_cli_module_exists",
+    "tests/test_secure_windows.py::test_windows_directory_chain_rejects_reparse_component_and_closes_handles",
+    "tests/test_secure_windows_native.py::test_native_windows_retry_pins_before_predecessor_validation",
+    "tests/test_structure.py::test_compare_value_migration_classifies_overlapping_lower_value",
+    "tests/test_sync_candles_cli.py::test_database_errors_do_not_leak_sql_parameters_or_invalid_sqlstate",
+    "tests/test_transition_significance.py::test_independence_based_transition_significance_module_is_removed",
+    "tests/test_validation_precision_authority_v2.py::test_post_commit_drift_never_deletes_concurrent_replacement_sentinel",
+    "tests/test_validation_source_v2.py::test_availability_rejects_deleted_or_tampered_original_audit",
+    "tests/test_validation_source_v2.py::test_windows_pair_commit_scan_is_bounded_before_accumulation",
+    "tests/test_validation_source_v2.py::test_windows_validation_source_loader_checks_commit_before_tree_read",
+    "tests/test_validation_source_v2_publication.py::test_publication_rejects_scope_parent_and_partial_attacks[mixed_parent]",
+    "tests/test_validation_v2_costs.py::test_incomplete_costs_force_completed_inconclusive_and_never_edge_status",
+    "tests/test_validation_v2_data_readers.py::test_minute_path_budget_has_fixed_hard_ceilings",
+    "tests/test_validation_v2_data_readers.py::test_minute_path_requires_exact_count_origin_and_nominal_registered_objects",
+    "tests/test_validation_v2_detector_bridge.py::test_direct_private_seal_profile_stream_remains_unregistered",
+    "tests/test_validation_v2_inference.py::test_authority_rejects_direct_construction_replacement_copy_and_lookalike",
+    "tests/test_validation_v2_inference.py::test_evaluation_uses_an_operation_owned_snapshot_during_temporary_mutation",
+    "tests/test_validation_v2_inference.py::test_synthetic_oracle_rejects_missing_event_cost_coverage_before_registration",
+    "tests/test_validation_v2_models.py::test_v1_lineage_strings_cannot_substitute_for_v2_publications[coverage_identity-cb399ac01d0beeea4666da071d9186e9a144f3f7fe5e4d1bf760696c631e8529]",
+    "tests/test_validation_v2_outcomes.py::test_attaches_exact_next_bar_half_open_path_and_gross_excursions",
+    "tests/test_validation_v2_public_runner.py::test_public_runner_derives_nonempty_outcomes_from_verified_publications",
+    "tests/test_validation_v2_read_boundary.py::test_boundary_rejects_forbidden_requests_before_consumer_construction[final_time]",
+    "tests/test_validation_v2_read_boundary.py::test_each_consumer_kind_is_denied_before_construction[iterator]",
+    "tests/test_validation_v2_read_boundary.py::test_ledger_internally_denies_and_counts_final_scope",
+    "tests/test_validation_v2_real_vertical_slice.py::test_control_donor_horizons_never_overlap_across_roles",
+    "tests/test_validation_v2_real_vertical_slice.py::test_public_runner_rejects_mismatched_ledger_policy_before_minute_read",
+    "tests/test_validation_v2_real_vertical_slice.py::test_public_runner_rejects_unadmitted_candidate_before_aggregate_open",
+    "tests/test_validation_v2_receipt_authority.py::test_batch_publication_is_atomic_and_manifest_bound",
+    "tests/test_validation_v2_receipt_authority.py::test_exact_original_verifier_rejects_mutated_result_fields_before_evidence_execution[attempt_number-2]",
+    "tests/test_validation_v2_receipt_authority.py::test_posix_post_rename_failure_recovers_authenticated_committed_batch",
+    "tests/test_validation_v2_receipt_authority.py::test_receipt_batch_bounds_exact_sequences_before_copy_or_iteration",
+    "tests/test_validation_v2_receipt_authority.py::test_receipt_verifier_bounds_extra_batch_members",
+    "tests/test_validation_v2_receipt_authority.py::test_result_factory_rejects_unbounded_metrics_before_hashing[metrics1]",
+    "tests/test_validation_v2_receipt_authority.py::test_validation_result_rejects_dataclass_replacement",
+    "tests/test_validation_v2_receipts.py::test_report_retains_all_failed_retry_attempts",
+    "tests/test_validation_v2_slot_runner.py::test_family_holm_requires_exact_64_primaries_and_keeps_unevaluable_visible",
+    "tests/test_validation_v2_slot_runner.py::test_validation_programme_run_rejects_direct_construction_before_nested_access",
+    "tests/test_validation_v2_source_bundle_loader.py::test_loader_rejects_physical_source_demand_before_partition_iteration",
+    "tests/test_validation_v2_splits.py::test_ineligible_coverage_is_excluded_before_holdout",
+    "tests/test_validation_v3_cost_policy.py::test_missing_or_extra_event_coverage_completes_inconclusive",
+    "tests/test_validation_v3_cost_policy.py::test_zero_components_are_admissible_when_finite_aggregate_cost_is_positive"
+  ],
+  "commit_sha": "057a4a7293a0793f2bf2db98de1eb860a9cb3ddc",
+  "counts": {
+    "failed": 0,
+    "passed": 268,
+    "skipped": 2
+  },
+  "ended_at": "2026-08-03T00:08:32.886322Z",
+  "environment": {
+    "executable": "/tmp/msl-shard-repo-057a4a7-zF2YCV/.venv/bin/python3",
+    "operating_system": "Linux",
+    "platform": "system=Linux;release=6.18.33.2-microsoft-standard-WSL2;version=#1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026;machine=x86_64",
+    "python_implementation": "CPython",
+    "python_version": "3.13.13"
+  },
+  "exit_code": 0,
+  "lock_sha256": "a16b349b97b4c265129df59092f69981d9150a131772b8ed9f9ebda28dcaf44b",
+  "manifest_sha256": "ee06cf0ce639a45df7bef56e9689e3fbf8f34b38833fb6214d87ca513fb0ebfa",
+  "required_os": "non-Windows",
+  "result_sha256": "744c1dccf6d645e81f4b1acee50baaf89928805a20d82e1c3896284b38f83cc8",
+  "results": [
+    {
+      "nodeid": "tests/integration/test_freshness_postgres.py::test_isolated_postgres_freshness_invariants",
+      "status": "skipped"
+    },
+    {
+      "nodeid": "tests/test_aggregate_bars.py::test_aggregate_row_schema_and_serialized_byte_tampering_reject",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_bars.py::test_mixed_source_series_or_segment_is_rejected[symbol]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_bars.py::test_over_budget_declaration_rejects_before_source_iteration[demand_override2-budget_override2-aggregate_bars]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_bars.py::test_spool_rejects_symlink_in_earlier_trusted_root_descendant",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication.py::test_failed_claim_enumeration_rejects_external_link_and_retry_stays_terminal",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication.py::test_manifest_must_be_exact_canonical_json_bytes[whitespace]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication.py::test_partition_row_buffer_is_explicitly_capped_before_source_iteration",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication.py::test_publication_rejects_rows_not_proven_by_parent_snapshot[arbitrary]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication.py::test_verified_aggregate_series_is_read_only_from_exact_publication_bytes",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication_v2.py::test_aggregate_readers_never_yield_replaced_partition_bytes[public_iterator]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication_v2.py::test_original_parent_output_and_origin_mutations_reject",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_aggregate_publication_v2.py::test_sealed_series_retains_registered_parents_until_series_collection",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_artifact_io.py::test_read_bounded_regular_rejects_a_file_larger_than_the_limit",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_engine.py::test_commit_after_mutation_failure_restores_window_and_retries_cleanly",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_engine.py::test_failed_update_restores_every_mutable_collaborator_and_retries_cleanly[node-detection]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_engine.py::test_missing_cached_eviction_failure_leaves_exact_pre_call_state",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_engine.py::test_profile_work_budget_rejects_invalid_or_unsafe_limits[changes0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_engine.py::test_release_fault_is_non_throwing_cleanup_after_successful_commit[False-accumulator]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_engine.py::test_source_and_window_reset_causes_are_both_preserved[segment-and-window]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_replay.py::test_gap_rejects_by_default_without_mutating_state",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_replay.py::test_rolling_duration_engine_evicts_expired_contributions",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_windows.py::test_auction_candle_rejects_invalid_data[updates2-timeframe]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_windows.py::test_fixed_window_normalizes_bounds_and_has_stable_version_id",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_auction_windows.py::test_utc_session_windows_reset_at_calendar_boundary[UTCMonthWindow-before2-after2-utc-month-window-v1]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_backfill_candles_cli.py::test_database_errors_do_not_leak_sql_parameters_or_secrets",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_behaviour_catalogue.py::test_event_binding_requires_canonical_event_id_and_positive_duration[EV-1-60.0-canonical]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_behaviour_catalogue.py::test_freeze_behaviours_rejects_inconsistent_cluster_identity",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_behaviour_catalogue.py::test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes[changes15-outcome]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_behaviour_catalogue.py::test_freeze_behaviours_rejects_invalid_lengths_nonfinite_values_and_outcomes[changes7-outcome]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_binance_archive_v2.py::test_loaded_manifest_rejects_coherent_scope_and_path_forgery_before_io[final_period]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_binance_archive_v2.py::test_observed_trade_tape_has_narrow_authority",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_binance_recovery_source.py::test_archive_batches_have_distinct_resume_ranges",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_binance_recovery_source.py::test_archive_quarantines_off_grid_rows_with_durable_provenance",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_binance_recovery_source.py::test_parse_kline_preserves_exact_decimals_and_optional_fields",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_candle_freshness.py::test_every_symbol_has_one_status_and_blocked_sources_have_no_eligible_ranges",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_candle_reconciliation.py::test_reconciliation_hashes_source_and_dump_rows_canonically",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_candle_reconciliation.py::test_reconciliation_rejects_invalid_input_streams[dump_rows7-source_rows7-60000-market boundary]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_candle_recovery.py::test_every_gap_ends_with_an_explicit_terminal_classification[kwargs1-partially_recovered]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_candle_recovery.py::test_recovery_report_enforces_coverage_conservation_and_source_immutability",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_canonical_export.py::test_completed_export_is_idempotent_and_detects_tampering",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_canonical_export.py::test_research_snapshot_identity_rejects_partial_or_mismatched_boundary_binding",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_canonical_loader.py::test_loader_normalizes_offset_bounds_to_utc",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_canonical_loader.py::test_materializing_loader_requires_both_bounds",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_config.py::test_environment_builds_fresh_settings_without_a_global_singleton",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_dashboard_evidence.py::test_browser_trial_count_validator_rejects_extra_keys",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_dashboard_evidence.py::test_dashboard_rejects_nonexact_phase4_v4_fixture_contract[extra-raw-source]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_dashboard_evidence.py::test_dashboard_trial_ledger_fails_closed_on_any_malformed_entry[artifact_tamper]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_dashboard_evidence.py::test_generator_rejects_noncanonical_publication_timestamps[2026-07-17T03:00:00.123Z]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_dashboard_evidence.py::test_node_contract_rejects_stale_phase4_approval_gate",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_dashboard_evidence.py::test_task14_checkpoint_rejects_exact_boundary_and_cap_drift[discovery-end]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_dataset_layer.py::test_load_symbol_defaults_to_one_minute_dataset_for_symbol",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_duplicate_and_out_of_order_event_rows_fail_closed",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_event_source_linkage_is_rejected_before_event_iteration[manifest_change2]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_feature_partition_binding_is_timeframe_aware_for_overlapping_timestamps",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_feature_publication_rejects_every_nonexact_or_mutated_batch_before_replay[donor]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_interrupted_publication_releases_owner_and_removes_unique_staging",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_preexisting_publication_lock_is_never_stolen_or_consumed",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_published_event_binding_reader_rejects_manifest_and_schema_mismatch",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_published_event_bindings_stream_in_deterministic_bounded_batches",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_derived_publication.py::test_verifier_rejects_a_supplied_manifest_that_differs_from_disk",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_clustering.py::test_kmeans_fails_loudly_when_iteration_cap_prevents_consistent_result",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_clustering.py::test_kmeans_rejects_invalid_configuration[kwargs0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_clustering.py::test_kmeans_uses_stable_lowest_label_for_equal_distance_ties",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_clustering.py::test_pca_rejects_empty_insufficient_nonfinite_or_ragged_values[values0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_clustering.py::test_pca_rejects_invalid_component_count[True]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_clustering.py::test_pca_rejects_selected_implicit_wide_null_space",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_matrix.py::test_matrix_applies_cap_before_null_dropping",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_matrix.py::test_matrix_rejects_invalid_row_cap[0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_matrix.py::test_matrix_rejects_unsafe_feature_selection[names4-registered]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_motifs.py::test_bounded_multivariate_selection_matches_complete_sort[canonical]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_motifs.py::test_contiguous_motif_sequences_split_at_every_canonical_boundary[rows4]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_motifs.py::test_motif_exclusion_zone_removes_overlapping_neighbours",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_motifs.py::test_motifs_reject_invalid_inputs[sequence4-kwargs4-TypeError]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_motifs.py::test_multivariate_motifs_retain_identity_and_use_every_feature",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_motifs.py::test_unstable_motifs_are_retained_as_rejected_not_published",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_program.py::test_control_execution_binds_null_projection_evidence_to_manifest_and_budget[source_matrix]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_program.py::test_selected_universe_binds_verified_promotion_and_exact_scope",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_reliability.py::test_reliability_contracts_reject_invalid_result_invariants[single_cluster-result2]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_dirty_runtime_worktree_is_rejected_before_matrix_construction",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_discovery_run_is_atomic_reproducible_and_idempotent",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_discovery_work_budget_rejects_before_matrix_construction[maximum_pca_cells-23-PCA cells-24]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_discovery_work_budget_rejects_invalid_or_unsafe_limits[maximum_materialized_rows-0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_discovery_work_budget_serializes_exact_versioned_identity",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_input_artifact_symlinks_are_rejected_before_matrix_construction[marker-feature publication]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_input_artifact_symlinks_are_rejected_before_matrix_construction[tree-feature publication]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_motif_window_budget_rejects_before_provenance_or_matrix_construction",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_public_discovery_cannot_select_an_unrelated_runtime_repository",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_runs.py::test_run_rejects_incomplete_or_unknown_regime_row_ids_before_motif_construction[extra]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_splits.py::test_direct_discovery_input_construction_is_rejected",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_splits.py::test_make_discovery_input_rejects_empty_rows_and_unknown_purpose",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_splits.py::test_make_discovery_input_rejects_out_of_partition_symbol_cutoff_and_row_limit",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_stability.py::test_adjacent_period_software_fixture_policy_validates_every_threshold[maximum_assignment_margin_drift-True]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_stability.py::test_adjusted_rand_index_rejects_invalid_partitions[left1-right1-same length]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_stability.py::test_minimum_event_support_is_independent_from_asset_coverage",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_stability.py::test_stability_evaluation_rejects_invalid_identity_lengths_and_bounds[changes5-subsample_fraction]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_stability.py::test_stability_rejects_inconsistent_base_kmeans_evidence[assignments]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_cluster_observation_rejects_invalid_or_future_unsafe_identity",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_long_dwells_and_multiple_boundaries_are_explicit_dependence_diagnostics",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transition_estimate_direct_construction_fails_closed[changes10]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transition_estimate_direct_construction_fails_closed[changes18]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transition_estimate_direct_construction_fails_closed[changes7]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transition_matrix_capacity_accounts_for_horizon",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transition_uncertainty_policy_fails_closed[changes11]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transition_uncertainty_policy_fails_closed[changes19]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transition_uncertainty_policy_fails_closed[changes7]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_discovery_transitions.py::test_transitions_never_cross_symbol_timeframe_segment_session_or_gap[boundary_rows3-session_break_count]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_event_detectors.py::test_feature_identity_drift_cannot_reuse_detector_history[feature_set_id]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_event_detectors.py::test_snapshot_identity_drift_cannot_reuse_detector_history[profile_definition_id]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_event_overlap.py::test_overlap_report_matches_naive_half_open_reference",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_event_windows.py::test_fixed_windows_discard_partial_tail_at_each_segment_boundary",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_event_windows.py::test_segmenters_fail_closed_on_identity_order_gap_and_segment_errors[rows3-segment identifiers]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_experiments.py::test_attempt_boundary_classifies_output_validation_or_publication_failure[invalid-artifact]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_experiments.py::test_attempt_preflight_rejects_stale_stage_before_algorithm_invocation",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_experiments.py::test_identical_trial_replay_is_byte_idempotent",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_experiments.py::test_metrics_json_is_mandatory_even_for_terminal_failure",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_experiments.py::test_run_id_reserves_staging_path_token[TR-staging-001]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_experiments.py::test_trial_publication_rejects_dangling_links_before_writes[dangling-final]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_experiments.py::test_trial_verification_rejects_stale_or_extra_files[stale]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_builder.py::test_builder_emits_immutable_replayable_producer_bound_batch",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_builder.py::test_explicit_reset_events_clear_history_before_current_row[window_reset]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_builder.py::test_only_exact_issued_batch_instance_can_replay[copy]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_builder.py::test_producer_bound_batch_uses_sealed_row_construction_despite_method_overrides[subclass]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_builder.py::test_stream_identity_drift_cannot_reuse_trailing_history[window_version]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_normalization.py::test_fit_rejects_empty_rows_and_invalid_registry_row",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_normalization.py::test_holdout_values_cannot_poison_training_fit",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_normalization.py::test_transform_rejects_rows_from_other_artifact_identity",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_registry.py::test_discovery_registry_rejects_prohibited_future_or_outcome_names[outcome_label]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_registry.py::test_feature_definition_rejects_unsafe_or_incomplete_metadata[changes2-units]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_registry.py::test_feature_row_requires_non_negative_integer_segment_id[True]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_registry.py::test_float_features_reject_non_finite_or_wrong_types[True]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_registry.py::test_innocent_feature_names_cannot_hide_semantic_leakage[changes5-after declared cutoff]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_feature_registry.py::test_registry_requires_manually_allocated_decimal_feature_set_id[FS-1]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_freeze_validation_boundary_v2_cli.py::test_freezer_is_byte_deterministic_and_no_clobber",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_freshness_snapshot.py::test_provenance_policy_does_not_admit_recovery_failures[partially_recovered]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_freshness_snapshot.py::test_snapshot_identity_pins_all_freshness_evidence",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_freshness_sync.py::test_latest_pointer_rejects_report_linked_to_a_different_plan",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_freshness_sync.py::test_legacy_latest_directory_without_commit_receipts_remains_readable",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_freshness_sync.py::test_report_retains_explicit_unresolved_recovery_reason[unresolved-unresolved]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_fs_durability.py::test_windows_durable_move_uses_secure_write_through_without_directory_open",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_identity.py::test_identity_payload_mutations_change_hash[canonical-row-payload0-mutation0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_inspect_database.py::test_candidate_detection_rejects_incomplete_tables",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_migration_callers.py::test_cli_migration_callers_use_centralized_schema_preparation[src/market_structure_lab/cli/reconcile_candles.py-_run-prepare_reconciliation_schema]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_phase4_golden.py::test_phase4_fixture_producer_exactly_owns_fs_000601_rows",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_phase5_terminal_closure.py::test_terminal_closure_factory_and_exact_terminal_payload",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_phase5_v1_immutability.py::test_v1_receipt_count_is_not_v2_slot_computation_evidence",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_phase5_verification.py::test_manifest_rejects_empty_non_windows_shards",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_phase5_verification_cli.py::test_dirty_worktree_is_rejected",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_accumulator.py::test_accumulator_rejects_invalid_value_area_fraction_at_construction[0.0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_allocations.py::test_allocation_models_reject_invalid_ohlcv[candle0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_allocations.py::test_triangular_close_allocation_is_close_weighted_and_conserves_volume",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_fixed_bins_representative_prices_round_trip[-1-0.0001]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_fixed_bins_representative_prices_round_trip[-7-0.3333333333333333]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_fixed_bins_representative_prices_round_trip[10000-0.1]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_fixed_bins_use_deterministic_integer_indices[0.3-3]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[-1000-0.0001]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[-16-1e-06]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[1-0.01]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[1000-1e-08]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_log_bins_round_trip_fine_percentages[4-0.1]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_log_bins_round_trip_representative_prices",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[13]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[21]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[29]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[36]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[43]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[50]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[58]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_dense_fractional_grid_round_trips[6]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_bins.py::test_target_count_factory_rejects_unrepresentable_public_boundaries",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_nodes.py::test_smoothing_radius_must_be_a_non_negative_integer",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_profile_value_area.py::test_value_area_fraction_is_validated[0.0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_publish_validation_cost_authority_v2_cli.py::test_cli_requires_disabled_network",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconcile_candles_cli.py::test_plan_full_envelopes_uses_each_symbols_first_observation_to_cutoff",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconciliation_manifests.py::test_freeze_reconciliation_run_is_canonical_and_complete",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconciliation_migration.py::test_reconciliation_migration_is_append_only_and_promotion_gated",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconciliation_orchestrator.py::test_execute_work_unit_publishes_provenance_replacements_and_split_coverage",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconciliation_preflight.py::test_promotion_apply_rejects_database_replacements_that_differ_from_candidate_before_writes",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconciliation_publication.py::test_coverage_validation_rejects_overlap_before_promotion",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconciliation_publication.py::test_run_verifier_accepts_exact_match_with_ignored_optional_dump_fields",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_reconciliation_publication.py::test_run_verifier_rejects_stages_missing_markers_and_failed_units",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_recovery_gaps.py::test_plan_reports_reviewed_baseline_mismatches_explicitly",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_candidates.py::test_a_atr24_uses_prior_exact_true_ranges_and_is_long_short_symmetric[long-103.0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_candidates.py::test_arbitrary_time_signal_issuer_is_not_public",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_candidates.py::test_candidate_signal_verifier_reopens_original_v1_parent_bytes",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_candidates.py::test_flat_donchian_cannot_direct_mint_through_models_index_helper",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_candidates.py::test_hour_windows_convert_to_exact_integral_target_bars[4h-8-2]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_candidates.py::test_series_helper_rebuilds_independent_v1_identities_from_causal_inputs",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_controls.py::test_named_controls_and_prior_week_pseudo_levels_require_exact_causal_strata",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_controls.py::test_unconditional_controls_are_exact_stratified_hash_ordered_and_count_shortage_is_explicit",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_costs.py::test_event_coverage_is_keyed_by_event_venue_symbol_timeframe_and_utc_interval",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_costs.py::test_policy_identity_is_canonical_and_rejects_tamper_replay",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_each_independent_work_limit_rejects_before_iteration_or_allocation[bootstrap_blocks-max_bootstrap_blocks]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_each_independent_work_limit_rejects_before_iteration_or_allocation[inner_folds-max_inner_folds]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_each_independent_work_limit_rejects_before_iteration_or_allocation[profile_serialized_bytes-max_profile_serialized_bytes]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_aggregate_bars]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_events]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_placebos]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_every_configurable_maximum_allows_a_reduction[max_source_rows]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_every_configurable_maximum_rejects_values_above_authoritative_ceiling[max_bootstrap_draws]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_every_configurable_maximum_rejects_values_above_authoritative_ceiling[max_inner_folds]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_every_configurable_maximum_rejects_values_above_authoritative_ceiling[max_profile_serialized_bytes]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_exact_evaluation_and_bootstrap_counts_reject_before_work[bootstrap_draws-4799]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_programme_config_rejects_changed_authoritative_lineage_or_family_order[families-value7]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_programme_identity_is_frozen_once_for_repeated_evaluation_ids",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_roster_rejects_every_shape_mutation_even_when_total_is_1104[wrong_parameter]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_validation_programme_identity_requires_pinned_profile_artifact_hashes",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_models.py::test_work_budget_rejects_changed_exact_counts_or_invalid_limits[max_source_bytes-1.5]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_outcomes.py::test_entry_minute_is_included_and_exit_minute_is_excluded",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_outcomes.py::test_outcome_api_is_available_from_the_narrow_research_boundary",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_receipts.py::test_concurrent_identical_publication_converges_on_verified_final",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_receipts.py::test_evaluation_verification_requires_config_hashes_slot_ownership_and_vr_derivation",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_receipts.py::test_publication_budgets_come_from_config_work_budget_before_staging",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_robustness.py::test_ols_exposure_uses_one_intercept_train_only_scaling_references_and_unseen_zero_encoding",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_robustness.py::test_regime_positive_support_requires_mean_strictly_above_zero_not_threshold",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_splits.py::test_common_grid_accepts_every_complete_span_at_or_above_730_days[1h-731]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_splits.py::test_final_access_enforces_temporal_asset_and_unused_component_boundaries",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_splits.py::test_final_access_rejects_reordered_incomplete_or_extra_batch_metadata[eligibility_receipt_sha256s-replacement4]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_splits.py::test_final_access_verification_rejects_tampered_capability[programme_id-VP-2222222222222222222222222222222222222222222222222222222222222222]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_splits.py::test_final_batch_rejects_wrong_programme_and_changed_grid_bounds",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_splits.py::test_purge_excludes_training_intervals_inside_the_protected_test_fold",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_splits.py::test_split_and_selection_outputs_cannot_be_replaced_or_directly_forged",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_statistics.py::test_amended_draw_floor_preserves_each_frozen_family_holm_attainability[E-8]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_statistics.py::test_bootstrap_uses_exact_4800_sha_seeded_draws_and_indices",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_validation.py::test_clean_root_replay_is_byte_identical",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_research_validation.py::test_typed_source_preflight_rejects_before_deferred_iteration[btc]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_run_discovery_program_cli.py::test_main_returns_nonzero_for_failed_or_inconclusive_terminal_evidence[None-accepted-1]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_run_discovery_program_cli.py::test_main_returns_nonzero_for_failed_or_inconclusive_terminal_evidence[rejected-rejected-0]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_run_validation_program_cli.py::test_programme_config_loader_requires_exact_frozen_identity",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_run_validation_program_cli.py::test_task10_cli_module_exists",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_secure_windows.py::test_windows_directory_chain_rejects_reparse_component_and_closes_handles",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_secure_windows_native.py::test_native_windows_retry_pins_before_predecessor_validation",
+      "status": "skipped"
+    },
+    {
+      "nodeid": "tests/test_structure.py::test_compare_value_migration_classifies_overlapping_lower_value",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_sync_candles_cli.py::test_database_errors_do_not_leak_sql_parameters_or_invalid_sqlstate",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_transition_significance.py::test_independence_based_transition_significance_module_is_removed",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_precision_authority_v2.py::test_post_commit_drift_never_deletes_concurrent_replacement_sentinel",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_source_v2.py::test_availability_rejects_deleted_or_tampered_original_audit",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_source_v2.py::test_windows_pair_commit_scan_is_bounded_before_accumulation",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_source_v2.py::test_windows_validation_source_loader_checks_commit_before_tree_read",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_source_v2_publication.py::test_publication_rejects_scope_parent_and_partial_attacks[mixed_parent]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_costs.py::test_incomplete_costs_force_completed_inconclusive_and_never_edge_status",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_data_readers.py::test_minute_path_budget_has_fixed_hard_ceilings",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_data_readers.py::test_minute_path_requires_exact_count_origin_and_nominal_registered_objects",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_detector_bridge.py::test_direct_private_seal_profile_stream_remains_unregistered",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_inference.py::test_authority_rejects_direct_construction_replacement_copy_and_lookalike",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_inference.py::test_evaluation_uses_an_operation_owned_snapshot_during_temporary_mutation",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_inference.py::test_synthetic_oracle_rejects_missing_event_cost_coverage_before_registration",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_models.py::test_v1_lineage_strings_cannot_substitute_for_v2_publications[coverage_identity-cb399ac01d0beeea4666da071d9186e9a144f3f7fe5e4d1bf760696c631e8529]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_outcomes.py::test_attaches_exact_next_bar_half_open_path_and_gross_excursions",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_public_runner.py::test_public_runner_derives_nonempty_outcomes_from_verified_publications",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_read_boundary.py::test_boundary_rejects_forbidden_requests_before_consumer_construction[final_time]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_read_boundary.py::test_each_consumer_kind_is_denied_before_construction[iterator]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_read_boundary.py::test_ledger_internally_denies_and_counts_final_scope",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_real_vertical_slice.py::test_control_donor_horizons_never_overlap_across_roles",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_real_vertical_slice.py::test_public_runner_rejects_mismatched_ledger_policy_before_minute_read",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_real_vertical_slice.py::test_public_runner_rejects_unadmitted_candidate_before_aggregate_open",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipt_authority.py::test_batch_publication_is_atomic_and_manifest_bound",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipt_authority.py::test_exact_original_verifier_rejects_mutated_result_fields_before_evidence_execution[attempt_number-2]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipt_authority.py::test_posix_post_rename_failure_recovers_authenticated_committed_batch",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipt_authority.py::test_receipt_batch_bounds_exact_sequences_before_copy_or_iteration",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipt_authority.py::test_receipt_verifier_bounds_extra_batch_members",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipt_authority.py::test_result_factory_rejects_unbounded_metrics_before_hashing[metrics1]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipt_authority.py::test_validation_result_rejects_dataclass_replacement",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_receipts.py::test_report_retains_all_failed_retry_attempts",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_slot_runner.py::test_family_holm_requires_exact_64_primaries_and_keeps_unevaluable_visible",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_slot_runner.py::test_validation_programme_run_rejects_direct_construction_before_nested_access",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_source_bundle_loader.py::test_loader_rejects_physical_source_demand_before_partition_iteration",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v2_splits.py::test_ineligible_coverage_is_excluded_before_holdout",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v3_cost_policy.py::test_missing_or_extra_event_coverage_completes_inconclusive",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_validation_v3_cost_policy.py::test_zero_components_are_admissible_when_finite_aggregate_cost_is_positive",
+      "status": "passed"
+    }
+  ],
+  "schema_version": "phase5-repository-verification-v1",
+  "shard_id": "non-windows-03",
+  "started_at": "2026-08-02T23:14:49.223182Z",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "3af818e9625cbcbd4b11b2b12a0d77338ff5039ed7f08ac023d5429109d2dec6"
+}

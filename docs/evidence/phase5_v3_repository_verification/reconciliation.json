@@ -1,0 +1,29 @@
+{
+  "all_shards_completed": true,
+  "collection_count": 2172,
+  "collection_sha256": "17f59f9087af668c1cc19f9956f7acbe46724960a8e14c54d17e5d0a35558f85",
+  "commit_sha": "057a4a7293a0793f2bf2db98de1eb860a9cb3ddc",
+  "counts": {
+    "failed": 0,
+    "passed": 2153,
+    "skipped": 19
+  },
+  "generated_at": "2026-08-03T00:15:44.432657Z",
+  "lock_sha256": "a16b349b97b4c265129df59092f69981d9150a131772b8ed9f9ebda28dcaf44b",
+  "manifest_sha256": "ee06cf0ce639a45df7bef56e9689e3fbf8f34b38833fb6214d87ca513fb0ebfa",
+  "nonzero_exit_shards": [],
+  "reconciliation_sha256": "6a79fbd48e105456048228cd16907773365600cb201beaff43378ccfec20d87a",
+  "result_sha256s": [
+    "db7b7f117f916cf92db923d6b146e41d3cdd5db39b6ed21b0b8e0069454a8124",
+    "614bdc6b70a2081c47b545dc039533d66a7d2241c7743fb7019c9d2676b7e798",
+    "744c1dccf6d645e81f4b1acee50baaf89928805a20d82e1c3896284b38f83cc8",
+    "400463a7fcb39d8c5f3a30adb4893b2207f4c8e41eeb850b22bc67d98fd6eb60",
+    "ae3eb7ccdef553c94ebd4b1707bb133a907937de1e3ddd73c37496647dcc3344",
+    "11ef12322bbe5708c39f391e2262e2bf6d226254d1ac7a6f1a1175fe4e03eac5",
+    "9a37c72a3faf47dcd13d3c225d35521904210e68057ac23f8bd898688f16dad7",
+    "35216c4673d8f88cf6c8ddfe66e9229fd1dd37448613e172897a9974ab064f32",
+    "8cc4006dd98b11dc9304d2e68c5e8be07108d1a10e879778fd9ce7f288aae2e8"
+  ],
+  "schema_version": "phase5-repository-verification-v1",
+  "verification_passed": true
+}

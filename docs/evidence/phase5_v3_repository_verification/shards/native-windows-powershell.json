@@ -1,0 +1,102 @@
+{
+  "collection_sha256": "17f59f9087af668c1cc19f9956f7acbe46724960a8e14c54d17e5d0a35558f85",
+  "command": [
+    "C:\\Users\\albak\\AppData\\Local\\Temp\\msl-phase5-verification-057a4a7-venv\\Scripts\\python.exe",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "market_structure_lab.research.pytest_result_plugin",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[non_trading]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[partially_recovered]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[provider_absent]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_fails_cleanly_when_docker_daemon_is_unavailable",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_host_lock_rejects_a_concurrent_invocation",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_preserves_pending_manifest_and_resumes_without_new_plan",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_refuses_to_start_postgres_without_durable_version_marker",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_rejects_report_hash_mismatch_and_preserves_pending",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_returns_operational_failure_for_unexpected_compatible_status",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_returns_zero_when_reviewed_universe_is_fully_current",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_reuses_exact_manifest_and_classifies_reviewed_conflicts",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_starts_only_existing_durable_postgres_safely[None-expected_command1]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_starts_only_existing_durable_postgres_safely[exited|none-expected_command0]"
+  ],
+  "commit_sha": "057a4a7293a0793f2bf2db98de1eb860a9cb3ddc",
+  "counts": {
+    "failed": 0,
+    "passed": 13,
+    "skipped": 0
+  },
+  "ended_at": "2026-08-02T23:17:11.996857Z",
+  "environment": {
+    "executable": "C:\\Users\\albak\\AppData\\Local\\Temp\\msl-phase5-verification-057a4a7-venv\\Scripts\\python.exe",
+    "operating_system": "Windows",
+    "platform": "system=Windows;release=11;version=10.0.26200;machine=AMD64",
+    "python_implementation": "CPython",
+    "python_version": "3.13.13"
+  },
+  "exit_code": 0,
+  "lock_sha256": "a16b349b97b4c265129df59092f69981d9150a131772b8ed9f9ebda28dcaf44b",
+  "manifest_sha256": "ee06cf0ce639a45df7bef56e9689e3fbf8f34b38833fb6214d87ca513fb0ebfa",
+  "required_os": "Windows",
+  "result_sha256": "8cc4006dd98b11dc9304d2e68c5e8be07108d1a10e879778fd9ce7f288aae2e8",
+  "results": [
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[non_trading]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[partially_recovered]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[provider_absent]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_fails_cleanly_when_docker_daemon_is_unavailable",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_host_lock_rejects_a_concurrent_invocation",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_preserves_pending_manifest_and_resumes_without_new_plan",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_refuses_to_start_postgres_without_durable_version_marker",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_rejects_report_hash_mismatch_and_preserves_pending",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_returns_operational_failure_for_unexpected_compatible_status",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_returns_zero_when_reviewed_universe_is_fully_current",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_reuses_exact_manifest_and_classifies_reviewed_conflicts",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_starts_only_existing_durable_postgres_safely[None-expected_command1]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "tests/test_daily_candle_refresh_runner.py::test_runner_starts_only_existing_durable_postgres_safely[exited|none-expected_command0]",
+      "status": "passed"
+    }
+  ],
+  "schema_version": "phase5-repository-verification-v1",
+  "shard_id": "native-windows-powershell",
+  "started_at": "2026-08-02T23:16:26.572942Z",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "6d003c3d531251c90e58dbbf62e59075762b15e2212778e79ce6c5a0c06374e2"
+}
