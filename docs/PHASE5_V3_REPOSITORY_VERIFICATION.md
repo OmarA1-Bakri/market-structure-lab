@@ -5,7 +5,7 @@
 The exact source checkpoint `057a4a7293a0793f2bf2db98de1eb860a9cb3ddc` on
 `agent/research-lab-foundation` passed the deterministic repository verification gate. The
 machine-readable publication is in `docs/evidence/phase5_v3_repository_verification/`; its summary
-identity is `5ce012e50e01f52f757d9f39f2d9357380b3fd84424f76237133b1f023aacaee`.
+identity is `be215ad91874caf9d86a7064806d2342ba667c412f80c182a21c7a1d4da360fd`.
 
 This engineering result does not change the scientific terminal state. Phase 5-v3 remains a
 truthful `missing_prerequisites` closure with zero scientifically evaluated candidates. No
@@ -53,9 +53,10 @@ No failed verification attempt was hidden or relabelled.
    subprocess, and the isolated dashboard test lacked its locked Node installation. The defects
    were corrected, independently reviewed, and the complete inventory was recollected and rerun at
    `057a4a7` with `npm ci` completed before testing.
-3. A first native-Windows launch encountered the repository's WSL-only `.venv` link. That launch
-   was preserved as failed; the final Windows run used a separate locked Windows environment and
-   passed all 13 assigned tests. The WSL link was restored unchanged.
+3. The initial native-Windows shard launch failed before per-node accounting. Its identity-bound
+   failure receipt preserves the command, environment, timestamps, exit code, and output hashes.
+   The final Windows run used a separate locked Windows environment and passed all 13 assigned
+   tests; the repository's WSL environment link was restored unchanged.
 
 ## Additional gates
 
