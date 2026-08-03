@@ -5,7 +5,7 @@
 The exact source checkpoint `057a4a7293a0793f2bf2db98de1eb860a9cb3ddc` on
 `agent/research-lab-foundation` passed the deterministic repository verification gate. The
 machine-readable publication is in `docs/evidence/phase5_v3_repository_verification/`; its summary
-identity is `d54bfe3af8d7e226394a264ae53395c01754a9a628c947e1d57693a41c8cf4c4`.
+identity is `5ce012e50e01f52f757d9f39f2d9357380b3fd84424f76237133b1f023aacaee`.
 
 This engineering result does not change the scientific terminal state. Phase 5-v3 remains a
 truthful `missing_prerequisites` closure with zero scientifically evaluated candidates. No
@@ -36,6 +36,11 @@ The manifest records the collection command and exact node inventory. Each shard
 records its command, platform, start/end timestamps, exit code, stdout/stderr hashes, and exact
 per-node status. Reconciliation rehashed the collection and shard evidence before accepting the
 complete inventory.
+
+The summary also binds the controlling audit identity `e43d329a...`, no-successor identity
+`661093d5...`, closure `22dd6454...`, and the exact closure publication, configuration, programme
+tree, programme receipt, and empty-batch identities. The engineering publication therefore cannot
+detach its final-access zeros or terminal decision from the authenticated scientific records.
 
 ## Superseded verification attempts
 

@@ -1,0 +1,42 @@
+{
+  "assigned_nodeid_count": 13,
+  "command": [
+    "C:\\Users\\albak\\AppData\\Local\\Temp\\msl-phase5-verification-329b363-venv\\Scripts\\python.exe",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "market_structure_lab.research.pytest_result_plugin",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[non_trading]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[partially_recovered]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_advances_after_terminal_compatible_coverage_limit[provider_absent]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_fails_cleanly_when_docker_daemon_is_unavailable",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_host_lock_rejects_a_concurrent_invocation",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_preserves_pending_manifest_and_resumes_without_new_plan",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_refuses_to_start_postgres_without_durable_version_marker",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_rejects_report_hash_mismatch_and_preserves_pending",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_returns_operational_failure_for_unexpected_compatible_status",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_returns_zero_when_reviewed_universe_is_fully_current",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_reuses_exact_manifest_and_classifies_reviewed_conflicts",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_starts_only_existing_durable_postgres_safely[None-expected_command1]",
+    "tests/test_daily_candle_refresh_runner.py::test_runner_starts_only_existing_durable_postgres_safely[exited|none-expected_command0]"
+  ],
+  "ended_at": "2026-08-02T22:06:16.934194Z",
+  "environment": {
+    "executable": "C:\\Users\\albak\\AppData\\Local\\Temp\\msl-phase5-verification-329b363-venv\\Scripts\\python.exe",
+    "operating_system": "Windows",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python_implementation": "CPython",
+    "python_version": "3.13.13"
+  },
+  "error": "shard result does not account for every assigned node id exactly once",
+  "error_type": "ValueError",
+  "exit_code": 4,
+  "manifest_sha256": "82bba3f8f7ce573a7c28c5bc2d57d1c898c8aac9f90fcc87d060cbb067e67fdc",
+  "recorded_status_count": 0,
+  "schema_version": "phase5-repository-verification-shard-failure-v1",
+  "shard_id": "native-windows-powershell",
+  "started_at": "2026-08-02T22:06:13.701357Z",
+  "stderr_sha256": "b3821699fafa71e23854573a229039f4cc5f76330b8b43891bcdeddf3056091f",
+  "stdout_sha256": "a2ead232c72e95eb3b559726e8caa2345284e5db9d6c8733f4452d9683b7a22b"
+}
