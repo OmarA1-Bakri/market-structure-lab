@@ -9,7 +9,7 @@ development boundary.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -25,12 +25,21 @@ import tempfile
 from typing import Any, ClassVar, Self
 import weakref
 
+from sqlalchemy import Engine, create_engine, text
+
+from market_structure_lab.core.config import (
+    CandleSourceMapping,
+    MarketDataSettings,
+    TimestampUnit,
+)
+
 from market_structure_lab.core.artifact_io import (
     bounded_regular_files,
     iter_verified_regular_lines,
     path_exists_no_follow,
     read_bounded_regular,
     require_regular_directory,
+    sha256_regular,
 )
 from market_structure_lab.core.fs_durability import (
     durable_move_no_replace,
@@ -58,8 +67,20 @@ from market_structure_lab.research.validation_v2_splits import (
     DevelopmentSplitPublicationV2,
     verify_development_read_boundary_v2,
 )
+from market_structure_lab.data.recovery import RecoveryCandle
+from market_structure_lab.data.validation_rr_ledger_v2 import (
+    RRLedgerInventoryV2,
+    iter_scoped_rr_ledger_rows_v2,
+    preflight_scoped_rr_ledger_parts_v2,
+    reopen_rr_ledger_inventory_v2,
+    verify_rr_ledger_inventory_v2,
+)
+from market_structure_lab.data.validation_source_trust_root_v2 import (
+    TRUSTED_VERIFIER_EVIDENCE_SHA256_V2 as _TRUSTED_VERIFIER_EVIDENCE_SHA256,
+)
 
 _MAX_DESCRIPTOR_BYTES = 1024 * 1024
+_MAX_SOURCE_ANCESTRY_BYTES = 4 * 1024 * 1024
 _MAX_CANDIDATES = 1_000
 _MAX_WINDOWS_PAIR_PARENT_ENTRIES = 10_000
 _MAX_WINDOWS_PAIR_COMMIT_CANDIDATES = 100
@@ -74,6 +95,7 @@ _MAX_CANONICAL_ROW_BYTES = 4_096
 # Frozen validation outcomes use at most a 24-hour (1,440 row) minute path.
 # Keep tuple-returning readers conservatively bounded above that horizon.
 _MAX_VERIFIED_MINUTE_PATH_ROWS = 10_000
+_MAX_POSTGRESQL_MINUTE_BATCH_ROWS = 10_000
 _MAX_MINUTE_PUBLICATION_BYTES = 64 * 1024 * 1024
 _MAX_MINUTE_PUBLICATION_ENTRIES = 100_000
 _MINUTE_PATH_FACTORY = object()
@@ -84,7 +106,49 @@ _MINUTE_PATH_BUDGET_CEILINGS = {
     "max_partitions": _MAX_MINUTE_PUBLICATION_ENTRIES - 2,
     "max_returned_rows": 50_000_000,
 }
-_TRUSTED_VERIFIER_EVIDENCE_SHA256: frozenset[str] = frozenset()
+_EXPECTED_DERIVED_TARGET_TIMEFRAMES = ("1h", "4h")
+_RECONCILED_VIEW_COLUMNS = (
+    "source_row_id",
+    "symbol",
+    "interval",
+    "open_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quote_volume",
+    "trades",
+    "created_at",
+    "origin",
+    "source_name",
+    "payload_checksum",
+    "recovery_run_id",
+    "reconciliation_run_id",
+)
+_POSTGRESQL_SOURCE_PREFLIGHT_SQL = """
+WITH active_promotion AS (
+    SELECT run_id, manifest_sha256, replacement_logical_sha256,
+           canonical_logical_sha256
+    FROM market_data.candle_reconciliation_promotions
+    ORDER BY promotion_id DESC
+    LIMIT 1
+), view_columns AS (
+    SELECT array_agg(column_name ORDER BY ordinal_position) AS names
+    FROM information_schema.columns
+    WHERE table_schema = 'market_data' AND table_name = 'candles_reconciled'
+)
+SELECT
+    (SELECT count(*) FROM market_data.candle_reconciliation_promotions
+      WHERE run_id = 'RR-000008') AS promotion_count,
+    active_promotion.run_id,
+    active_promotion.manifest_sha256,
+    active_promotion.replacement_logical_sha256,
+    active_promotion.canonical_logical_sha256,
+    view_columns.names AS view_columns,
+    pg_get_viewdef('market_data.candles_reconciled'::regclass, true) AS view_definition
+FROM active_promotion CROSS JOIN view_columns
+"""
 _VERIFIED_AVAILABILITIES: dict[
     int,
     tuple[
@@ -115,7 +179,7 @@ _VERIFIED_MINUTE_SOURCE_CAPABILITIES: dict[
         weakref.ReferenceType[DevelopmentReadBoundaryV2],
         weakref.ReferenceType[ScopedSourceAvailabilityV2],
         tuple[tuple[Path, bytes], ...],
-        _FixtureMinuteReadImplementationV2,
+        _FixtureMinuteReadImplementationV2 | _PostgresqlMinuteReadImplementationV2,
     ],
 ] = {}
 
@@ -332,6 +396,31 @@ class SourceDiscoveryResultV2:
     availability: ScopedSourceAvailabilityV2
     publication_root: Path
     audit_ledger_root: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ScopedSourceCandidateEvidenceV2:
+    """Non-authorizing exact-byte candidate evidence awaiting trust-root review."""
+
+    publication_root: Path
+    source_identity: str
+    descriptor_sha256: str
+    original_manifest_sha256: str
+    predicate_evidence_sha256: str
+    verifier_evidence_sha256: str
+
+    def __post_init__(self) -> None:
+        if not self.publication_root.is_absolute():
+            raise ValueError("candidate evidence publication root must be absolute")
+        if not self.source_identity:
+            raise ValueError("candidate evidence source identity is required")
+        for value, label in (
+            (self.descriptor_sha256, "descriptor_sha256"),
+            (self.original_manifest_sha256, "original_manifest_sha256"),
+            (self.predicate_evidence_sha256, "predicate_evidence_sha256"),
+            (self.verifier_evidence_sha256, "verifier_evidence_sha256"),
+        ):
+            _require_sha256(value, label)
 
 
 @dataclass(frozen=True, slots=True)
@@ -747,6 +836,39 @@ class _FixtureMinuteReadImplementationV2:
 
 
 @dataclass(frozen=True, slots=True)
+class _PostgresqlMinuteReadImplementationV2:
+    engine: Engine
+    batch_size: int
+    mapping: CandleSourceMapping
+    origin: _VerifiedMinuteSourceOriginV2
+    expected_metadata: _PostgresqlSourceMetadataV2
+    rr_inventory: RRLedgerInventoryV2
+
+
+@dataclass(frozen=True, slots=True)
+class _PostgresqlSourceMetadataV2:
+    promotion_count: int
+    run_id: str
+    manifest_sha256: str
+    replacement_logical_sha256: str
+    canonical_logical_sha256: str
+    view_columns: tuple[str, ...]
+    view_definition: str
+
+    def verifier_payload(self) -> dict[str, object]:
+        canonical_view = _canonical_view_definition_bytes(self.view_definition)
+        return {
+            "promotion_count": self.promotion_count,
+            "run_id": self.run_id,
+            "manifest_sha256": self.manifest_sha256,
+            "replacement_logical_sha256": self.replacement_logical_sha256,
+            "canonical_logical_sha256": self.canonical_logical_sha256,
+            "view_columns": list(self.view_columns),
+            "normalized_view_definition_sha256": hashlib.sha256(canonical_view).hexdigest(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _MinuteAuditCompletionV2:
     symbol: str
     interval_index: int
@@ -810,6 +932,713 @@ class VerifiedDevelopmentMinuteSourceV2:
         ):
             raise ValueError("verified minute source capability bytes differ")
 
+    def close(self) -> None:
+        """Dispose the sealed reader and revoke this single-process capability."""
+
+        _close_minute_source_capability(self)
+
+    def __enter__(self) -> Self:
+        _registered_minute_source_implementation(self)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
+def publish_scoped_source_candidate_inputs_v2(
+    *,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    raw_dump_path: Path,
+    rr_promotion_receipt_path: Path,
+    recovery_manifest_path: Path,
+    reconciled_view_definition_path: Path,
+    rr_publication_root_path: Path | None = None,
+    output_root: Path,
+) -> Path:
+    """Publish ancestry-bound manifest and predicate inputs for independent review."""
+
+    verified_source_coverage_bytes(coverage)
+    verify_development_read_boundary_v2(boundary, coverage, split)
+    if coverage.reconciliation.replacement_source_policy != "rr-000008-promoted-only":
+        raise ValueError("candidate evidence requires the RR-000008 promoted-only ancestry")
+    dump_path = _absolute_candidate_ancestry_path(raw_dump_path)
+    if not dump_path.is_file():
+        raise ValueError("raw dump ancestry path must be an existing file")
+    dump_stat = dump_path.stat()
+    if dump_stat.st_size != coverage.raw_dump.byte_count:
+        raise ValueError("raw dump size differs from verified coverage ancestry")
+    if sha256_regular(dump_path) != coverage.raw_dump.dump_sha256:
+        raise ValueError("raw dump bytes differ from verified coverage ancestry")
+    rr_path = _absolute_candidate_ancestry_path(rr_promotion_receipt_path)
+    recovery_path = _absolute_candidate_ancestry_path(recovery_manifest_path)
+    view_path = _absolute_candidate_ancestry_path(reconciled_view_definition_path)
+    rr_bytes = read_bounded_regular(rr_path, _MAX_SOURCE_ANCESTRY_BYTES)
+    recovery_bytes = read_bounded_regular(recovery_path, _MAX_SOURCE_ANCESTRY_BYTES)
+    view_bytes = read_bounded_regular(view_path, _MAX_SOURCE_ANCESTRY_BYTES)
+    rr_sha = hashlib.sha256(rr_bytes).hexdigest()
+    recovery_sha = hashlib.sha256(recovery_bytes).hexdigest()
+    view_sha = hashlib.sha256(view_bytes).hexdigest()
+    if rr_sha != coverage.reconciliation.promotion_receipt_sha256:
+        raise ValueError("RR-000008 receipt differs from verified coverage ancestry")
+    if recovery_sha != coverage.compatibility_metadata_sha256:
+        raise ValueError("recovery manifest differs from verified coverage ancestry")
+    if b"CREATE OR REPLACE VIEW market_data.candles_reconciled AS" not in view_bytes:
+        raise ValueError("reconciled-view definition does not define the required source view")
+    ancestry = {
+        "raw_dump_path": str(dump_path),
+        "raw_dump_sha256": coverage.raw_dump.dump_sha256,
+        "raw_dump_byte_count": coverage.raw_dump.byte_count,
+        "raw_dump_device": dump_stat.st_dev,
+        "raw_dump_inode": dump_stat.st_ino,
+        "raw_dump_mtime_ns": dump_stat.st_mtime_ns,
+        "raw_dump_ctime_ns": dump_stat.st_ctime_ns,
+        "pg_restore_list_sha256": coverage.raw_dump.pg_restore_list_sha256,
+        "candle_table_toc_identity": coverage.raw_dump.candle_table_toc_identity,
+        "source_mapping_version": coverage.raw_dump.source_mapping_version,
+        "rr_promotion_receipt_path": str(rr_path),
+        "rr_promotion_receipt_sha256": rr_sha,
+        "recovery_manifest_path": str(recovery_path),
+        "recovery_manifest_sha256": recovery_sha,
+        "reconciled_view_definition_path": str(view_path),
+        "reconciled_view_definition_sha256": view_sha,
+        "source_view": "market_data.candles_reconciled",
+        "view_evidence_kind": "migration-definition-code-ancestry-not-live-state",
+        "coverage_identity": coverage.coverage_identity.value,
+        "raw_dump_identity_sha256": coverage.raw_dump.identity_sha256,
+        "reconciliation_identity_sha256": coverage.reconciliation.identity_sha256,
+    }
+    if rr_publication_root_path is not None:
+        rr_inventory = verify_rr_ledger_inventory_v2(
+            rr_publication_root_path,
+            symbols=boundary.allowed_symbols,
+            intervals=tuple((item.start, item.end) for item in boundary.allowed_intervals),
+            expected_work_unit_manifest_sha256=(
+                coverage.reconciliation.work_unit_manifest_sha256
+            ),
+            expected_comparison_part_sha256=(
+                coverage.reconciliation.comparison_part_sha256
+            ),
+        )
+        ancestry["rr_publication_root_path"] = str(rr_inventory.root)
+        ancestry["rr_publication_inventory_sha256"] = rr_inventory.inventory_sha256
+        ancestry["rr_run_manifest_sha256"] = rr_inventory.run_manifest_sha256
+        ancestry["rr_work_unit_manifest_sha256"] = list(
+            coverage.reconciliation.work_unit_manifest_sha256
+        )
+        ancestry["rr_comparison_part_sha256"] = list(
+            coverage.reconciliation.comparison_part_sha256
+        )
+    source_identity = _candidate_source_identity(ancestry, boundary)
+    derived_targets = tuple(split.policy.derived_target_timeframes)
+    if derived_targets != _EXPECTED_DERIVED_TARGET_TIMEFRAMES:
+        raise ValueError("candidate derived target timeframes differ from the verified policy")
+    scope = _source_scope_payload_v3(boundary, derived_targets=derived_targets)
+    use_policy = {
+        "use_class": "private-quantitative-research",
+        "technical_use_only": True,
+        "redistribution_authorized": False,
+        "commercial_use_authorized": False,
+        "data_rights_status": "not-established-by-this-evidence",
+    }
+    original_payload = {
+        "source_identity": source_identity,
+        **scope,
+        "source_ancestry": ancestry,
+        "use_policy": use_policy,
+        "read_only": True,
+        "predicate_enforcement": "partition-scope-before-open",
+    }
+    original_bytes = publication_json_bytes(
+        {
+            "schema_version": "phase5-development-scoped-source-manifest-v3",
+            **original_payload,
+            "manifest_sha256": hash_json(
+                "phase5-development-scoped-source-manifest-v3", original_payload
+            ),
+        }
+    )
+    predicate_payload = {
+        "source_identity": source_identity,
+        **scope,
+        "source_view": "market_data.candles_reconciled",
+        "boundary_authorization": "before-connection-or-file-open",
+        "predicate_stage": "before-file-open-or-query",
+        "client_post_filter": False,
+        "unbounded_scan": False,
+    }
+    predicate_bytes = publication_json_bytes(
+        {
+            "schema_version": "phase5-development-source-predicate-evidence-v3",
+            **predicate_payload,
+            "evidence_sha256": hash_json(
+                "phase5-development-source-predicate-evidence-v3", predicate_payload
+            ),
+        }
+    )
+    root = Path(output_root)
+    _publish_directory_no_clobber(
+        root,
+        {"original.json": original_bytes, "predicate.json": predicate_bytes},
+    )
+    return root.resolve(strict=True)
+
+
+def publish_independent_scoped_source_verifier_evidence_v2(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    candidate_inputs_root: Path,
+    output_root: Path,
+    settings: MarketDataSettings,
+) -> str:
+    """Publish exact catalog metadata from an independently configured review lane."""
+
+    if not isinstance(settings, MarketDataSettings):
+        raise TypeError("independent PostgreSQL verifier settings must be MarketDataSettings")
+    engine = create_engine(settings.database.url)
+    try:
+        return _publish_independent_scoped_source_verifier_with_engine_v2(
+            boundary=boundary,
+            candidate_inputs_root=candidate_inputs_root,
+            output_root=output_root,
+            engine=engine,
+        )
+    finally:
+        engine.dispose()
+
+
+def _publish_independent_scoped_source_verifier_with_engine_v2(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    candidate_inputs_root: Path,
+    output_root: Path,
+    engine: Any,
+) -> str:
+    """Private metadata-only engine seam for deterministic adversarial tests."""
+
+    source_identity, original_bytes, predicate_bytes = _verify_candidate_inputs_v3(
+        boundary=boundary,
+        publication_root=Path(candidate_inputs_root),
+    )
+    original = _decode_canonical_object(original_bytes, "original manifest")
+    ancestry = original["source_ancestry"]
+    if not isinstance(ancestry, dict):
+        raise ValueError("candidate source ancestry is invalid")
+    ancestry_bindings = {
+        Path(str(ancestry[path_label])): read_bounded_regular(
+            Path(str(ancestry[path_label])), _MAX_SOURCE_ANCESTRY_BYTES
+        )
+        for path_label in (
+            "rr_promotion_receipt_path",
+            "recovery_manifest_path",
+            "reconciled_view_definition_path",
+        )
+    }
+    metadata = _verify_postgresql_metadata_preflight_from_ancestry(
+        engine,
+        ancestry=ancestry,
+        bindings=ancestry_bindings,
+    )
+    rr_payload: dict[str, object] | None = None
+    rr_root = ancestry.get("rr_publication_root_path")
+    rr_identity = ancestry.get("rr_publication_inventory_sha256")
+    if rr_root is not None or rr_identity is not None:
+        if not isinstance(rr_root, str) or not isinstance(rr_identity, str):
+            raise ValueError("candidate RR ledger ancestry is incomplete")
+        expected_manifests, expected_parts = _rr_authority_from_ancestry(ancestry)
+        rr_inventory = verify_rr_ledger_inventory_v2(
+            Path(rr_root),
+            symbols=boundary.allowed_symbols,
+            intervals=tuple((item.start, item.end) for item in boundary.allowed_intervals),
+            expected_work_unit_manifest_sha256=expected_manifests,
+            expected_comparison_part_sha256=expected_parts,
+        )
+        if rr_inventory.inventory_sha256 != rr_identity:
+            raise ValueError("candidate RR ledger inventory changed before review")
+        _require_rr_promotion_run_binding(rr_inventory, metadata.manifest_sha256)
+        rr_payload = rr_inventory.verifier_payload()
+    verifier_payload = {
+        "source_identity": source_identity,
+        "original_manifest_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "predicate_evidence_sha256": hashlib.sha256(predicate_bytes).hexdigest(),
+        "boundary_sha256": boundary.boundary_sha256,
+        "verifier_kind": "independent-original-byte-verifier",
+        "immutable": True,
+        "postgresql_metadata": metadata.verifier_payload(),
+        "rr_ledger": rr_payload,
+    }
+    verifier_bytes = publication_json_bytes(
+        {
+            "schema_version": "phase5-development-source-verifier-evidence-v3",
+            **verifier_payload,
+            "evidence_sha256": hash_json(
+                "phase5-development-source-verifier-evidence-v3", verifier_payload
+            ),
+        }
+    )
+    _publish_directory_no_clobber(Path(output_root), {"verifier.json": verifier_bytes})
+    return hashlib.sha256(verifier_bytes).hexdigest()
+
+
+def finalize_scoped_source_candidate_evidence_v2(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    candidate_inputs_root: Path,
+    verifier_evidence_root: Path,
+    output_root: Path,
+) -> ScopedSourceCandidateEvidenceV2:
+    """Bind producer and reviewer artifacts without admitting or trusting the source."""
+
+    source_identity, original_bytes, predicate_bytes = _verify_candidate_inputs_v3(
+        boundary=boundary,
+        publication_root=Path(candidate_inputs_root),
+    )
+    verifier_root = Path(verifier_evidence_root)
+    require_regular_directory(verifier_root)
+    if set(bounded_regular_files(verifier_root, maximum=2)) != {"verifier.json"}:
+        raise ValueError("verifier evidence publication inventory is invalid")
+    verifier_bytes = read_bounded_regular(verifier_root / "verifier.json", _MAX_DESCRIPTOR_BYTES)
+    _verify_independent_verifier_evidence_v3(
+        verifier_bytes,
+        source_identity=source_identity,
+        original_bytes=original_bytes,
+        predicate_bytes=predicate_bytes,
+        boundary=boundary,
+    )
+    descriptor = {
+        "schema_version": "phase5-scoped-source-candidate-v2",
+        "source_kind": "content-addressed-development-publication",
+        "source_identity": source_identity,
+        "original_manifest_path": "original.json",
+        "original_manifest_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "verifier_evidence_path": "verifier.json",
+        "verifier_evidence_sha256": hashlib.sha256(verifier_bytes).hexdigest(),
+        "predicate_evidence_path": "predicate.json",
+        "predicate_evidence_sha256": hashlib.sha256(predicate_bytes).hexdigest(),
+    }
+    root = Path(output_root)
+    _publish_directory_no_clobber(
+        root,
+        {
+            "candidate.json": publication_json_bytes(descriptor),
+            "original.json": original_bytes,
+            "predicate.json": predicate_bytes,
+            "verifier.json": verifier_bytes,
+        },
+    )
+    descriptor_bytes = publication_json_bytes(descriptor)
+    return ScopedSourceCandidateEvidenceV2(
+        publication_root=root.resolve(strict=True),
+        source_identity=source_identity,
+        descriptor_sha256=hashlib.sha256(descriptor_bytes).hexdigest(),
+        original_manifest_sha256=hashlib.sha256(original_bytes).hexdigest(),
+        predicate_evidence_sha256=hashlib.sha256(predicate_bytes).hexdigest(),
+        verifier_evidence_sha256=hashlib.sha256(verifier_bytes).hexdigest(),
+    )
+
+
+def verify_scoped_source_candidate_evidence_v2(
+    *,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+    boundary: DevelopmentReadBoundaryV2,
+    publication_root: Path,
+) -> ScopedSourceCandidateEvidenceV2:
+    """Reopen candidate evidence and validate it without trusting its verifier digest."""
+
+    verified_source_coverage_bytes(coverage)
+    verify_development_read_boundary_v2(boundary, coverage, split)
+    root = Path(publication_root)
+    require_regular_directory(root)
+    if set(bounded_regular_files(root, maximum=5)) != {
+        "candidate.json",
+        "original.json",
+        "predicate.json",
+        "verifier.json",
+    }:
+        raise ValueError("candidate evidence publication inventory is invalid")
+    descriptor_path = root / "candidate.json"
+    descriptor_bytes = read_bounded_regular(descriptor_path, _MAX_DESCRIPTOR_BYTES)
+    descriptor = _decode_canonical_object(descriptor_bytes, "candidate descriptor")
+    reopened: dict[Path, bytes] = {}
+
+    def read_reference(path: Path, target: str) -> bytes:
+        content = _read_candidate_reference(path, target)
+        reopened[path] = content
+        return content
+
+    _verify_candidate_descriptor_evidence(
+        descriptor,
+        descriptor_bytes,
+        descriptor_path=descriptor_path,
+        boundary=boundary,
+        read_reference=read_reference,
+    )
+    original = _decode_canonical_object(reopened[root / "original.json"], "original manifest")
+    ancestry = original.get("source_ancestry")
+    if not isinstance(ancestry, dict):
+        raise ValueError("candidate evidence ancestry is missing")
+    expected_source_identity = _candidate_source_identity(ancestry, boundary)
+    if descriptor["source_identity"] != expected_source_identity:
+        raise ValueError("candidate evidence source ancestry identity differs")
+    if ancestry.get("coverage_identity") != coverage.coverage_identity.value:
+        raise ValueError("candidate evidence coverage ancestry differs")
+    if ancestry.get("raw_dump_identity_sha256") != coverage.raw_dump.identity_sha256:
+        raise ValueError("candidate evidence raw-dump ancestry differs")
+    if ancestry.get("raw_dump_sha256") != coverage.raw_dump.dump_sha256:
+        raise ValueError("candidate evidence raw-dump content identity differs")
+    if ancestry.get("reconciliation_identity_sha256") != coverage.reconciliation.identity_sha256:
+        raise ValueError("candidate evidence reconciliation ancestry differs")
+    if "rr_publication_root_path" in ancestry:
+        if tuple(ancestry.get("rr_work_unit_manifest_sha256", ())) != (
+            coverage.reconciliation.work_unit_manifest_sha256
+        ):
+            raise ValueError("candidate evidence work-unit authority differs")
+        if tuple(ancestry.get("rr_comparison_part_sha256", ())) != (
+            coverage.reconciliation.comparison_part_sha256
+        ):
+            raise ValueError("candidate evidence comparison-part authority differs")
+    return ScopedSourceCandidateEvidenceV2(
+        publication_root=root.resolve(strict=True),
+        source_identity=expected_source_identity,
+        descriptor_sha256=hashlib.sha256(descriptor_bytes).hexdigest(),
+        original_manifest_sha256=hashlib.sha256(reopened[root / "original.json"]).hexdigest(),
+        predicate_evidence_sha256=hashlib.sha256(reopened[root / "predicate.json"]).hexdigest(),
+        verifier_evidence_sha256=hashlib.sha256(reopened[root / "verifier.json"]).hexdigest(),
+    )
+
+
+def _validated_rr_authority_vectors(
+    work_unit_manifest_sha256: object,
+    comparison_part_sha256: object,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if (
+        not isinstance(work_unit_manifest_sha256, list)
+        or not work_unit_manifest_sha256
+        or not isinstance(comparison_part_sha256, list)
+        or not comparison_part_sha256
+    ):
+        raise ValueError("RR frozen coverage authority is incomplete")
+    for label, values in (
+        ("rr_work_unit_manifest_sha256", work_unit_manifest_sha256),
+        ("rr_comparison_part_sha256", comparison_part_sha256),
+    ):
+        if any(not isinstance(value, str) for value in values):
+            raise ValueError(f"{label} must contain SHA-256 strings")
+        for value in values:
+            _require_sha256(value, label)
+    return tuple(work_unit_manifest_sha256), tuple(comparison_part_sha256)
+
+
+def _rr_authority_from_ancestry(
+    ancestry: Mapping[str, object],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    return _validated_rr_authority_vectors(
+        ancestry.get("rr_work_unit_manifest_sha256"),
+        ancestry.get("rr_comparison_part_sha256"),
+    )
+
+
+def _rr_authority_from_rr_payload(
+    payload: object,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if not isinstance(payload, Mapping):
+        raise ValueError("RR ledger verifier payload is invalid")
+    authority = payload.get("coverage_authority")
+    if not isinstance(authority, Mapping):
+        raise ValueError("RR ledger coverage authority is invalid")
+    return _validated_rr_authority_vectors(
+        authority.get("work_unit_manifest_sha256"),
+        authority.get("comparison_part_sha256"),
+    )
+
+
+def _candidate_source_identity(
+    ancestry: Mapping[str, object], boundary: DevelopmentReadBoundaryV2
+) -> str:
+    return "callscore-rr000008-reconciled-view-v2:" + hash_json(
+        "phase5-callscore-rr000008-reconciled-view-source-v2",
+        {"source_ancestry": ancestry, "boundary_sha256": boundary.boundary_sha256},
+    )
+
+
+def _absolute_candidate_ancestry_path(value: Path) -> Path:
+    path = Path(value)
+    if ".." in path.parts:
+        raise ValueError("candidate ancestry path contains traversal")
+    return Path(os.path.abspath(path))
+
+
+def _verify_candidate_inputs_v3(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    publication_root: Path,
+) -> tuple[str, bytes, bytes]:
+    root = Path(publication_root)
+    require_regular_directory(root)
+    if set(bounded_regular_files(root, maximum=3)) != {"original.json", "predicate.json"}:
+        raise ValueError("candidate input publication inventory is invalid")
+    original_bytes = read_bounded_regular(root / "original.json", _MAX_DESCRIPTOR_BYTES)
+    predicate_bytes = read_bounded_regular(root / "predicate.json", _MAX_DESCRIPTOR_BYTES)
+    original = _decode_canonical_object(original_bytes, "original manifest")
+    predicate = _decode_canonical_object(predicate_bytes, "predicate evidence")
+    source_identity = _verify_candidate_inputs_payload_v3(
+        original=original,
+        original_bytes=original_bytes,
+        predicate=predicate,
+        predicate_bytes=predicate_bytes,
+        boundary=boundary,
+        read_reference=_read_candidate_reference,
+    )
+    return source_identity, original_bytes, predicate_bytes
+
+
+def _verify_candidate_inputs_payload_v3(
+    *,
+    original: dict[str, Any],
+    original_bytes: bytes,
+    predicate: dict[str, Any],
+    predicate_bytes: bytes,
+    boundary: DevelopmentReadBoundaryV2,
+    read_reference: Any,
+) -> str:
+    ancestry_fields = {
+        "raw_dump_path",
+        "raw_dump_sha256",
+        "raw_dump_byte_count",
+        "raw_dump_device",
+        "raw_dump_inode",
+        "raw_dump_mtime_ns",
+        "raw_dump_ctime_ns",
+        "pg_restore_list_sha256",
+        "candle_table_toc_identity",
+        "source_mapping_version",
+        "rr_promotion_receipt_path",
+        "rr_promotion_receipt_sha256",
+        "recovery_manifest_path",
+        "recovery_manifest_sha256",
+        "reconciled_view_definition_path",
+        "reconciled_view_definition_sha256",
+        "source_view",
+        "view_evidence_kind",
+        "coverage_identity",
+        "raw_dump_identity_sha256",
+        "reconciliation_identity_sha256",
+    }
+    ancestry = original.get("source_ancestry")
+    if not isinstance(ancestry, dict):
+        raise ValueError("candidate source ancestry is invalid")
+    rr_fields = {
+        "rr_publication_root_path",
+        "rr_publication_inventory_sha256",
+        "rr_run_manifest_sha256",
+        "rr_work_unit_manifest_sha256",
+        "rr_comparison_part_sha256",
+    }
+    if set(ancestry) not in {frozenset(ancestry_fields), frozenset(ancestry_fields | rr_fields)}:
+        raise ValueError("candidate source ancestry is invalid")
+    dump_path = ancestry["raw_dump_path"]
+    if not isinstance(dump_path, str) or not Path(dump_path).is_absolute():
+        raise ValueError("raw_dump_path must be an absolute reviewed evidence path")
+    if not Path(dump_path).is_file():
+        raise ValueError("raw dump ancestry path no longer exists")
+    if not isinstance(ancestry["raw_dump_sha256"], str):
+        raise ValueError("raw_dump_sha256 is invalid")
+    _require_sha256(str(ancestry["raw_dump_sha256"]), "raw_dump_sha256")
+    if sha256_regular(Path(dump_path)) != ancestry["raw_dump_sha256"]:
+        raise ValueError("raw dump original bytes changed")
+    dump_stat = Path(dump_path).stat()
+    expected_stat = (
+        ancestry["raw_dump_byte_count"],
+        ancestry["raw_dump_device"],
+        ancestry["raw_dump_inode"],
+        ancestry["raw_dump_mtime_ns"],
+        ancestry["raw_dump_ctime_ns"],
+    )
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in expected_stat):
+        raise ValueError("raw dump filesystem identity is invalid")
+    if expected_stat != (
+        dump_stat.st_size,
+        dump_stat.st_dev,
+        dump_stat.st_ino,
+        dump_stat.st_mtime_ns,
+        dump_stat.st_ctime_ns,
+    ):
+        raise ValueError("raw dump filesystem identity changed")
+    _require_sha256(str(ancestry["pg_restore_list_sha256"]), "pg_restore_list_sha256")
+    for label in ("candle_table_toc_identity", "source_mapping_version"):
+        if not isinstance(ancestry[label], str) or not ancestry[label]:
+            raise ValueError(f"raw dump {label} is invalid")
+    for path_label, sha_label in (
+        ("rr_promotion_receipt_path", "rr_promotion_receipt_sha256"),
+        ("recovery_manifest_path", "recovery_manifest_sha256"),
+        ("reconciled_view_definition_path", "reconciled_view_definition_sha256"),
+    ):
+        path_value = ancestry[path_label]
+        expected_sha = ancestry[sha_label]
+        if not isinstance(path_value, str) or not Path(path_value).is_absolute():
+            raise ValueError(f"{path_label} must be an absolute reviewed evidence path")
+        if not isinstance(expected_sha, str):
+            raise ValueError(f"{sha_label} is invalid")
+        _require_sha256(expected_sha, sha_label)
+        content = read_reference(Path(path_value), f"ancestry:{path_label}")
+        if hashlib.sha256(content).hexdigest() != expected_sha:
+            raise ValueError(f"{path_label} original bytes changed")
+        if path_label == "reconciled_view_definition_path" and (
+            b"CREATE OR REPLACE VIEW market_data.candles_reconciled AS" not in content
+        ):
+            raise ValueError("reconciled-view definition no longer defines the required view")
+    if ancestry["source_view"] != "market_data.candles_reconciled":
+        raise ValueError("candidate reconciled-view identity is invalid")
+    if ancestry["view_evidence_kind"] != "migration-definition-code-ancestry-not-live-state":
+        raise ValueError("candidate view evidence kind is invalid")
+    for label in (
+        "coverage_identity",
+        "raw_dump_identity_sha256",
+        "reconciliation_identity_sha256",
+    ):
+        if not isinstance(ancestry[label], str) or not ancestry[label]:
+            raise ValueError(f"candidate ancestry {label} is invalid")
+    _require_sha256(str(ancestry["raw_dump_identity_sha256"]), "raw_dump_identity_sha256")
+    _require_sha256(
+        str(ancestry["reconciliation_identity_sha256"]),
+        "reconciliation_identity_sha256",
+    )
+    if rr_fields <= set(ancestry):
+        expected_manifests, expected_parts = _rr_authority_from_ancestry(ancestry)
+        rr_root = ancestry["rr_publication_root_path"]
+        rr_identity = ancestry["rr_publication_inventory_sha256"]
+        rr_run_manifest_sha256 = ancestry["rr_run_manifest_sha256"]
+        if not isinstance(rr_root, str) or not Path(rr_root).is_absolute():
+            raise ValueError("RR publication root must be an absolute reviewed path")
+        if not isinstance(rr_identity, str):
+            raise ValueError("RR publication inventory identity is invalid")
+        _require_sha256(rr_identity, "rr_publication_inventory_sha256")
+        if not isinstance(rr_run_manifest_sha256, str):
+            raise ValueError("RR run manifest identity is invalid")
+        _require_sha256(rr_run_manifest_sha256, "rr_run_manifest_sha256")
+        inventory = verify_rr_ledger_inventory_v2(
+            Path(rr_root),
+            symbols=boundary.allowed_symbols,
+            intervals=tuple((item.start, item.end) for item in boundary.allowed_intervals),
+            expected_work_unit_manifest_sha256=expected_manifests,
+            expected_comparison_part_sha256=expected_parts,
+        )
+        if inventory.inventory_sha256 != rr_identity:
+            raise ValueError("RR publication inventory original bytes changed")
+        receipt_bytes = read_reference(
+            Path(str(ancestry["rr_promotion_receipt_path"])),
+            "ancestry:rr_promotion_receipt_path",
+        )
+        receipt = _decode_canonical_object(receipt_bytes, "RR-000008 promotion receipt")
+        if inventory.run_manifest_sha256 != rr_run_manifest_sha256:
+            raise ValueError("RR run manifest differs from producer ancestry")
+        _require_rr_promotion_run_binding(inventory, receipt.get("manifest_sha256"))
+    source_identity = _candidate_source_identity(ancestry, boundary)
+    scope = _source_scope_payload_v3(
+        boundary,
+        derived_targets=_EXPECTED_DERIVED_TARGET_TIMEFRAMES,
+    )
+    use_policy = {
+        "use_class": "private-quantitative-research",
+        "technical_use_only": True,
+        "redistribution_authorized": False,
+        "commercial_use_authorized": False,
+        "data_rights_status": "not-established-by-this-evidence",
+    }
+    original_payload = {
+        "source_identity": source_identity,
+        **scope,
+        "source_ancestry": ancestry,
+        "use_policy": use_policy,
+        "read_only": True,
+        "predicate_enforcement": "partition-scope-before-open",
+    }
+    expected_original = {
+        "schema_version": "phase5-development-scoped-source-manifest-v3",
+        **original_payload,
+        "manifest_sha256": hash_json(
+            "phase5-development-scoped-source-manifest-v3", original_payload
+        ),
+    }
+    if original != expected_original or publication_json_bytes(original) != original_bytes:
+        raise ValueError("candidate scoped source manifest is invalid")
+    predicate_payload = {
+        "source_identity": source_identity,
+        **scope,
+        "source_view": "market_data.candles_reconciled",
+        "boundary_authorization": "before-connection-or-file-open",
+        "predicate_stage": "before-file-open-or-query",
+        "client_post_filter": False,
+        "unbounded_scan": False,
+    }
+    expected_predicate = {
+        "schema_version": "phase5-development-source-predicate-evidence-v3",
+        **predicate_payload,
+        "evidence_sha256": hash_json(
+            "phase5-development-source-predicate-evidence-v3", predicate_payload
+        ),
+    }
+    if predicate != expected_predicate or publication_json_bytes(predicate) != predicate_bytes:
+        raise ValueError("candidate predicate evidence is invalid")
+    return source_identity
+
+
+def _read_candidate_reference(path: Path, target: str) -> bytes:
+    maximum = (
+        _MAX_SOURCE_ANCESTRY_BYTES if target.startswith("ancestry:") else _MAX_DESCRIPTOR_BYTES
+    )
+    return read_bounded_regular(path, maximum)
+
+
+def _verify_independent_verifier_evidence_v3(
+    verifier_bytes: bytes,
+    *,
+    source_identity: str,
+    original_bytes: bytes,
+    predicate_bytes: bytes,
+    boundary: DevelopmentReadBoundaryV2,
+) -> None:
+    verifier = _decode_canonical_object(verifier_bytes, "verifier evidence")
+    metadata_payload = verifier.get("postgresql_metadata")
+    _verified_postgresql_metadata_payload(metadata_payload)
+    original = _decode_canonical_object(original_bytes, "original manifest")
+    ancestry = original.get("source_ancestry")
+    if not isinstance(ancestry, dict):
+        raise ValueError("independent verifier source ancestry is invalid")
+    rr_payload = verifier.get("rr_ledger")
+    if "rr_publication_root_path" in ancestry:
+        expected_manifests, expected_parts = _rr_authority_from_ancestry(ancestry)
+        inventory = reopen_rr_ledger_inventory_v2(
+            rr_payload,
+            symbols=boundary.allowed_symbols,
+            intervals=tuple((item.start, item.end) for item in boundary.allowed_intervals),
+            expected_work_unit_manifest_sha256=expected_manifests,
+            expected_comparison_part_sha256=expected_parts,
+        )
+        if inventory.inventory_sha256 != ancestry.get("rr_publication_inventory_sha256"):
+            raise ValueError("independent verifier RR inventory differs from producer")
+    elif rr_payload is not None:
+        raise ValueError("independent verifier adds unbound RR ledger evidence")
+    payload = {
+        "source_identity": source_identity,
+        "original_manifest_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "predicate_evidence_sha256": hashlib.sha256(predicate_bytes).hexdigest(),
+        "boundary_sha256": boundary.boundary_sha256,
+        "verifier_kind": "independent-original-byte-verifier",
+        "immutable": True,
+        "postgresql_metadata": metadata_payload,
+        "rr_ledger": rr_payload,
+    }
+    expected = {
+        "schema_version": "phase5-development-source-verifier-evidence-v3",
+        **payload,
+        "evidence_sha256": hash_json("phase5-development-source-verifier-evidence-v3", payload),
+    }
+    if verifier != expected or publication_json_bytes(verifier) != verifier_bytes:
+        raise ValueError("independent verifier evidence is invalid")
+
 
 def discover_scoped_source_v2(
     *,
@@ -862,7 +1691,7 @@ def discover_scoped_source_v2(
             prior=prior,
         )
         boundary.authorize(request)
-        raw_evidence = read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES)
+        raw_evidence = _read_candidate_reference(path, target)
         descriptor_byte_count += len(raw_evidence)
         digest_evidence = hashlib.sha256(raw_evidence).hexdigest()
         audit_sequence += 1
@@ -1035,7 +1864,7 @@ def verify_scoped_source_availability_v2(
             raw,
             hashlib.sha256(raw).hexdigest(),
             boundary,
-            read_reference=lambda path, _target: read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES),
+            read_reference=_read_candidate_reference,
         )
         if reevaluated != candidate:
             raise ValueError("source candidate trusted evidence changed or was reconstructed")
@@ -1204,6 +2033,89 @@ def _issue_test_minute_source_capability_v2(
     return capability
 
 
+def issue_postgresql_minute_source_capability_v2(
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+    settings: MarketDataSettings,
+    batch_size: int,
+) -> VerifiedDevelopmentMinuteSourceV2:
+    """Issue a sealed, bounded reader for the admitted reconciled PostgreSQL view."""
+
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or not 1 <= batch_size <= _MAX_POSTGRESQL_MINUTE_BATCH_ROWS
+    ):
+        raise ValueError("PostgreSQL minute batch size must be positive and within its ceiling")
+    if not isinstance(settings, MarketDataSettings):
+        raise TypeError("PostgreSQL minute source settings must be MarketDataSettings")
+    availability_bytes = verified_scoped_source_availability_bytes_v2(
+        availability, boundary=boundary
+    )
+    origin = _derive_verified_minute_source_origin(boundary=boundary, availability=availability)
+    if origin is None:
+        raise ValueError("PostgreSQL minute source requires AVAILABLE admitted evidence")
+    requests = tuple(
+        BoundaryRequestV2(
+            symbol=symbol,
+            timeframe="1m",
+            start=interval.start,
+            end=interval.end,
+            operation_kind=AccessOperationKindV2.ITERATOR,
+            target_identity=origin.origin_sha256,
+        )
+        for symbol in boundary.allowed_symbols
+        for interval in boundary.allowed_intervals
+    )
+    for request in requests:
+        boundary.authorize(request)
+
+    mapping = _reconciled_view_mapping(origin)
+    rr_inventory = _origin_rr_ledger_inventory(origin, boundary=boundary)
+    engine = create_engine(settings.database.url)
+    try:
+        metadata = _verify_postgresql_metadata_preflight(engine, origin=origin)
+    except BaseException:
+        engine.dispose()
+        raise
+    public = {
+        "schema_version": "phase5-verified-development-minute-source-v2",
+        "source_identity": origin.source_identity,
+        "origin_kind": origin.origin_kind,
+        "origin_sha256": origin.origin_sha256,
+        "origin_proof_sha256": origin.origin_proof_sha256,
+        "boundary_sha256": boundary.boundary_sha256,
+        "availability_sha256": availability.availability_sha256,
+    }
+    capability = VerifiedDevelopmentMinuteSourceV2(
+        source_identity=origin.source_identity,
+        origin_kind=origin.origin_kind,
+        origin_sha256=origin.origin_sha256,
+        origin_proof_sha256=origin.origin_proof_sha256,
+        boundary_sha256=boundary.boundary_sha256,
+        availability_sha256=availability.availability_sha256,
+        canonical_bytes=publication_json_bytes(public),
+        _factory_token=_MINUTE_SOURCE_CAPABILITY_FACTORY,
+    )
+    _register_minute_source_capability(
+        capability,
+        boundary=boundary,
+        availability=availability,
+        availability_bytes=availability_bytes,
+        evidence_bindings=origin.evidence_bindings,
+        implementation=_PostgresqlMinuteReadImplementationV2(
+            engine=engine,
+            batch_size=batch_size,
+            mapping=mapping,
+            origin=origin,
+            expected_metadata=metadata,
+            rr_inventory=rr_inventory,
+        ),
+    )
+    return capability
+
+
 def publish_validation_source_v2(
     *,
     coverage: SourceCoveragePublicationV2,
@@ -1244,15 +2156,15 @@ def publish_validation_source_v2(
             dir=publication_root.parent,
         )
     )
-    audit_stage = Path(
-        tempfile.mkdtemp(
-            prefix=f".{audit_ledger_root.name}.",
-            suffix=".tmp",
-            dir=audit_ledger_root.parent,
-        )
-    )
-    records_dir = audit_stage / "records"
-    records_dir.mkdir()
+    # The access-attempt ledger is committed before any source iterator, ledger
+    # part, or observation query can be opened.  Publication data remains staged.
+    audit_ledger_root.mkdir(mode=0o700)
+    fsync_directory_posix(audit_ledger_root.parent)
+    records_dir = audit_ledger_root / "records"
+    records_dir.mkdir(mode=0o700)
+    progress_dir = audit_ledger_root / "progress"
+    progress_dir.mkdir(mode=0o700)
+    fsync_directory_posix(audit_ledger_root)
     partitions: list[ValidationSourcePartitionV2] = []
     audit_sequence = 0
     audit_prior: str | None = None
@@ -1264,7 +2176,52 @@ def publish_validation_source_v2(
     origin_sha256: str | None = None
     origin_proof_sha256: str | None = None
     failure: str | None = "scoped_source_unavailable"
+    active_request: BoundaryRequestV2 | None = None
+    active_progress = {"ledger": 0, "database": 0, "emitted": 0, "unavailable": 0}
+    active_progress_base = dict(active_progress)
+    progress_sequence = 0
+    progress_prior: str | None = None
+    progress_digests: list[str] = []
+    publication_reserved = False
+    published_files: list[tuple[Path, Path]] = []
+    published_directories: list[Path] = []
+
+    def persist_progress(counts: Mapping[str, int]) -> None:
+        nonlocal progress_sequence, progress_prior, active_progress
+        active_progress = {
+            key: active_progress_base[key] + int(counts[key]) for key in active_progress
+        }
+        progress_sequence += 1
+        payload = {
+            "sequence": progress_sequence,
+            "boundary_sha256": boundary.boundary_sha256,
+            "request": None
+            if active_request is None
+            else {
+                "symbol": active_request.symbol,
+                "timeframe": active_request.timeframe,
+                "start": _utc_text(active_request.start),
+                "end": _utc_text(active_request.end),
+            },
+            "counts": active_progress,
+            "prior_progress_sha256": progress_prior,
+            "final_scope_attempts": 0,
+            "final_rows": 0,
+            "final_access_records": 0,
+        }
+        digest = hash_json("phase5-validation-minute-auth-progress-v2", payload)
+        _write_no_clobber(
+            progress_dir / f"{progress_sequence:08d}-{digest}.json",
+            publication_json_bytes({**payload, "progress_sha256": digest}),
+        )
+        progress_prior = digest
+        progress_digests.append(digest)
+        fsync_directory_posix(progress_dir)
+
     try:
+        _reserve_publication_directory(publication_root)
+        publication_reserved = True
+        fsync_directory_posix(publication_root.parent)
         if status is ScopedSourceStatusV2.AVAILABLE:
             (
                 admitted_source_identity,
@@ -1275,7 +2232,12 @@ def publish_validation_source_v2(
             failure = None
             for symbol in boundary.allowed_symbols:
                 for interval_index, interval in enumerate(boundary.allowed_intervals):
-                    _verify_minute_reader_binding(source_capability, boundary, availability)
+                    _verify_minute_reader_binding(
+                        source_capability,
+                        boundary,
+                        availability,
+                        revalidate_evidence=False,
+                    )
                     request = BoundaryRequestV2(
                         symbol=symbol,
                         timeframe="1m",
@@ -1284,6 +2246,8 @@ def publish_validation_source_v2(
                         operation_kind=AccessOperationKindV2.ITERATOR,
                         target_identity=origin_sha256,
                     )
+                    active_request = request
+                    active_progress_base = dict(active_progress)
                     boundary.authorize(request)
                     audit_sequence += 1
                     audit_prior = _append_minute_publication_audit_record(
@@ -1301,6 +2265,7 @@ def publish_validation_source_v2(
                         partition_set_sha256=None,
                         prior=audit_prior,
                     )
+                    fsync_directory_posix(records_dir)
                     iterator = _iter_verified_minute_source_rows(
                         source_capability,
                         boundary=boundary,
@@ -1310,6 +2275,7 @@ def publish_validation_source_v2(
                             boundary.allowed_symbols.index(symbol) * len(boundary.allowed_intervals)
                             + interval_index
                         ),
+                        progress=persist_progress,
                     )
                     (
                         request_partitions,
@@ -1353,6 +2319,8 @@ def publish_validation_source_v2(
                         partition_set_sha256=_request_partition_set_sha256(request_partitions),
                         prior=audit_prior,
                     )
+                    fsync_directory_posix(records_dir)
+                    active_request = None
             _verify_minute_reader_binding(source_capability, boundary, availability)
         audit_payload = {
             "schema_version": "phase5-validation-minute-publication-audit-v2",
@@ -1365,6 +2333,13 @@ def publish_validation_source_v2(
             "origin_proof_sha256": origin_proof_sha256,
             "record_count": audit_sequence,
             "terminal_record_sha256": audit_prior,
+            "authentication_progress": active_progress,
+            "progress_record_count": progress_sequence,
+            "terminal_progress_sha256": progress_prior,
+            "progress_inventory_sha256": hash_json(
+                "phase5-validation-minute-auth-progress-inventory-v2",
+                progress_digests,
+            ),
             "rows_admitted": row_count,
             "bytes_admitted": byte_count,
             "final_scope_attempts": 0,
@@ -1378,7 +2353,8 @@ def publish_validation_source_v2(
                 "audit_publication_sha256": audit_publication_sha256,
             }
         )
-        _write_no_clobber(audit_stage / "publication.json", audit_bytes)
+        _write_no_clobber(audit_ledger_root / "publication.json", audit_bytes)
+        fsync_directory_posix(audit_ledger_root)
         identity_payload = _minute_publication_identity_payload(
             status=status,
             coverage=coverage,
@@ -1409,17 +2385,73 @@ def publish_validation_source_v2(
         )
         if max(len(canonical_bytes), len(audit_bytes)) > _MAX_MINUTE_PUBLICATION_BYTES:
             raise ValueError("validation source control publication exceeds byte ceiling")
-        _commit_paired_directories(
-            first_stage=publication_stage,
-            first_destination=publication_root,
-            second_stage=audit_stage,
-            second_destination=audit_ledger_root,
+        _populate_reserved_directory(
+            publication_stage,
+            publication_root,
+            published_files=published_files,
+            published_directories=published_directories,
         )
-    except Exception:
+        fsync_directory_posix(publication_root)
+        fsync_directory_posix(publication_root.parent)
+        _remove_staged_tree(publication_stage)
+    except Exception as error:
+        failure_payload = {
+            "schema_version": "phase5-validation-minute-access-attempt-failure-v2",
+            "boundary_sha256": boundary.boundary_sha256,
+            "source_availability_sha256": availability.availability_sha256,
+            "active_request": None
+            if active_request is None
+            else {
+                "symbol": active_request.symbol,
+                "timeframe": active_request.timeframe,
+                "start": _utc_text(active_request.start),
+                "end": _utc_text(active_request.end),
+            },
+            "completed_rows": row_count,
+            "completed_bytes": byte_count,
+            "terminal_record_sha256": audit_prior,
+            "authentication_progress": active_progress,
+            "progress_record_count": progress_sequence,
+            "terminal_progress_sha256": progress_prior,
+            "progress_inventory_sha256": hash_json(
+                "phase5-validation-minute-auth-progress-inventory-v2",
+                progress_digests,
+            ),
+            "failure_type": type(error).__name__,
+            "final_scope_attempts": 0,
+            "final_rows": 0,
+            "final_access_records": 0,
+        }
+        _write_no_clobber(
+            audit_ledger_root / "failure.json",
+            publication_json_bytes(
+                {
+                    **failure_payload,
+                    "failure_sha256": hash_json(
+                        "phase5-validation-minute-access-attempt-failure-v2",
+                        failure_payload,
+                    ),
+                }
+            ),
+        )
+        fsync_directory_posix(audit_ledger_root)
+        _verify_failed_minute_access_audit_v2(audit_ledger_root)
+        if publication_reserved:
+            _rollback_reserved_publications(
+                [publication_root],
+                published_files=published_files,
+                published_directories=published_directories,
+            )
         if not _is_windows_platform():
             _remove_staged_tree(publication_stage)
-            _remove_staged_tree(audit_stage)
         raise
+    finally:
+        if source_capability is not None:
+            implementation = _VERIFIED_MINUTE_SOURCE_CAPABILITIES.get(id(source_capability))
+            if implementation is not None and isinstance(
+                implementation[5], _PostgresqlMinuteReadImplementationV2
+            ):
+                source_capability.close()
     publication = ValidationSourcePublicationV2(
         status=status,
         coverage_identity=coverage.coverage_identity,
@@ -2202,8 +3234,8 @@ def _derive_verified_minute_source_origin(
     evidence_bindings: list[tuple[Path, bytes]] = [(descriptor_path, descriptor_bytes)]
     reopened: dict[Path, bytes] = {}
 
-    def read_reference(path: Path, _target: str) -> bytes:
-        content = read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES)
+    def read_reference(path: Path, target: str) -> bytes:
+        content = _read_candidate_reference(path, target)
         reopened[path] = content
         return content
 
@@ -2228,6 +3260,10 @@ def _derive_verified_minute_source_origin(
         evidence_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
         proof_payload[f"{label}_sha256"] = evidence_sha256
         evidence_bindings.append((evidence_path, evidence_bytes))
+    bound_paths = {path for path, _content in evidence_bindings}
+    evidence_bindings.extend(
+        (path, content) for path, content in reopened.items() if path not in bound_paths
+    )
     return _VerifiedMinuteSourceOriginV2(
         source_identity=candidate.source_identity,
         origin_kind="admitted-predicate-source-v2",
@@ -2238,6 +3274,259 @@ def _derive_verified_minute_source_origin(
         ),
         evidence_bindings=tuple(evidence_bindings),
     )
+
+
+def _origin_v3_ancestry(origin: _VerifiedMinuteSourceOriginV2) -> dict[str, Any]:
+    descriptor_path, descriptor_bytes = origin.evidence_bindings[0]
+    descriptor = _decode_canonical_object(descriptor_bytes, "admitted source descriptor")
+    original_path = _resolve_evidence_path(
+        descriptor_path.parent, descriptor["original_manifest_path"]
+    )
+    originals = dict(origin.evidence_bindings)
+    original_bytes = originals.get(original_path)
+    if original_bytes is None:
+        raise ValueError("admitted source does not bind its original manifest")
+    original = _decode_canonical_object(original_bytes, "admitted source original manifest")
+    if original.get("schema_version") != "phase5-development-scoped-source-manifest-v3":
+        raise ValueError("PostgreSQL minute source requires reviewed V3 ancestry")
+    ancestry = original.get("source_ancestry")
+    if not isinstance(ancestry, dict):
+        raise ValueError("PostgreSQL minute source ancestry is missing")
+    return ancestry
+
+
+def _reconciled_view_mapping(origin: _VerifiedMinuteSourceOriginV2) -> CandleSourceMapping:
+    ancestry = _origin_v3_ancestry(origin)
+    version = ancestry.get("source_mapping_version")
+    if not isinstance(version, str) or not version:
+        raise ValueError("reviewed reconciled source mapping version is invalid")
+    return CandleSourceMapping(
+        version=version,
+        schema="market_data",
+        table="candles_reconciled",
+        source_id_column="source_row_id",
+        timestamp_column="open_time",
+        timestamp_unit=TimestampUnit.MILLISECONDS,
+        symbol_column="symbol",
+        timeframe_column="interval",
+        open_column="open",
+        high_column="high",
+        low_column="low",
+        close_column="close",
+        volume_column="volume",
+        quote_volume_column="quote_volume",
+        trades_column="trades",
+    )
+
+
+def _verify_postgresql_metadata_preflight(
+    engine: Any,
+    *,
+    origin: _VerifiedMinuteSourceOriginV2,
+    expected: _PostgresqlSourceMetadataV2 | None = None,
+) -> _PostgresqlSourceMetadataV2:
+    """Verify active promotion and view metadata without reading candle rows."""
+
+    ancestry = _origin_v3_ancestry(origin)
+    bindings = dict(origin.evidence_bindings)
+    metadata = _verify_postgresql_metadata_preflight_from_ancestry(
+        engine,
+        ancestry=ancestry,
+        bindings=bindings,
+        expected=expected,
+    )
+    verifier_metadata = _origin_verifier_metadata_payload(origin)
+    if metadata.verifier_payload() != verifier_metadata:
+        raise ValueError("live PostgreSQL metadata differs from allowlisted verifier evidence")
+    return metadata
+
+
+def _verify_postgresql_metadata_preflight_from_ancestry(
+    engine: Any,
+    *,
+    ancestry: Mapping[str, Any],
+    bindings: Mapping[Path, bytes],
+    expected: _PostgresqlSourceMetadataV2 | None = None,
+) -> _PostgresqlSourceMetadataV2:
+    rr_path = Path(str(ancestry["rr_promotion_receipt_path"]))
+    recovery_path = Path(str(ancestry["recovery_manifest_path"]))
+    view_path = Path(str(ancestry["reconciled_view_definition_path"]))
+    try:
+        receipt = _decode_canonical_object(bindings[rr_path], "RR-000008 promotion receipt")
+        recovery = _decode_canonical_object(bindings[recovery_path], "RR-000008 recovery manifest")
+        reviewed_view = bindings[view_path].decode("utf-8")
+    except (KeyError, UnicodeDecodeError) as error:
+        raise ValueError("PostgreSQL source ancestry bindings are incomplete") from error
+    required_receipt = {
+        "run_id": "RR-000008",
+        "manifest_sha256": receipt.get("manifest_sha256"),
+        "replacement_logical_sha256": receipt.get("replacement_logical_sha256"),
+        "canonical_logical_sha256": receipt.get("canonical_logical_sha256"),
+    }
+    for label in (
+        "manifest_sha256",
+        "replacement_logical_sha256",
+        "canonical_logical_sha256",
+    ):
+        value = required_receipt[label]
+        if not isinstance(value, str):
+            raise ValueError(f"RR-000008 receipt {label} is invalid")
+        _require_sha256(value, f"RR-000008 receipt {label}")
+    if receipt.get("run_id") != "RR-000008":
+        raise ValueError("promotion receipt is not RR-000008")
+    if (
+        recovery.get("run_id") != "RR-000008"
+        or recovery.get("run_manifest_sha256") != required_receipt["manifest_sha256"]
+    ):
+        raise ValueError("RR-000008 recovery manifest does not bind the promoted manifest")
+    if "CREATE OR REPLACE VIEW market_data.candles_reconciled AS" not in reviewed_view:
+        raise ValueError("reviewed migration does not define the reconciled source view")
+
+    with engine.connect() as connection:
+        row = connection.execute(text(_POSTGRESQL_SOURCE_PREFLIGHT_SQL)).mappings().one()
+    promotion_count = row["promotion_count"]
+    if isinstance(promotion_count, bool) or not isinstance(promotion_count, int):
+        raise ValueError("live PostgreSQL promotion count is invalid")
+    columns = row["view_columns"]
+    if not isinstance(columns, (list, tuple)) or any(not isinstance(item, str) for item in columns):
+        raise ValueError("live reconciled view columns are invalid")
+    metadata = _PostgresqlSourceMetadataV2(
+        promotion_count=promotion_count,
+        run_id=_postgresql_metadata_text(row, "run_id"),
+        manifest_sha256=_postgresql_metadata_sha(row, "manifest_sha256"),
+        replacement_logical_sha256=_postgresql_metadata_sha(row, "replacement_logical_sha256"),
+        canonical_logical_sha256=_postgresql_metadata_sha(row, "canonical_logical_sha256"),
+        view_columns=tuple(columns),
+        view_definition=_postgresql_metadata_text(row, "view_definition"),
+    )
+    if (
+        metadata.promotion_count != 1
+        or metadata.run_id != required_receipt["run_id"]
+        or metadata.manifest_sha256 != required_receipt["manifest_sha256"]
+        or metadata.replacement_logical_sha256 != required_receipt["replacement_logical_sha256"]
+        or metadata.canonical_logical_sha256 != required_receipt["canonical_logical_sha256"]
+    ):
+        raise ValueError("live PostgreSQL promotion differs from RR-000008 ancestry")
+    if metadata.view_columns != _RECONCILED_VIEW_COLUMNS:
+        raise ValueError("live reconciled view columns differ from the reviewed mapping")
+    if not isinstance(metadata.view_definition, str):
+        raise ValueError("live reconciled view definition is unavailable")
+    normalized = " ".join(metadata.view_definition.lower().replace('"', "").split())
+    reviewed_normalized = " ".join(reviewed_view.lower().replace('"', "").split())
+    required_view_fragments = (
+        "market_data.candle_reconciliation_promotions",
+        "market_data.candle_reconciliation_replacements",
+        "market_data.candle_reconciliation_coverage",
+        "market_data.candles",
+        "promotion_id desc",
+        "replacement.open_time = candle.open_time",
+        "coverage.start_time <= candle.open_time",
+        "candle.open_time < coverage.end_time",
+    )
+    if any(
+        fragment not in normalized or fragment not in reviewed_normalized
+        for fragment in required_view_fragments
+    ):
+        raise ValueError("live reconciled view definition differs from the reviewed contract")
+    if expected is not None and metadata != expected:
+        raise ValueError("live PostgreSQL source metadata changed after capability issuance")
+    return metadata
+
+
+def _postgresql_metadata_text(row: Mapping[str, Any], label: str) -> str:
+    value = row[label]
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"live PostgreSQL {label} is invalid")
+    return value
+
+
+def _postgresql_metadata_sha(row: Mapping[str, Any], label: str) -> str:
+    value = _postgresql_metadata_text(row, label)
+    _require_sha256(value, f"live PostgreSQL {label}")
+    return value
+
+
+def _canonical_view_definition_bytes(definition: str) -> bytes:
+    if not isinstance(definition, str) or not definition.strip():
+        raise ValueError("PostgreSQL view definition is invalid")
+    return (" ".join(definition.split()) + "\n").encode()
+
+
+def _verified_postgresql_metadata_payload(payload: object) -> dict[str, object]:
+    values = _exact_mapping(
+        payload,
+        {
+            "promotion_count",
+            "run_id",
+            "manifest_sha256",
+            "replacement_logical_sha256",
+            "canonical_logical_sha256",
+            "view_columns",
+            "normalized_view_definition_sha256",
+        },
+        "independent PostgreSQL verifier metadata",
+    )
+    if (
+        isinstance(values["promotion_count"], bool)
+        or not isinstance(values["promotion_count"], int)
+        or values["promotion_count"] != 1
+        or not isinstance(values["run_id"], str)
+        or values["run_id"] != "RR-000008"
+    ):
+        raise ValueError("independent verifier does not bind active RR-000008")
+    for label in (
+        "manifest_sha256",
+        "replacement_logical_sha256",
+        "canonical_logical_sha256",
+        "normalized_view_definition_sha256",
+    ):
+        if not isinstance(values[label], str):
+            raise ValueError(f"independent verifier {label} is invalid")
+        _require_sha256(values[label], f"independent verifier {label}")
+    if values["view_columns"] != list(_RECONCILED_VIEW_COLUMNS):
+        raise ValueError("independent verifier view columns differ from exact mapping")
+    return values
+
+
+def _origin_verifier_metadata_payload(
+    origin: _VerifiedMinuteSourceOriginV2,
+) -> dict[str, object]:
+    for path, content in origin.evidence_bindings:
+        if path.name == "verifier.json":
+            verifier = _decode_canonical_object(content, "allowlisted verifier evidence")
+            return _verified_postgresql_metadata_payload(verifier.get("postgresql_metadata"))
+    raise ValueError("admitted origin does not bind independent PostgreSQL metadata")
+
+
+def _origin_rr_ledger_inventory(
+    origin: _VerifiedMinuteSourceOriginV2,
+    *,
+    boundary: DevelopmentReadBoundaryV2,
+) -> RRLedgerInventoryV2:
+    for path, content in origin.evidence_bindings:
+        if path.name == "verifier.json":
+            verifier = _decode_canonical_object(content, "allowlisted verifier evidence")
+            rr_payload = verifier.get("rr_ledger")
+            expected_manifests, expected_parts = _rr_authority_from_rr_payload(rr_payload)
+            return reopen_rr_ledger_inventory_v2(
+                rr_payload,
+                symbols=boundary.allowed_symbols,
+                intervals=tuple((item.start, item.end) for item in boundary.allowed_intervals),
+                expected_work_unit_manifest_sha256=expected_manifests,
+                expected_comparison_part_sha256=expected_parts,
+            )
+    raise ValueError("admitted origin does not bind authenticated RR ledger inventory")
+
+
+def _require_rr_promotion_run_binding(
+    inventory: RRLedgerInventoryV2,
+    promotion_manifest_sha256: object,
+) -> None:
+    if (
+        not isinstance(promotion_manifest_sha256, str)
+        or promotion_manifest_sha256 != inventory.run_manifest_sha256
+    ):
+        raise ValueError("RR ledger run manifest differs from authenticated promotion receipt")
 
 
 def _verify_minute_publication_origin(
@@ -2264,15 +3553,30 @@ def _verify_minute_publication_origin(
         raise ValueError("validation source origin differs from admitted original evidence")
 
 
+def _derive_required_minute_source_origin(
+    boundary: DevelopmentReadBoundaryV2,
+    availability: ScopedSourceAvailabilityV2,
+) -> _VerifiedMinuteSourceOriginV2:
+    origin = _derive_verified_minute_source_origin(boundary=boundary, availability=availability)
+    if origin is None:
+        raise ValueError("verified minute source lost its admitted origin")
+    return origin
+
+
 def _verify_minute_reader_binding(
     capability: VerifiedDevelopmentMinuteSourceV2 | None,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
+    *,
+    revalidate_evidence: bool = True,
 ) -> tuple[str, str, str, str]:
     if capability is None:
         raise ValueError("available scoped source requires a verified source capability")
     _verify_registered_minute_source_capability(
-        capability, boundary=boundary, availability=availability
+        capability,
+        boundary=boundary,
+        availability=availability,
+        revalidate_evidence=revalidate_evidence,
     )
     admitted = tuple(item for item in availability.candidates if item.admitted)
     if len(admitted) != 1:
@@ -2330,7 +3634,7 @@ def _register_minute_source_capability(
     availability: ScopedSourceAvailabilityV2,
     availability_bytes: bytes,
     evidence_bindings: tuple[tuple[Path, bytes], ...],
-    implementation: _FixtureMinuteReadImplementationV2,
+    implementation: _FixtureMinuteReadImplementationV2 | _PostgresqlMinuteReadImplementationV2,
 ) -> None:
     identifier = id(capability)
 
@@ -2340,6 +3644,9 @@ def _register_minute_source_capability(
         current = _VERIFIED_MINUTE_SOURCE_CAPABILITIES.get(identifier)
         if current is not None and current[0] is reference:
             _VERIFIED_MINUTE_SOURCE_CAPABILITIES.pop(identifier, None)
+            registered_implementation = current[5]
+            if isinstance(registered_implementation, _PostgresqlMinuteReadImplementationV2):
+                registered_implementation.engine.dispose()
 
     reference = weakref.ref(capability, cleanup)
     _VERIFIED_MINUTE_SOURCE_CAPABILITIES[identifier] = (
@@ -2354,12 +3661,31 @@ def _register_minute_source_capability(
         raise ValueError("minute source capability availability bytes changed")
 
 
+def _registered_minute_source_implementation(
+    capability: VerifiedDevelopmentMinuteSourceV2,
+) -> _FixtureMinuteReadImplementationV2 | _PostgresqlMinuteReadImplementationV2:
+    registered = _VERIFIED_MINUTE_SOURCE_CAPABILITIES.get(id(capability))
+    if registered is None or registered[0]() is not capability:
+        raise ValueError("minute source capability is closed or unregistered")
+    return registered[5]
+
+
+def _close_minute_source_capability(capability: VerifiedDevelopmentMinuteSourceV2) -> None:
+    registered = _VERIFIED_MINUTE_SOURCE_CAPABILITIES.pop(id(capability), None)
+    if registered is None or registered[0]() is not capability:
+        return
+    implementation = registered[5]
+    if isinstance(implementation, _PostgresqlMinuteReadImplementationV2):
+        implementation.engine.dispose()
+
+
 def _verify_registered_minute_source_capability(
     capability: VerifiedDevelopmentMinuteSourceV2,
     *,
     boundary: DevelopmentReadBoundaryV2,
     availability: ScopedSourceAvailabilityV2,
-) -> _FixtureMinuteReadImplementationV2:
+    revalidate_evidence: bool = True,
+) -> _FixtureMinuteReadImplementationV2 | _PostgresqlMinuteReadImplementationV2:
     if not isinstance(capability, VerifiedDevelopmentMinuteSourceV2):
         raise TypeError("source reader must be a verifier-issued capability")
     registered = _VERIFIED_MINUTE_SOURCE_CAPABILITIES.get(id(capability))
@@ -2371,10 +3697,11 @@ def _verify_registered_minute_source_capability(
         or registered[3]() is not availability
     ):
         raise ValueError("minute source capability is not the registered original")
-    verified_scoped_source_availability_bytes_v2(availability, boundary=boundary)
-    for path, original_bytes in registered[4]:
-        if read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES) != original_bytes:
-            raise ValueError("minute source capability original evidence changed")
+    if revalidate_evidence:
+        verified_scoped_source_availability_bytes_v2(availability, boundary=boundary)
+        for path, original_bytes in registered[4]:
+            if read_bounded_regular(path, _MAX_DESCRIPTOR_BYTES) != original_bytes:
+                raise ValueError("minute source capability original evidence changed")
     return registered[5]
 
 
@@ -2385,25 +3712,245 @@ def _iter_verified_minute_source_rows(
     availability: ScopedSourceAvailabilityV2,
     request: BoundaryRequestV2,
     request_index: int,
+    progress: Callable[[Mapping[str, int]], None] | None = None,
 ) -> Any:
     if capability is None:
         raise ValueError("verified minute source capability is required")
+    if (
+        request.operation_kind is not AccessOperationKindV2.ITERATOR
+        or request.target_identity != capability.origin_sha256
+        or request.timeframe != "1m"
+        or request.symbol not in boundary.allowed_symbols
+        or (request.start, request.end)
+        not in {(item.start, item.end) for item in boundary.allowed_intervals}
+    ):
+        raise PermissionError("request differs from the exact one-minute development boundary")
     implementation = _verify_registered_minute_source_capability(
-        capability, boundary=boundary, availability=availability
+        capability,
+        boundary=boundary,
+        availability=availability,
+        revalidate_evidence=False,
     )
-    if implementation.fail_request_index == request_index:
-        raise RuntimeError("fixture verifier-owned minute source interrupted")
-    rows = implementation.request_rows[request_index]
+    boundary.authorize(request)
+    if isinstance(implementation, _FixtureMinuteReadImplementationV2):
+        if implementation.fail_request_index == request_index:
+            raise RuntimeError("fixture verifier-owned minute source interrupted")
+        rows = implementation.request_rows[request_index]
 
-    def verified_rows() -> Any:
-        for row in rows:
-            _verify_registered_minute_source_capability(
-                capability, boundary=boundary, availability=availability
+        def verified_fixture_rows() -> Any:
+            for row in rows:
+                _verify_registered_minute_source_capability(
+                    capability,
+                    boundary=boundary,
+                    availability=availability,
+                    revalidate_evidence=False,
+                )
+                boundary.authorize(request)
+                yield row
+
+        return verified_fixture_rows()
+
+    def verified_postgresql_rows() -> Any:
+        _verify_registered_minute_source_capability(
+            capability,
+            boundary=boundary,
+            availability=availability,
+            revalidate_evidence=False,
+        )
+        boundary.authorize(request)
+        _verify_postgresql_metadata_preflight(
+            implementation.engine,
+            origin=implementation.origin,
+            expected=implementation.expected_metadata,
+        )
+        yield from _iter_rr_authenticated_postgresql_rows(
+            implementation,
+            request=request,
+            progress=progress,
+        )
+
+    return verified_postgresql_rows()
+
+
+_EXACT_POSTGRESQL_MINUTE_SQL = text(
+    """
+SELECT source.symbol, source."interval" AS timeframe,
+       source.open_time AS open_time_ms,
+       CASE WHEN source.origin IN ('binance_correction', 'binance_fill')
+            THEN replacement.open::text ELSE source.open::text END AS open,
+       CASE WHEN source.origin IN ('binance_correction', 'binance_fill')
+            THEN replacement.high::text ELSE source.high::text END AS high,
+       CASE WHEN source.origin IN ('binance_correction', 'binance_fill')
+            THEN replacement.low::text ELSE source.low::text END AS low,
+       CASE WHEN source.origin IN ('binance_correction', 'binance_fill')
+            THEN replacement.close::text ELSE source.close::text END AS close,
+       CASE WHEN source.origin IN ('binance_correction', 'binance_fill')
+            THEN replacement.volume::text ELSE source.volume::text END AS volume,
+       CASE WHEN source.origin IN ('binance_correction', 'binance_fill')
+            THEN replacement.quote_volume::text ELSE source.quote_volume::text END AS quote_volume,
+       CASE WHEN source.origin IN ('binance_correction', 'binance_fill')
+            THEN replacement.trades::text ELSE source.trades::text END AS trades,
+       source.origin, source.recovery_run_id, source.reconciliation_run_id
+FROM market_data.candles_reconciled AS source
+LEFT JOIN market_data.candle_reconciliation_replacements AS replacement
+  ON replacement.run_id='RR-000008'
+ AND replacement.symbol=source.symbol
+ AND replacement."interval"=source."interval"
+ AND replacement.open_time=source.open_time
+WHERE source.symbol=:symbol AND source."interval"='1m'
+  AND source.open_time >= :start_ms
+  AND source.open_time < :end_ms
+ORDER BY source.open_time
+"""
+).execution_options(stream_results=True)
+
+
+def _iter_exact_postgresql_minute_rows(
+    implementation: _PostgresqlMinuteReadImplementationV2,
+    *,
+    request: BoundaryRequestV2,
+    on_batch: Callable[[int], None] | None = None,
+) -> Iterator[Mapping[str, Any]]:
+    """Yield exact text/Decimal inputs; never route trust values through Float64."""
+
+    with implementation.engine.connect() as connection:
+        result = connection.execution_options(
+            stream_results=True,
+            yield_per=implementation.batch_size,
+        ).execute(
+            _EXACT_POSTGRESQL_MINUTE_SQL,
+            {
+                "symbol": request.symbol,
+                "start_ms": int(request.start.timestamp() * 1000),
+                "end_ms": int(request.end.timestamp() * 1000),
+            },
+        )
+        mappings = result.mappings()
+        while True:
+            batch = mappings.fetchmany(implementation.batch_size)
+            if not batch:
+                return
+            if len(batch) > implementation.batch_size:
+                raise ValueError("PostgreSQL exact iterator exceeded its batch ceiling")
+            if on_batch is not None:
+                on_batch(len(batch))
+            for row in batch:
+                yield dict(row)
+
+
+def _iter_rr_authenticated_postgresql_rows(
+    implementation: _PostgresqlMinuteReadImplementationV2,
+    *,
+    request: BoundaryRequestV2,
+    progress: Callable[[Mapping[str, int]], None] | None = None,
+) -> Iterator[CanonicalMinuteRowV2]:
+    preflight_scoped_rr_ledger_parts_v2(
+        implementation.rr_inventory,
+        symbol=request.symbol,
+        start=request.start,
+        end=request.end,
+    )
+    counts = {"ledger": 0, "database": 0, "emitted": 0, "unavailable": 0}
+
+    def checkpoint() -> None:
+        if progress is not None:
+            progress(counts)
+
+    def ledger_batch(size: int) -> None:
+        counts["ledger"] += size
+        checkpoint()
+
+    def database_batch(size: int) -> None:
+        counts["database"] += size
+        checkpoint()
+
+    ledger = iter_scoped_rr_ledger_rows_v2(
+        implementation.rr_inventory,
+        symbol=request.symbol,
+        start=request.start,
+        end=request.end,
+        batch_size=implementation.batch_size,
+        on_batch=ledger_batch,
+        preflight_verified=True,
+    )
+    source: Iterator[Mapping[str, Any]] | None = None
+    previous_source_ms: int | None = None
+    try:
+        for ledger_row in ledger:
+            if not ledger_row.admits_candle:
+                counts["unavailable"] += 1
+                continue
+            if source is None:
+                source = iter(
+                    _iter_exact_postgresql_minute_rows(
+                        implementation,
+                        request=request,
+                        on_batch=database_batch,
+                    )
+                )
+            source_row = next(source, None)
+            if source_row is None:
+                raise ValueError("PostgreSQL is missing an RR-authenticated admitted row")
+            source_ms = _exact_source_open_time_ms(source_row)
+            if previous_source_ms is not None and source_ms <= previous_source_ms:
+                raise ValueError("PostgreSQL minute rows are duplicated or reordered")
+            if source_ms != ledger_row.open_time_ms:
+                raise ValueError("PostgreSQL contains an extra or missing RR-authenticated row")
+            candle, origin = _exact_recovery_candle(source_row)
+            if (
+                candle.symbol != ledger_row.symbol
+                or candle.timeframe != "1m"
+                or candle.row_checksum() != ledger_row.expected_row_sha256
+                or origin != ledger_row.expected_origin
+                or source_row.get("reconciliation_run_id") != "RR-000008"
+            ):
+                raise ValueError("PostgreSQL row differs from RR authenticated content")
+            previous_source_ms = source_ms
+            counts["emitted"] += 1
+            yield CanonicalMinuteRowV2(
+                timestamp=datetime.fromtimestamp(candle.open_time_ms / 1000, tz=UTC),
+                symbol=candle.symbol,
+                timeframe=candle.timeframe,
+                open=candle.open,
+                high=candle.high,
+                low=candle.low,
+                close=candle.close,
+                volume=candle.volume,
             )
-            boundary.authorize(request)
-            yield row
+        if source is not None and next(source, None) is not None:
+            raise ValueError("PostgreSQL contains unaccounted rows after RR ledger exhaustion")
+    except BaseException:
+        checkpoint()
+        raise
+    checkpoint()
 
-    return verified_rows()
+
+def _exact_source_open_time_ms(row: Mapping[str, Any]) -> int:
+    value = row.get("open_time_ms")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("PostgreSQL exact row timestamp is invalid")
+    return value
+
+
+def _exact_recovery_candle(row: Mapping[str, Any]) -> tuple[RecoveryCandle, str]:
+    required = ("symbol", "timeframe", "open", "high", "low", "close", "volume", "origin")
+    if any(not isinstance(row.get(label), str) for label in required):
+        raise ValueError("PostgreSQL exact row text mapping is invalid")
+    candle = RecoveryCandle(
+        symbol=str(row["symbol"]),
+        timeframe=str(row["timeframe"]),
+        open_time_ms=_exact_source_open_time_ms(row),
+        open=Decimal(str(row["open"])),
+        high=Decimal(str(row["high"])),
+        low=Decimal(str(row["low"])),
+        close=Decimal(str(row["close"])),
+        volume=Decimal(str(row["volume"])),
+        quote_volume=(
+            None if row.get("quote_volume") is None else Decimal(str(row["quote_volume"]))
+        ),
+        trades=None if row.get("trades") is None else int(str(row["trades"])),
+    )
+    return candle, str(row["origin"])
 
 
 def _stream_minute_request(
@@ -2426,7 +3973,7 @@ def _stream_minute_request(
     row_buffer: list[tuple[CanonicalMinuteRowV2, bytes]] = []
     request_rows = 0
     request_bytes = 0
-    previous_timestamp: datetime | None = None
+    prior_timestamp: datetime | None = None
     partition_index = 0
 
     def flush() -> None:
@@ -2473,8 +4020,8 @@ def _stream_minute_request(
             or not request.start <= row.timestamp < request.end
         ):
             raise PermissionError("minute row exceeds its authorized half-open request")
-        if previous_timestamp is not None and row.timestamp <= previous_timestamp:
-            raise ValueError("minute reader rows must be unique and strictly ordered")
+        if prior_timestamp is not None and row.timestamp <= prior_timestamp:
+            raise ValueError("minute reader rows must be strictly ordered and unique")
         content = _canonical_minute_row_bytes(
             row,
             source_identity=source_identity,
@@ -2489,7 +4036,7 @@ def _stream_minute_request(
         row_buffer.append((row, content))
         request_rows += 1
         request_bytes += len(content)
-        previous_timestamp = row.timestamp
+        prior_timestamp = row.timestamp
         if len(row_buffer) == max_rows_per_partition:
             flush()
     flush()
@@ -2706,6 +4253,10 @@ def _verify_minute_publication_audit(
             "origin_proof_sha256",
             "record_count",
             "terminal_record_sha256",
+            "authentication_progress",
+            "progress_record_count",
+            "terminal_progress_sha256",
+            "progress_inventory_sha256",
             "rows_admitted",
             "bytes_admitted",
             "final_scope_attempts",
@@ -2745,6 +4296,7 @@ def _verify_minute_publication_audit(
         or values["audit_publication_sha256"] != publication.audit_publication_sha256
     ):
         raise ValueError("minute publication audit binding is invalid")
+    _verify_authentication_progress_v2(publication_path.parent / "progress", values)
     records = bounded_regular_files(
         publication_path.parent / "records",
         maximum=_MAX_MINUTE_PUBLICATION_ENTRIES,
@@ -2858,6 +4410,107 @@ def _verify_minute_publication_audit(
         canonical_bytes=content,
         completions=tuple(completions),
     )
+
+
+def _verify_authentication_progress_v2(
+    progress_root: Path,
+    audit: Mapping[str, object],
+) -> None:
+    files = bounded_regular_files(progress_root, maximum=_MAX_MINUTE_PUBLICATION_ENTRIES)
+    count = audit.get("progress_record_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count != len(files):
+        raise ValueError("minute authentication progress count differs")
+    prior: str | None = None
+    digests: list[str] = []
+    previous_counts = {"ledger": 0, "database": 0, "emitted": 0, "unavailable": 0}
+    for sequence, relative in enumerate(files, start=1):
+        record = _decode_canonical_object(
+            read_bounded_regular(progress_root / relative, _MAX_DESCRIPTOR_BYTES),
+            "minute authentication progress",
+        )
+        values = _exact_mapping(
+            record,
+            {
+                "sequence",
+                "boundary_sha256",
+                "request",
+                "counts",
+                "prior_progress_sha256",
+                "final_scope_attempts",
+                "final_rows",
+                "final_access_records",
+                "progress_sha256",
+            },
+            "minute authentication progress",
+        )
+        counts = _exact_mapping(
+            values["counts"],
+            {"ledger", "database", "emitted", "unavailable"},
+            "minute authentication progress counts",
+        )
+        normalized = {
+            key: _nonnegative_count(counts[key], f"progress {key}") for key in previous_counts
+        }
+        payload = {key: value for key, value in values.items() if key != "progress_sha256"}
+        digest = hash_json("phase5-validation-minute-auth-progress-v2", payload)
+        if (
+            values["sequence"] != sequence
+            or values["prior_progress_sha256"] != prior
+            or values["progress_sha256"] != digest
+            or any(normalized[key] < previous_counts[key] for key in normalized)
+            or values["final_scope_attempts"] != 0
+            or values["final_rows"] != 0
+            or values["final_access_records"] != 0
+        ):
+            raise ValueError("minute authentication progress chain is invalid")
+        prior = digest
+        digests.append(digest)
+        previous_counts = normalized
+    if (
+        audit.get("terminal_progress_sha256") != prior
+        or audit.get("progress_inventory_sha256")
+        != hash_json("phase5-validation-minute-auth-progress-inventory-v2", digests)
+        or audit.get("authentication_progress") != previous_counts
+    ):
+        raise ValueError("minute authentication progress terminal binding differs")
+
+
+def _verify_failed_minute_access_audit_v2(audit_root: Path) -> None:
+    content = read_bounded_regular(audit_root / "failure.json", _MAX_DESCRIPTOR_BYTES)
+    record = _decode_canonical_object(content, "failed minute access audit")
+    values = _exact_mapping(
+        record,
+        {
+            "schema_version",
+            "boundary_sha256",
+            "source_availability_sha256",
+            "active_request",
+            "completed_rows",
+            "completed_bytes",
+            "terminal_record_sha256",
+            "authentication_progress",
+            "progress_record_count",
+            "terminal_progress_sha256",
+            "progress_inventory_sha256",
+            "failure_type",
+            "final_scope_attempts",
+            "final_rows",
+            "final_access_records",
+            "failure_sha256",
+        },
+        "failed minute access audit",
+    )
+    payload = {key: value for key, value in values.items() if key != "failure_sha256"}
+    if (
+        values["schema_version"] != "phase5-validation-minute-access-attempt-failure-v2"
+        or values["failure_sha256"]
+        != hash_json("phase5-validation-minute-access-attempt-failure-v2", payload)
+        or values["final_scope_attempts"] != 0
+        or values["final_rows"] != 0
+        or values["final_access_records"] != 0
+    ):
+        raise ValueError("failed minute access audit binding is invalid")
+    _verify_authentication_progress_v2(audit_root / "progress", values)
 
 
 def _verify_minute_partition_tree(
@@ -3256,6 +4909,25 @@ def _verify_trusted_candidate_descriptor(
     boundary: DevelopmentReadBoundaryV2,
     read_reference: Any,
 ) -> None:
+    verifier_sha = _verify_candidate_descriptor_evidence(
+        descriptor,
+        descriptor_bytes,
+        descriptor_path=descriptor_path,
+        boundary=boundary,
+        read_reference=read_reference,
+    )
+    if verifier_sha not in _TRUSTED_VERIFIER_EVIDENCE_SHA256:
+        raise ValueError("verifier evidence is not rooted in the trusted exact allowlist")
+
+
+def _verify_candidate_descriptor_evidence(
+    descriptor: dict[str, object],
+    descriptor_bytes: bytes,
+    *,
+    descriptor_path: Path,
+    boundary: DevelopmentReadBoundaryV2,
+    read_reference: Any,
+) -> str:
     expected_fields = {
         "schema_version",
         "source_kind",
@@ -3277,7 +4949,7 @@ def _verify_trusted_candidate_descriptor(
     source_identity = descriptor["source_identity"]
     if not isinstance(source_identity, str) or not source_identity:
         raise ValueError("candidate source identity is invalid")
-    originals: dict[str, tuple[dict[str, Any], str]] = {}
+    originals: dict[str, tuple[dict[str, Any], str, bytes]] = {}
     for label in ("original_manifest", "verifier_evidence", "predicate_evidence"):
         path_value = descriptor[f"{label}_path"]
         expected_sha = descriptor[f"{label}_sha256"]
@@ -3287,10 +4959,29 @@ def _verify_trusted_candidate_descriptor(
         if expected_sha != actual_sha:
             raise ValueError(f"{label} digest differs from original bytes")
         decoded = _decode_canonical_object(content, label)
-        originals[label] = (decoded, actual_sha)
-    original, original_sha = originals["original_manifest"]
-    verifier, verifier_sha = originals["verifier_evidence"]
-    predicate, predicate_sha = originals["predicate_evidence"]
+        originals[label] = (decoded, actual_sha, content)
+    original, original_sha, original_bytes = originals["original_manifest"]
+    verifier, verifier_sha, verifier_bytes = originals["verifier_evidence"]
+    predicate, predicate_sha, predicate_bytes = originals["predicate_evidence"]
+    if original.get("schema_version") == "phase5-development-scoped-source-manifest-v3":
+        verified_source_identity = _verify_candidate_inputs_payload_v3(
+            original=original,
+            original_bytes=original_bytes,
+            predicate=predicate,
+            predicate_bytes=predicate_bytes,
+            boundary=boundary,
+            read_reference=read_reference,
+        )
+        if verified_source_identity != source_identity:
+            raise ValueError("candidate descriptor source identity differs from ancestry")
+        _verify_independent_verifier_evidence_v3(
+            verifier_bytes,
+            source_identity=source_identity,
+            original_bytes=original_bytes,
+            predicate_bytes=predicate_bytes,
+            boundary=boundary,
+        )
+        return verifier_sha
     scope = _boundary_scope_payload(boundary)
     original_payload = {
         "source_identity": source_identity,
@@ -3322,8 +5013,6 @@ def _verify_trusted_candidate_descriptor(
         ),
     }:
         raise ValueError("independent verifier evidence is invalid")
-    if verifier_sha not in _TRUSTED_VERIFIER_EVIDENCE_SHA256:
-        raise ValueError("verifier evidence is not rooted in the trusted exact allowlist")
     predicate_payload = {
         "source_identity": source_identity,
         **scope,
@@ -3339,6 +5028,7 @@ def _verify_trusted_candidate_descriptor(
         ),
     }:
         raise ValueError("predicate-before-read evidence is invalid")
+    return verifier_sha
 
 
 def _boundary_scope_payload(boundary: DevelopmentReadBoundaryV2) -> dict[str, object]:
@@ -3346,6 +5036,30 @@ def _boundary_scope_payload(boundary: DevelopmentReadBoundaryV2) -> dict[str, ob
         "boundary_sha256": boundary.boundary_sha256,
         "allowed_symbols": list(boundary.allowed_symbols),
         "allowed_timeframes": list(boundary.allowed_timeframes),
+        "allowed_intervals": [
+            {"start": _utc_text(item.start), "end": _utc_text(item.end)}
+            for item in boundary.allowed_intervals
+        ],
+    }
+
+
+def _source_scope_payload_v3(
+    boundary: DevelopmentReadBoundaryV2,
+    *,
+    derived_targets: tuple[str, ...],
+) -> dict[str, object]:
+    if tuple(boundary.derived_target_timeframes) != derived_targets:
+        raise ValueError("candidate derived targets differ from the development boundary")
+    if (
+        tuple(boundary.source_readable_timeframes) != ("1m",)
+        or tuple(boundary.allowed_timeframes) != boundary.source_readable_timeframes
+    ):
+        raise ValueError("candidate boundary has an invalid one-minute source policy")
+    return {
+        "boundary_sha256": boundary.boundary_sha256,
+        "allowed_symbols": list(boundary.allowed_symbols),
+        "source_readable_timeframes": ["1m"],
+        "derived_target_timeframes": list(derived_targets),
         "allowed_intervals": [
             {"start": _utc_text(item.start), "end": _utc_text(item.end)}
             for item in boundary.allowed_intervals

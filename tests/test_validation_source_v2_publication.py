@@ -6,6 +6,7 @@ import hashlib
 import copy
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -285,7 +286,7 @@ def test_unavailable_publication_never_touches_reader(source_chain, tmp_path: Pa
         split=split,
         boundary=boundary,
         availability=unavailable,
-        source_capability=Bomb(),
+        source_capability=cast(Any, Bomb()),
         publication_root=tmp_path / "source",
         audit_ledger_root=tmp_path / "audit",
         max_rows_per_partition=1,
@@ -339,7 +340,12 @@ def test_publication_rejects_scope_parent_and_partial_attacks(
     with pytest.raises((PermissionError, RuntimeError, ValueError)):
         _publish(source_chain, tmp_path, source_capability=capability)
     assert not (tmp_path / "source").exists()
-    assert not (tmp_path / "audit").exists()
+    audit = tmp_path / "audit"
+    assert audit.is_dir()
+    failure = json.loads((audit / "failure.json").read_text(encoding="utf-8"))
+    assert failure["final_scope_attempts"] == 0
+    assert failure["final_rows"] == 0
+    assert failure["final_access_records"] == 0
 
 
 def test_duck_typed_reader_imposter_and_copied_capability_are_rejected_pre_read(
@@ -433,7 +439,38 @@ def test_publication_refuses_concurrent_empty_destination(
     with pytest.raises(FileExistsError):
         _publish(source_chain, tmp_path)
     assert output.is_dir() and not tuple(output.iterdir())
-    assert not (tmp_path / "audit").exists()
+    audit = tmp_path / "audit"
+    assert (audit / "failure.json").is_file()
+    failure = json.loads((audit / "failure.json").read_text(encoding="utf-8"))
+    assert failure["final_scope_attempts"] == 0
+
+
+def test_failed_publication_binds_hash_chained_prefetch_progress(
+    source_chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from market_structure_lab.data import validation_source_v2 as module
+
+    capability = _capability(source_chain)
+
+    def interrupted(*_args, progress=None, **_kwargs):  # type: ignore[no-untyped-def]
+        assert progress is not None
+        progress({"ledger": 4, "database": 3, "emitted": 2, "unavailable": 1})
+        raise RuntimeError("after authenticated batch prefetch")
+
+    monkeypatch.setattr(module, "_iter_verified_minute_source_rows", interrupted)
+    with pytest.raises(RuntimeError, match="prefetch"):
+        _publish(source_chain, tmp_path, source_capability=capability)
+    audit = tmp_path / "audit"
+    failure = json.loads((audit / "failure.json").read_text(encoding="utf-8"))
+    assert failure["authentication_progress"] == {
+        "ledger": 4,
+        "database": 3,
+        "emitted": 2,
+        "unavailable": 1,
+    }
+    assert failure["progress_record_count"] == 1
+    assert failure["terminal_progress_sha256"]
+    module._verify_failed_minute_access_audit_v2(audit)  # noqa: SLF001
 
 
 def _rehash_source_manifest(path: Path, payload: dict[str, object]) -> None:
