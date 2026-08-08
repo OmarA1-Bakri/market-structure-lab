@@ -20,7 +20,6 @@ from market_structure_lab.core.artifact_io import (
     path_exists_no_follow,
     read_bounded_regular,
     require_regular_directory,
-    sha256_regular,
 )
 from market_structure_lab.core.identity import hash_json
 from market_structure_lab.data.gaps import read_manifest
@@ -132,6 +131,7 @@ def freeze_boundary_publications_v2(
         purge_hours=24,
         embargo_hours=24,
         timeframes=("1m", "1h", "4h"),
+        grid_contract_version="rr-month-aligned-v1",
     )
     split = freeze_development_split_v2(coverage=coverage, policy=policy)
     boundary = issue_development_read_boundary_v2(coverage, split)
@@ -202,6 +202,7 @@ def _verify_rr(
         raise ValueError("RR promotion must be the frozen RR-000008 authority")
     require_regular_directory(rr_root)
     relative_files = bounded_regular_files(rr_root, maximum=_MAX_RR_FILES)
+    frozen_inventory = set(relative_files)
     run = None
     work_manifests: dict[str, tuple[str, Path, Any]] = {}
     for relative in relative_files:
@@ -246,8 +247,12 @@ def _verify_rr(
         manifest_hashes.append(raw_sha)
         for part in manifest.parts:
             part_path = manifest_path.parent / part.path
-            if sha256_regular(part_path) != part.sha256:
-                raise ValueError("RR comparison part differs from work-unit metadata")
+            try:
+                relative_part = part_path.relative_to(rr_root).as_posix()
+            except ValueError as error:
+                raise ValueError("RR comparison part path escapes the frozen root") from error
+            if relative_part not in frozen_inventory:
+                raise ValueError("RR comparison part is absent from the frozen inventory")
             part_hashes.append(part.sha256)
     if not part_hashes:
         part_hashes.append(hash_json("phase5-validation-empty-comparison-parts-v2", []))
@@ -297,7 +302,7 @@ def _derive_coverage_entries(
                 symbol=symbol,
                 complete_start=datetime.fromtimestamp(interval.start_ms / 1000, UTC),
                 complete_end=datetime.fromtimestamp(interval.end_ms / 1000, UTC),
-                timeframes=("1m", "1h", "4h"),
+                timeframes=("1m",),
                 source_conflict=state != "compatible",
                 mapping_compatible=state == "compatible",
                 metadata_sha256=hash_json("phase5-validation-source-coverage-entry-v2", payload),

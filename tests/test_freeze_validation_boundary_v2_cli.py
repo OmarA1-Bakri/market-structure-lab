@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import os
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -16,6 +17,7 @@ from market_structure_lab.data.gaps import (
     SourceIdentity,
 )
 from market_structure_lab.data.reconciliation.manifests import (
+    LedgerPart,
     TradingEnvelope,
     WorkUnitManifest,
     freeze_reconciliation_run,
@@ -37,21 +39,27 @@ from market_structure_lab.research.validation_v2_splits import (
 )
 
 
-def _work_manifest(run_id: str, unit: ReconciliationWorkUnit) -> WorkUnitManifest:
+def _work_manifest(
+    run_id: str,
+    unit: ReconciliationWorkUnit,
+    *,
+    parts: tuple[LedgerPart, ...] = (),
+) -> WorkUnitManifest:
+    row_count = sum(part.row_count for part in parts)
     values = {
         "run_id": run_id,
         "work_unit_id": unit.work_unit_id,
         "publication_path": f"work-units/{unit.work_unit_id}",
-        "row_count": 0,
-        "classification_counts": (),
+        "row_count": row_count,
+        "classification_counts": (() if row_count == 0 else (("source_unavailable", row_count),)),
         "differing_field_counts": (),
         "source_artifacts": (),
         "replacement_row_count": 0,
         "replacement_logical_sha256": hashlib.sha256(b"").hexdigest(),
         "max_rows_per_part": 1,
-        "max_buffered_rows": 0,
+        "max_buffered_rows": min(row_count, 1),
         "status": "completed",
-        "parts": (),
+        "parts": parts,
     }
     provisional = WorkUnitManifest.__new__(WorkUnitManifest)
     for name, value in values.items():
@@ -60,14 +68,35 @@ def _work_manifest(run_id: str, unit: ReconciliationWorkUnit) -> WorkUnitManifes
     return WorkUnitManifest(**values, manifest_sha256=provisional.sha256())  # type: ignore[arg-type]
 
 
-def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+def _fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    sufficient_symbols: tuple[str, ...] = (
+        "ADAUSDT",
+        "BNBUSDT",
+        "DOGEUSDT",
+        "SOLUSDT",
+        "XRPUSDT",
+    ),
+    insufficient_symbols: tuple[str, ...] = (),
+    with_parts: bool = False,
+) -> dict[str, object]:
     dump = tmp_path / "callscore.dump"
     dump.write_bytes(b"fixture-postgresql-custom-dump")
     dump_sha = hashlib.sha256(dump.read_bytes()).hexdigest()
     start = int(datetime(2023, 1, 1, tzinfo=UTC).timestamp() * 1000)
     end = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000)
-    symbols = ("ADAUSDT", "BNBUSDT", "DOGEUSDT", "SOLUSDT", "XRPUSDT")
-    units = tuple(ReconciliationWorkUnit.create(symbol, "1m", start, end) for symbol in symbols)
+    symbols = tuple(sorted((*sufficient_symbols, *insufficient_symbols)))
+    insufficient_start = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp() * 1000)
+
+    def interval_start(symbol: str) -> int:
+        return insufficient_start if symbol in insufficient_symbols else start
+
+    units = tuple(
+        ReconciliationWorkUnit.create(symbol, "1m", interval_start(symbol), end)
+        for symbol in symbols
+    )
     run = freeze_reconciliation_run(
         run_id="RR-000008",
         cutoff=datetime(2026, 1, 1, tzinfo=UTC),
@@ -80,7 +109,9 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, objec
         algorithm_version="v1",
         code_commit="1" * 40,
         uv_lock_sha256="2" * 64,
-        envelopes=tuple(TradingEnvelope(symbol, "1m", start, end) for symbol in symbols),
+        envelopes=tuple(
+            TradingEnvelope(symbol, "1m", interval_start(symbol), end) for symbol in symbols
+        ),
         work_units=units,
     )
     rr_root = tmp_path / "rr"
@@ -89,10 +120,23 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, objec
     for unit in units:
         directory = rr_root / "work-units" / unit.work_unit_id
         directory.mkdir(parents=True)
+        parts: tuple[LedgerPart, ...] = ()
+        if with_parts:
+            part_path = directory / "part-00000.parquet"
+            part_path.write_bytes(b"opaque-ledger-fixture")
+            parts = (
+                LedgerPart(
+                    path=part_path.name,
+                    sha256=hashlib.sha256(part_path.read_bytes()).hexdigest(),
+                    row_count=1,
+                ),
+            )
         (directory / "manifest.json").write_text(
-            _work_manifest(run.run_id, unit).to_json(), encoding="utf-8"
+            _work_manifest(run.run_id, unit, parts=parts).to_json(), encoding="utf-8"
         )
-    coverage = tuple(VerifiedCoverageInterval(symbol, "1m", start, end) for symbol in symbols)
+    coverage = tuple(
+        VerifiedCoverageInterval(symbol, "1m", interval_start(symbol), end) for symbol in symbols
+    )
     promotion = ReconciliationPromotion(
         run_id=run.run_id,
         manifest_sha256=run.manifest_sha256,
@@ -117,7 +161,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, objec
             ObservedEnvelope(
                 symbol=symbol,
                 timeframe="1m",
-                first_open_time_ms=start,
+                first_open_time_ms=interval_start(symbol),
                 last_open_time_ms=end - 60_000,
                 row_count=1,
             )
@@ -162,7 +206,7 @@ def _freeze(
     monkeypatch: pytest.MonkeyPatch,
     prefix: str = "published",
 ):
-    fixture = _fixture(tmp_path, monkeypatch)
+    fixture = _fixture(tmp_path, monkeypatch, with_parts=True)
     return cli.freeze_boundary_publications_v2(
         dump_path=fixture["dump_path"],  # type: ignore[arg-type]
         rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
@@ -195,13 +239,73 @@ def test_freezer_recomputes_original_metadata_and_reopens_publications(
         coverage.raw_dump.dump_sha256
         == hashlib.sha256((tmp_path / "callscore.dump").read_bytes()).hexdigest()
     )
+    assert all(entry.timeframes == ("1m",) for entry in coverage.entries)
+    assert split.policy.source_readable_timeframes == ("1m",)
+    assert split.policy.derived_target_timeframes == ("1h", "4h")
+    assert split.policy.grid_contract_version == "rr-month-aligned-v1"
+    assert boundary.source_readable_timeframes == ("1m",)
+    assert boundary.derived_target_timeframes == ("1h", "4h")
+    assert boundary.allowed_timeframes == ("1m",)
+
+
+def test_freezer_records_compatible_symbols_without_minimum_complete_span_as_excluded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sufficient_symbols = (
+        "ADAUSDT",
+        "ALGOUSDT",
+        "BNBUSDT",
+        "DOGEUSDT",
+        "DOTUSDT",
+        "IMXUSDT",
+        "INJUSDT",
+        "LINKUSDT",
+        "NEARUSDT",
+        "TAOUSDT",
+        "XLMUSDT",
+        "XRPUSDT",
+        "ZECUSDT",
+    )
+    insufficient_symbols = ("APTUSDT", "FTMUSDT", "THETAUSDT")
+    fixture = _fixture(
+        tmp_path,
+        monkeypatch,
+        sufficient_symbols=sufficient_symbols,
+        insufficient_symbols=insufficient_symbols,
+    )
+    promotion_path = cast(Path, fixture["rr_promotion"])
+    compatibility_path = cast(Path, fixture["compatibility"])
+    promotion_before = promotion_path.read_bytes()
+    compatibility_before = compatibility_path.read_bytes()
+
+    result = cli.freeze_boundary_publications_v2(
+        dump_path=fixture["dump_path"],  # type: ignore[arg-type]
+        rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
+        rr_root=fixture["rr_root"],  # type: ignore[arg-type]
+        compatibility=fixture["compatibility"],  # type: ignore[arg-type]
+        **_outputs(tmp_path, "insufficient-span"),
+        require_zero_row_access=True,
+        require_zero_process_row_extraction=True,
+        require_zero_network_access=True,
+    )
+
+    assert result.split.eligible_symbols == sufficient_symbols
+    assert tuple(entry.symbol for entry in result.coverage.entries) == tuple(
+        sorted((*sufficient_symbols, *insufficient_symbols))
+    )
+    assert tuple((item.symbol, item.reason) for item in result.split.excluded_symbols) == tuple(
+        (symbol, "insufficient_complete_days") for symbol in insufficient_symbols
+    )
+    assert promotion_path.read_bytes() == promotion_before
+    assert compatibility_path.read_bytes() == compatibility_before
 
 
 def test_freezer_rejects_coherent_forged_compatibility_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = _fixture(tmp_path, monkeypatch)
-    compatibility = fixture["compatibility"]
+    compatibility = cast(Path, fixture["compatibility"])
     content = compatibility.read_bytes().replace(b'"compatible"', b'"source_conflict"')
     compatibility.write_bytes(content)
 
@@ -233,6 +337,33 @@ def test_freezer_requires_all_zero_access_guards(
             require_zero_process_row_extraction=True,
             require_zero_network_access=True,
         )
+
+
+def test_freezer_does_not_open_rr_part_bytes_before_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path, monkeypatch, with_parts=True)
+    original_open = cli.os.open
+
+    def guarded_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(path).suffix == ".parquet":
+            raise AssertionError("RR part opened before development boundary issuance")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(cli.os, "open", guarded_open)
+
+    result = cli.freeze_boundary_publications_v2(
+        dump_path=fixture["dump_path"],  # type: ignore[arg-type]
+        rr_promotion=fixture["rr_promotion"],  # type: ignore[arg-type]
+        rr_root=fixture["rr_root"],  # type: ignore[arg-type]
+        compatibility=fixture["compatibility"],  # type: ignore[arg-type]
+        **_outputs(tmp_path, "metadata-only"),
+        require_zero_row_access=True,
+        require_zero_process_row_extraction=True,
+        require_zero_network_access=True,
+    )
+
+    assert result.boundary.forbidden_temporal_intervals
 
 
 def test_freezer_is_byte_deterministic_and_no_clobber(
@@ -290,7 +421,7 @@ def test_concurrent_output_is_not_replaced_and_partial_outputs_are_rolled_back(
     original_link = os.link
     calls = 0
 
-    def racing_link(source: Path, destination: Path, **kwargs: object) -> None:
+    def racing_link(source: Path, destination: Path, **kwargs: Any) -> None:
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -349,6 +480,4 @@ def test_public_freezer_signature_has_no_authority_override() -> None:
     assert "_test_expectations" not in signature.parameters
     assert all("sha256" not in name for name in signature.parameters)
     with pytest.raises(TypeError, match="unexpected keyword"):
-        cli.freeze_boundary_publications_v2(  # type: ignore[call-arg]
-            _test_expectations=object()
-        )
+        cast(Any, cli.freeze_boundary_publications_v2)(_test_expectations=object())

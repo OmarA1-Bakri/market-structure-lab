@@ -104,6 +104,8 @@ class SplitPolicyV2:
     purge_hours: int
     embargo_hours: int
     timeframes: tuple[str, ...]
+    grid_contract_version: str = "equal-days-v1"
+    legacy_timeframes_schema: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         for label in (
@@ -139,13 +141,33 @@ class SplitPolicyV2:
             or len(self.timeframes) != len(set(self.timeframes))
         ):
             raise ValueError("timeframes must be a unique tuple")
+        if self.source_readable_timeframes != ("1m",):
+            raise ValueError("V2 source-readable timeframes must be exactly one-minute")
+        if self.derived_target_timeframes != ("1h", "4h"):
+            raise ValueError("V2 derived target timeframes must be exactly one-hour and four-hour")
+        if not isinstance(self.legacy_timeframes_schema, bool):
+            raise TypeError("legacy_timeframes_schema must be boolean")
+        if self.grid_contract_version not in {"equal-days-v1", "rr-month-aligned-v1"}:
+            raise ValueError("grid_contract_version is invalid")
+
+    @property
+    def source_readable_timeframes(self) -> tuple[str, ...]:
+        """Return timeframes that the source publication can supply directly."""
+
+        return tuple(timeframe for timeframe in self.timeframes if timeframe == "1m")
+
+    @property
+    def derived_target_timeframes(self) -> tuple[str, ...]:
+        """Return downstream aggregate targets derived from the source timeframe."""
+
+        return tuple(timeframe for timeframe in self.timeframes if timeframe != "1m")
 
     @property
     def policy_sha256(self) -> str:
         return hash_json("phase5-validation-split-policy-v2", self.to_dict())
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        common: dict[str, object] = {
             "block_count": self.block_count,
             "minimum_complete_days": self.minimum_complete_days,
             "asset_holdout_fraction_numerator": self.asset_holdout_fraction_numerator,
@@ -153,31 +175,68 @@ class SplitPolicyV2:
             "asset_holdout_salt": self.asset_holdout_salt,
             "purge_hours": self.purge_hours,
             "embargo_hours": self.embargo_hours,
-            "timeframes": list(self.timeframes),
         }
+        if self.legacy_timeframes_schema:
+            return {**common, "timeframes": list(self.timeframes)}
+        current: dict[str, object] = {
+            **common,
+            "timeframe_contract_version": "source-vs-derived-v2",
+            "source_readable_timeframes": list(self.source_readable_timeframes),
+            "derived_target_timeframes": list(self.derived_target_timeframes),
+        }
+        if self.grid_contract_version != "equal-days-v1":
+            current["grid_contract_version"] = self.grid_contract_version
+        return current
 
     @classmethod
     def from_dict(cls, payload: object) -> Self:
-        values = _exact_mapping(
-            payload,
-            {
-                "block_count",
-                "minimum_complete_days",
-                "asset_holdout_fraction_numerator",
-                "asset_holdout_fraction_denominator",
-                "asset_holdout_salt",
-                "purge_hours",
-                "embargo_hours",
-                "timeframes",
-            },
-            "split policy",
-        )
-        timeframes = values["timeframes"]
-        if not isinstance(timeframes, list) or any(
-            not isinstance(item, str) for item in timeframes
-        ):
-            raise TypeError("split policy timeframes must be a string list")
-        return cls(
+        common_fields = {
+            "block_count",
+            "minimum_complete_days",
+            "asset_holdout_fraction_numerator",
+            "asset_holdout_fraction_denominator",
+            "asset_holdout_salt",
+            "purge_hours",
+            "embargo_hours",
+        }
+        legacy = isinstance(payload, dict) and set(payload) == common_fields | {"timeframes"}
+        grid_contract_version = "equal-days-v1"
+        if legacy:
+            values = _exact_mapping(payload, common_fields | {"timeframes"}, "split policy")
+            timeframes = values["timeframes"]
+            if not isinstance(timeframes, list) or any(
+                not isinstance(item, str) for item in timeframes
+            ):
+                raise TypeError("split policy timeframes must be a string list")
+            if tuple(timeframes) != ("1m", "1h", "4h"):
+                raise ValueError("legacy split policy timeframes are not the frozen V2 contract")
+            source_timeframes = ["1m"]
+            derived_timeframes = ["1h", "4h"]
+        else:
+            current_fields = common_fields | {
+                "timeframe_contract_version",
+                "source_readable_timeframes",
+                "derived_target_timeframes",
+            }
+            if isinstance(payload, dict) and set(payload) == current_fields | {
+                "grid_contract_version"
+            }:
+                current_fields = current_fields | {"grid_contract_version"}
+            values = _exact_mapping(payload, current_fields, "split policy")
+            if values["timeframe_contract_version"] != "source-vs-derived-v2":
+                raise ValueError("split policy timeframe_contract_version is invalid")
+            source_timeframes = values["source_readable_timeframes"]  # type: ignore[assignment]
+            derived_timeframes = values["derived_target_timeframes"]  # type: ignore[assignment]
+            if not isinstance(source_timeframes, list) or any(
+                not isinstance(item, str) for item in source_timeframes
+            ):
+                raise TypeError("split policy source-readable timeframes must be a string list")
+            if not isinstance(derived_timeframes, list) or any(
+                not isinstance(item, str) for item in derived_timeframes
+            ):
+                raise TypeError("split policy derived target timeframes must be a string list")
+            grid_contract_version = str(values.get("grid_contract_version", "equal-days-v1"))
+        policy = cls(
             block_count=values["block_count"],  # type: ignore[arg-type]
             minimum_complete_days=values["minimum_complete_days"],  # type: ignore[arg-type]
             asset_holdout_fraction_numerator=values[  # type: ignore[arg-type]
@@ -189,8 +248,12 @@ class SplitPolicyV2:
             asset_holdout_salt=values["asset_holdout_salt"],  # type: ignore[arg-type]
             purge_hours=values["purge_hours"],  # type: ignore[arg-type]
             embargo_hours=values["embargo_hours"],  # type: ignore[arg-type]
-            timeframes=tuple(timeframes),
+            timeframes=tuple((*source_timeframes, *derived_timeframes)),
+            grid_contract_version=grid_contract_version,
         )
+        if legacy:
+            object.__setattr__(policy, "legacy_timeframes_schema", True)
+        return policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,10 +401,33 @@ def freeze_development_split_v2(
             excluded.append(ExcludedCoverageSymbolV2(entry.symbol, "source_conflict"))
         elif not entry.mapping_compatible:
             excluded.append(ExcludedCoverageSymbolV2(entry.symbol, "mapping_incompatible"))
-        elif not set(policy.timeframes).issubset(entry.timeframes):
+        elif not set(
+            policy.timeframes
+            if policy.legacy_timeframes_schema
+            else policy.source_readable_timeframes
+        ).issubset(entry.timeframes):
             excluded.append(ExcludedCoverageSymbolV2(entry.symbol, "timeframe_incomplete"))
         else:
-            eligible.append(entry)
+            complete_start = datetime(
+                entry.complete_start.year,
+                entry.complete_start.month,
+                entry.complete_start.day,
+                tzinfo=UTC,
+            )
+            if entry.complete_start != complete_start:
+                complete_start += timedelta(days=1)
+            complete_end = datetime(
+                entry.complete_end.year,
+                entry.complete_end.month,
+                entry.complete_end.day,
+                tzinfo=UTC,
+            )
+            if (complete_end - complete_start).days < policy.minimum_complete_days:
+                excluded.append(
+                    ExcludedCoverageSymbolV2(entry.symbol, "insufficient_complete_days")
+                )
+            else:
+                eligible.append(entry)
     if len(eligible) < 2:
         raise ValueError("split requires at least two eligible symbols")
     common_start = max(item.complete_start for item in eligible)
@@ -358,19 +444,26 @@ def freeze_development_split_v2(
     block_days = total_days // policy.block_count
     if block_days < 1:
         raise ValueError("common coverage cannot form six positive blocks")
-    grid_end = common_start + timedelta(days=block_days * policy.block_count)
-    blocks = tuple(
-        _grid_block(
-            index=index,
-            start=common_start + timedelta(days=index * block_days),
-            end=(
-                grid_end
-                if index == policy.block_count - 1
-                else common_start + timedelta(days=(index + 1) * block_days)
-            ),
+    if policy.grid_contract_version == "rr-month-aligned-v1":
+        blocks = _rr_month_aligned_blocks(
+            common_start=common_start,
+            common_end=common_end,
+            policy=policy,
         )
-        for index in range(policy.block_count)
-    )
+    else:
+        grid_end = common_start + timedelta(days=block_days * policy.block_count)
+        blocks = tuple(
+            _grid_block(
+                index=index,
+                start=common_start + timedelta(days=index * block_days),
+                end=(
+                    grid_end
+                    if index == policy.block_count - 1
+                    else common_start + timedelta(days=(index + 1) * block_days)
+                ),
+            )
+            for index in range(policy.block_count)
+        )
     eligible_symbols = tuple(sorted(item.symbol for item in eligible))
     ranked = tuple(
         sorted(
@@ -451,6 +544,64 @@ def _grid_block(*, index: int, start: datetime, end: datetime) -> GridBlockV2:
         end=end,
         day_count=(end - start).days,
         block_sha256=hash_json("phase5-validation-grid-block-v2", payload),
+    )
+
+
+def _add_utc_months(value: datetime, months: int) -> datetime:
+    month_index = value.year * 12 + value.month - 1 + months
+    year, zero_based_month = divmod(month_index, 12)
+    return datetime(year, zero_based_month + 1, 1, tzinfo=UTC)
+
+
+def _utc_month_floor(value: datetime) -> datetime:
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _utc_month_ceil(value: datetime) -> datetime:
+    floor = _utc_month_floor(value)
+    return floor if value == floor else _add_utc_months(floor, 1)
+
+
+def _utc_month_distance(start: datetime, end: datetime) -> int:
+    return (end.year - start.year) * 12 + end.month - start.month
+
+
+def _rr_month_aligned_blocks(
+    *, common_start: datetime, common_end: datetime, policy: SplitPolicyV2
+) -> tuple[GridBlockV2, ...]:
+    total_days = (common_end - common_start).days
+    equal_day_span = total_days // policy.block_count
+    if equal_day_span < 1:
+        raise ValueError("common coverage cannot form six positive blocks")
+    equal_day_final_start = common_start + timedelta(
+        days=equal_day_span * (policy.block_count - 1)
+    )
+    final_start = _utc_month_floor(equal_day_final_start)
+    earliest_start = _utc_month_ceil(common_start)
+    latest_end = _utc_month_floor(common_end)
+    months_before_final = _utc_month_distance(earliest_start, final_start)
+    months_after_final = _utc_month_distance(final_start, latest_end)
+    months_per_block = min(
+        months_before_final // (policy.block_count - 1),
+        months_after_final,
+    )
+    if months_per_block < 1:
+        raise ValueError("common coverage cannot form six whole-month RR blocks")
+    grid_start = _add_utc_months(
+        final_start, -months_per_block * (policy.block_count - 1)
+    )
+    grid_end = _add_utc_months(final_start, months_per_block)
+    if not (
+        common_start <= grid_start < final_start <= equal_day_final_start < grid_end <= common_end
+    ):
+        raise ValueError("RR month-aligned grid is outside conservative common coverage")
+    return tuple(
+        _grid_block(
+            index=index,
+            start=_add_utc_months(grid_start, index * months_per_block),
+            end=_add_utc_months(grid_start, (index + 1) * months_per_block),
+        )
+        for index in range(policy.block_count)
     )
 
 
@@ -622,7 +773,7 @@ def freeze_development_folds_v2(
 
     del outcomes
     _verify_split_original_for_folds(split)
-    if timeframe not in split.policy.timeframes or timeframe not in ("1h", "4h"):
+    if timeframe not in split.policy.derived_target_timeframes:
         raise ValueError("fold timeframe is outside the frozen development split")
     outer_folds: list[DevelopmentOuterFoldV2] = []
     for block_index in range(1, 5):
@@ -816,20 +967,43 @@ class DevelopmentReadBoundaryV2:
     forbidden_temporal_intervals: tuple[UtcIntervalV2, ...]
     boundary_sha256: str
     canonical_bytes: bytes = field(repr=False, compare=False)
+    source_readable_timeframes: tuple[str, ...] = ("1m",)
+    derived_target_timeframes: tuple[str, ...] = ("1h", "4h")
+    legacy_source_scope_schema: bool = field(default=False, init=False, repr=False)
     _factory_token: InitVar[object | None] = None
+    _legacy_source_scope: InitVar[bool] = False
 
-    def __post_init__(self, _factory_token: object | None) -> None:
+    def __post_init__(
+        self,
+        _factory_token: object | None,
+        _legacy_source_scope: bool,
+    ) -> None:
         if _factory_token is not _BOUNDARY_FACTORY:
             raise TypeError("DevelopmentReadBoundaryV2 requires its factory")
+        if _legacy_source_scope:
+            object.__setattr__(self, "legacy_source_scope_schema", True)
         if set(self.allowed_symbols) & set(self.forbidden_asset_symbols):
             raise ValueError("boundary allowed and forbidden symbols overlap")
+        if self.source_readable_timeframes != ("1m",):
+            raise ValueError("boundary source-readable timeframes must be exactly one-minute")
+        if self.derived_target_timeframes != ("1h", "4h"):
+            raise ValueError(
+                "boundary derived target timeframes must be exactly one-hour and four-hour"
+            )
+        expected_allowed = (
+            (*self.source_readable_timeframes, *self.derived_target_timeframes)
+            if self.legacy_source_scope_schema
+            else self.source_readable_timeframes
+        )
+        if self.allowed_timeframes != expected_allowed:
+            raise ValueError("boundary allowed timeframes must equal source-readable timeframes")
         if self.boundary_sha256 != hash_json(_BOUNDARY_IDENTITY_DOMAIN, self._identity_payload()):
             raise ValueError("boundary identity does not match its scope")
         if self.canonical_bytes != publication_json_bytes(self.to_dict()):
             raise ValueError("boundary canonical bytes do not match publication")
 
     def _identity_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "coverage_identity": self.coverage_identity.value,
             "split_identity": self.split_identity.value,
             "allowed_symbols": list(self.allowed_symbols),
@@ -844,6 +1018,10 @@ class DevelopmentReadBoundaryV2:
                 for item in self.forbidden_temporal_intervals
             ],
         }
+        if not self.legacy_source_scope_schema:
+            payload["source_readable_timeframes"] = list(self.source_readable_timeframes)
+            payload["derived_target_timeframes"] = list(self.derived_target_timeframes)
+        return payload
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -865,12 +1043,16 @@ class DevelopmentReadBoundaryV2:
             "forbidden_temporal_intervals": self.forbidden_temporal_intervals,
             "boundary_sha256": self.boundary_sha256,
             "canonical_bytes": self.canonical_bytes,
+            "source_readable_timeframes": self.source_readable_timeframes,
+            "derived_target_timeframes": self.derived_target_timeframes,
         }
 
     def authorize(self, request: BoundaryRequestV2) -> None:
         _verify_registered_boundary(self)
         if not isinstance(request, BoundaryRequestV2):
             raise TypeError("boundary request must be BoundaryRequestV2")
+        if self.legacy_source_scope_schema:
+            raise PermissionError("legacy development boundary is verification-only")
         allowed = (
             request.symbol in self.allowed_symbols
             and request.timeframe in self.allowed_timeframes
@@ -889,6 +1071,8 @@ class DevelopmentReadBoundaryV2:
         coverage: SourceCoveragePublicationV2,
         split: DevelopmentSplitPublicationV2,
     ) -> DevelopmentReadBoundaryV2:
+        if isinstance(payload, dict) and "source_readable_timeframes" not in payload:
+            return _reopen_legacy_development_read_boundary_v2(payload, coverage, split)
         expected = issue_development_read_boundary_v2(coverage, split)
         if not isinstance(payload, dict) or payload != expected.to_dict():
             raise ValueError("boundary publication differs from verified split")
@@ -901,25 +1085,18 @@ def issue_development_read_boundary_v2(
 ) -> DevelopmentReadBoundaryV2:
     """Issue the exact development capability from verified coverage and split."""
 
-    if split.coverage_identity != coverage.coverage_identity:
-        raise ValueError("split coverage identity differs from coverage publication")
-    coverage_bytes = verified_source_coverage_bytes(coverage)
-    split_bytes = _verified_split_bytes(split, coverage_bytes)
-    reopened_coverage = SourceCoveragePublicationV2.from_dict(
-        _decode_publication(coverage_bytes, "coverage")
-    )
-    reopened_split = DevelopmentSplitPublicationV2.from_dict(
-        _decode_publication(split_bytes, "split"), reopened_coverage
-    )
-    if reopened_split.to_dict() != split.to_dict():
-        raise ValueError("split differs from recomputed original publication bytes")
+    if split.policy.legacy_timeframes_schema:
+        raise ValueError("legacy split is verification-only and cannot issue source authority")
+    coverage_bytes, split_bytes = _verified_boundary_ancestry_bytes(coverage, split)
     intervals = tuple(UtcIntervalV2(block.start, block.end) for block in split.development_blocks)
     forbidden = (UtcIntervalV2(split.temporal_holdout.start, split.temporal_holdout.end),)
     payload = {
         "coverage_identity": coverage.coverage_identity.value,
         "split_identity": split.split_identity.value,
         "allowed_symbols": list(split.development_symbols),
-        "allowed_timeframes": list(split.policy.timeframes),
+        "allowed_timeframes": list(split.policy.source_readable_timeframes),
+        "source_readable_timeframes": list(split.policy.source_readable_timeframes),
+        "derived_target_timeframes": list(split.policy.derived_target_timeframes),
         "allowed_intervals": [
             {"start": _utc_text(item.start), "end": _utc_text(item.end)} for item in intervals
         ],
@@ -938,16 +1115,89 @@ def issue_development_read_boundary_v2(
         coverage_identity=coverage.coverage_identity,
         split_identity=split.split_identity,
         allowed_symbols=split.development_symbols,
+        allowed_timeframes=split.policy.source_readable_timeframes,
+        allowed_intervals=intervals,
+        forbidden_asset_symbols=split.asset_holdout_symbols,
+        forbidden_temporal_intervals=forbidden,
+        boundary_sha256=digest,
+        canonical_bytes=publication_json_bytes(public),
+        source_readable_timeframes=split.policy.source_readable_timeframes,
+        derived_target_timeframes=split.policy.derived_target_timeframes,
+        _factory_token=_BOUNDARY_FACTORY,
+    )
+    _register_verified_boundary(boundary, coverage_bytes, split_bytes)
+    return boundary
+
+
+def _reopen_legacy_development_read_boundary_v2(
+    payload: object,
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+) -> DevelopmentReadBoundaryV2:
+    """Reopen historical bytes for verification without granting read authority."""
+
+    if not split.policy.legacy_timeframes_schema:
+        raise ValueError("legacy boundary requires an exact legacy split publication")
+    coverage_bytes, split_bytes = _verified_boundary_ancestry_bytes(coverage, split)
+    intervals = tuple(UtcIntervalV2(block.start, block.end) for block in split.development_blocks)
+    forbidden = (UtcIntervalV2(split.temporal_holdout.start, split.temporal_holdout.end),)
+    identity_payload = {
+        "coverage_identity": coverage.coverage_identity.value,
+        "split_identity": split.split_identity.value,
+        "allowed_symbols": list(split.development_symbols),
+        "allowed_timeframes": list(split.policy.timeframes),
+        "allowed_intervals": [
+            {"start": _utc_text(item.start), "end": _utc_text(item.end)} for item in intervals
+        ],
+        "forbidden_asset_symbols": list(split.asset_holdout_symbols),
+        "forbidden_temporal_intervals": [
+            {"start": _utc_text(item.start), "end": _utc_text(item.end)} for item in forbidden
+        ],
+    }
+    digest = hash_json(_BOUNDARY_IDENTITY_DOMAIN, identity_payload)
+    public = {
+        "schema_version": "phase5-validation-development-read-boundary-v2",
+        **identity_payload,
+        "boundary_sha256": digest,
+    }
+    if payload != public:
+        raise ValueError("legacy boundary publication differs from verified legacy split")
+    boundary = DevelopmentReadBoundaryV2(
+        coverage_identity=coverage.coverage_identity,
+        split_identity=split.split_identity,
+        allowed_symbols=split.development_symbols,
         allowed_timeframes=split.policy.timeframes,
         allowed_intervals=intervals,
         forbidden_asset_symbols=split.asset_holdout_symbols,
         forbidden_temporal_intervals=forbidden,
         boundary_sha256=digest,
         canonical_bytes=publication_json_bytes(public),
+        source_readable_timeframes=split.policy.source_readable_timeframes,
+        derived_target_timeframes=split.policy.derived_target_timeframes,
         _factory_token=_BOUNDARY_FACTORY,
+        _legacy_source_scope=True,
     )
     _register_verified_boundary(boundary, coverage_bytes, split_bytes)
     return boundary
+
+
+def _verified_boundary_ancestry_bytes(
+    coverage: SourceCoveragePublicationV2,
+    split: DevelopmentSplitPublicationV2,
+) -> tuple[bytes, bytes]:
+    if split.coverage_identity != coverage.coverage_identity:
+        raise ValueError("split coverage identity differs from coverage publication")
+    coverage_bytes = verified_source_coverage_bytes(coverage)
+    split_bytes = _verified_split_bytes(split, coverage_bytes)
+    reopened_coverage = SourceCoveragePublicationV2.from_dict(
+        _decode_publication(coverage_bytes, "coverage")
+    )
+    reopened_split = DevelopmentSplitPublicationV2.from_dict(
+        _decode_publication(split_bytes, "split"), reopened_coverage
+    )
+    if reopened_split.to_dict() != split.to_dict():
+        raise ValueError("split differs from recomputed original publication bytes")
+    return coverage_bytes, split_bytes
 
 
 def verify_development_read_boundary_v2(
@@ -958,6 +1208,8 @@ def verify_development_read_boundary_v2(
     if not isinstance(boundary, DevelopmentReadBoundaryV2):
         raise TypeError("boundary must be DevelopmentReadBoundaryV2")
     _verify_registered_boundary(boundary)
+    if boundary.legacy_source_scope_schema:
+        raise ValueError("legacy boundary is ineligible for successor source trust")
     if boundary.coverage_identity != coverage.coverage_identity:
         raise ValueError("boundary coverage identity is stale or wrong")
     if boundary.split_identity != split.split_identity:
@@ -1438,7 +1690,11 @@ def _verify_registered_boundary(boundary: DevelopmentReadBoundaryV2) -> None:
     split = DevelopmentSplitPublicationV2.from_dict(
         _decode_publication(registered[3], "split"), coverage
     )
-    expected = issue_development_read_boundary_v2(coverage, split)
+    expected = (
+        _reopen_legacy_development_read_boundary_v2(boundary.to_dict(), coverage, split)
+        if boundary.legacy_source_scope_schema
+        else issue_development_read_boundary_v2(coverage, split)
+    )
     if expected.to_dict() != boundary.to_dict():
         raise ValueError("boundary differs from recomputed original publication bytes")
 
