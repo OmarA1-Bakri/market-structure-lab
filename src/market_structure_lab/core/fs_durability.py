@@ -6,6 +6,7 @@ import ctypes
 import errno
 import os
 from pathlib import Path
+import shutil
 import stat
 
 from market_structure_lab.core.secure_windows import WindowsHandleFilesystem
@@ -40,8 +41,48 @@ def durable_move_no_replace(source: Path, destination: Path) -> None:
     if _is_windows_platform():
         WindowsHandleFilesystem().move_no_replace_write_through(source, destination)
         return
-    _rename_no_replace_posix(source, destination)
+    try:
+        _rename_no_replace_posix(source, destination)
+    except OSError as error:
+        if error.errno not in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+            raise
+        _move_no_replace_posix_fallback(source, destination)
     fsync_directory_posix(destination.parent)
+
+
+def _move_no_replace_posix_fallback(source: Path, destination: Path) -> None:
+    metadata = source.lstat()
+    if stat.S_ISREG(metadata.st_mode):
+        os.link(source, destination, follow_symlinks=False)
+        source.unlink()
+        return
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise RuntimeError("publication fallback accepts only regular files and directories")
+    created = False
+    try:
+        destination.mkdir(mode=stat.S_IMODE(metadata.st_mode))
+        created = True
+        _link_regular_tree_no_replace(source, destination)
+        fsync_directory_posix(destination)
+    except BaseException:
+        if created:
+            shutil.rmtree(destination)
+        raise
+    shutil.rmtree(source)
+
+
+def _link_regular_tree_no_replace(source: Path, destination: Path) -> None:
+    for child in sorted(source.iterdir(), key=lambda path: path.name):
+        child_metadata = child.lstat()
+        target = destination / child.name
+        if stat.S_ISREG(child_metadata.st_mode):
+            os.link(child, target, follow_symlinks=False)
+        elif stat.S_ISDIR(child_metadata.st_mode):
+            target.mkdir(mode=stat.S_IMODE(child_metadata.st_mode))
+            _link_regular_tree_no_replace(child, target)
+            fsync_directory_posix(target)
+        else:
+            raise RuntimeError("publication fallback accepts only regular files and directories")
 
 
 def _rename_no_replace_posix(source: Path, destination: Path) -> None:

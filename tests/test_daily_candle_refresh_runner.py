@@ -13,6 +13,7 @@ import pytest
 
 
 PROJECT_RUNNER = Path("scripts/run_daily_candle_refresh.ps1")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 COMPATIBILITY_SHA = "4" * 64
 MANIFEST_SHA = "a" * 64
 REPORT_SHA = "b" * 64
@@ -132,10 +133,24 @@ raise SystemExit(8)
 
 
 def _write_cmd(path: Path, program: Path, mode: str) -> None:
+    command = f'"{sys.executable}" "{program}" {mode} %*'
+    if os.name != "nt":
+        command = f'python.exe "{_pwsh_path(program)}" {mode} %*'
     path.write_text(
-        f'@echo off\r\n"{sys.executable}" "{program}" {mode} %*\r\nexit /b %ERRORLEVEL%\r\n',
+        f"@echo off\r\n{command}\r\nexit /b %ERRORLEVEL%\r\n",
         encoding="utf-8",
     )
+
+
+def _pwsh_path(path: Path) -> str:
+    if os.name == "nt":
+        return str(path)
+    return subprocess.run(
+        ["wslpath", "-w", str(path.resolve())],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
 
 
 def _workspace(tmp_path: Path, scenario: dict[str, Any] | None = None) -> dict[str, Path]:
@@ -192,41 +207,50 @@ def _run(
     workspace: dict[str, Path],
     *,
     extra: tuple[str, ...] = (),
-    timeout: int = 30,
+    timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(
         {
-            "FAKE_PROJECT": str(workspace["root"]),
-            "FAKE_SCENARIO": str(workspace["scenario"]),
-            "FAKE_TRACE": str(workspace["trace"]),
+            "FAKE_PROJECT": _pwsh_path(workspace["root"]),
+            "FAKE_SCENARIO": _pwsh_path(workspace["scenario"]),
+            "FAKE_TRACE": _pwsh_path(workspace["trace"]),
         }
     )
+    if os.name != "nt":
+        env["WSLENV"] = ":".join(
+            filter(
+                None,
+                (env.get("WSLENV"), "FAKE_PROJECT", "FAKE_SCENARIO", "FAKE_TRACE"),
+            )
+        )
     return subprocess.run(
         [
             "pwsh.exe",
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
             "-File",
-            str(workspace["runner"]),
+            _pwsh_path(workspace["runner"]),
             "-ProjectRoot",
-            str(workspace["root"]),
+            _pwsh_path(workspace["root"]),
             "-CompatibilityPath",
-            str(workspace["compatibility"]),
+            _pwsh_path(workspace["compatibility"]),
             "-CompatibilitySha256",
             COMPATIBILITY_SHA,
             "-DockerExecutable",
-            str(workspace["docker"]),
+            _pwsh_path(workspace["docker"]),
             "-SyncExecutable",
-            str(workspace["sync"]),
+            _pwsh_path(workspace["sync"]),
             "-ContainerHealthTimeoutSeconds",
             "2",
             "-PollIntervalSeconds",
             "0",
             *extra,
         ],
-        cwd=workspace["root"],
+        cwd=REPOSITORY_ROOT,
         env=env,
         capture_output=True,
         text=True,
@@ -411,55 +435,64 @@ def test_runner_host_lock_rejects_a_concurrent_invocation(tmp_path: Path) -> Non
     env = os.environ.copy()
     env.update(
         {
-            "FAKE_PROJECT": str(workspace["root"]),
-            "FAKE_SCENARIO": str(workspace["scenario"]),
-            "FAKE_TRACE": str(workspace["trace"]),
+            "FAKE_PROJECT": _pwsh_path(workspace["root"]),
+            "FAKE_SCENARIO": _pwsh_path(workspace["scenario"]),
+            "FAKE_TRACE": _pwsh_path(workspace["trace"]),
         }
     )
+    if os.name != "nt":
+        env["WSLENV"] = ":".join(
+            filter(
+                None,
+                (env.get("WSLENV"), "FAKE_PROJECT", "FAKE_SCENARIO", "FAKE_TRACE"),
+            )
+        )
     command = [
         "pwsh.exe",
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
         "-File",
-        str(workspace["runner"]),
+        _pwsh_path(workspace["runner"]),
         "-ProjectRoot",
-        str(workspace["root"]),
+        _pwsh_path(workspace["root"]),
         "-CompatibilityPath",
-        str(workspace["compatibility"]),
+        _pwsh_path(workspace["compatibility"]),
         "-CompatibilitySha256",
         COMPATIBILITY_SHA,
         "-DockerExecutable",
-        str(workspace["docker"]),
+        _pwsh_path(workspace["docker"]),
         "-SyncExecutable",
-        str(workspace["sync"]),
+        _pwsh_path(workspace["sync"]),
         "-PollIntervalSeconds",
         "0",
     ]
     first = subprocess.Popen(
         command,
-        cwd=workspace["root"],
+        cwd=REPOSITORY_ROOT,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     lock = workspace["root"] / "data/exports/freshness/automation/daily-refresh.lock"
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 30
     while not lock.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert lock.exists()
 
     second = subprocess.run(
         command,
-        cwd=workspace["root"],
+        cwd=REPOSITORY_ROOT,
         env=env,
         capture_output=True,
         text=True,
         timeout=10,
         check=False,
     )
-    first_stdout, first_stderr = first.communicate(timeout=15)
+    first_stdout, first_stderr = first.communicate(timeout=120)
 
     assert first.returncode == 2, first_stderr
     assert second.returncode == 1
