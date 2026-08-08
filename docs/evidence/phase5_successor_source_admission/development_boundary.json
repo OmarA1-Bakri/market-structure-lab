@@ -1,0 +1,56 @@
+{
+  "allowed_intervals": [
+    {
+      "end": "2024-08-27T00:00:00Z",
+      "start": "2024-04-12T00:00:00Z"
+    },
+    {
+      "end": "2025-01-11T00:00:00Z",
+      "start": "2024-08-27T00:00:00Z"
+    },
+    {
+      "end": "2025-05-28T00:00:00Z",
+      "start": "2025-01-11T00:00:00Z"
+    },
+    {
+      "end": "2025-10-12T00:00:00Z",
+      "start": "2025-05-28T00:00:00Z"
+    },
+    {
+      "end": "2026-02-26T00:00:00Z",
+      "start": "2025-10-12T00:00:00Z"
+    }
+  ],
+  "allowed_symbols": [
+    "ADAUSDT",
+    "BNBUSDT",
+    "DOGEUSDT",
+    "DOTUSDT",
+    "IMXUSDT",
+    "INJUSDT",
+    "TAOUSDT",
+    "XLMUSDT",
+    "XRPUSDT",
+    "ZECUSDT"
+  ],
+  "allowed_timeframes": [
+    "1m",
+    "1h",
+    "4h"
+  ],
+  "boundary_sha256": "5c61c8cb11330ea3775fffbaeda05ff828407c77682d3eb1cc60ec69416e3ee2",
+  "coverage_identity": "SCV2-9f49d71d91d27b44f8c48d3a67f1eae245828756fc1224412594a1ea5a74c3b0",
+  "forbidden_asset_symbols": [
+    "ALGOUSDT",
+    "LINKUSDT",
+    "NEARUSDT"
+  ],
+  "forbidden_temporal_intervals": [
+    {
+      "end": "2026-07-13T00:00:00Z",
+      "start": "2026-02-26T00:00:00Z"
+    }
+  ],
+  "schema_version": "phase5-validation-development-read-boundary-v2",
+  "split_identity": "DSV2-446a576886ea34c24f013f24dcede8bbc2082df490afbb79d6b6686fd9315660"
+}

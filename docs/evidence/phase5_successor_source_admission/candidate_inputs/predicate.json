@@ -1,0 +1,50 @@
+{
+  "allowed_intervals": [
+    {
+      "end": "2024-08-27T00:00:00Z",
+      "start": "2024-04-12T00:00:00Z"
+    },
+    {
+      "end": "2025-01-11T00:00:00Z",
+      "start": "2024-08-27T00:00:00Z"
+    },
+    {
+      "end": "2025-05-28T00:00:00Z",
+      "start": "2025-01-11T00:00:00Z"
+    },
+    {
+      "end": "2025-10-12T00:00:00Z",
+      "start": "2025-05-28T00:00:00Z"
+    },
+    {
+      "end": "2026-02-26T00:00:00Z",
+      "start": "2025-10-12T00:00:00Z"
+    }
+  ],
+  "allowed_symbols": [
+    "ADAUSDT",
+    "BNBUSDT",
+    "DOGEUSDT",
+    "DOTUSDT",
+    "IMXUSDT",
+    "INJUSDT",
+    "TAOUSDT",
+    "XLMUSDT",
+    "XRPUSDT",
+    "ZECUSDT"
+  ],
+  "allowed_timeframes": [
+    "1m",
+    "1h",
+    "4h"
+  ],
+  "boundary_authorization": "before-connection-or-file-open",
+  "boundary_sha256": "5c61c8cb11330ea3775fffbaeda05ff828407c77682d3eb1cc60ec69416e3ee2",
+  "client_post_filter": false,
+  "evidence_sha256": "3ef4c576e2fbf36e7df37e97f1420fa4aa6506ba20f3d7e9330707006e7890a7",
+  "predicate_stage": "before-file-open-or-query",
+  "schema_version": "phase5-development-source-predicate-evidence-v3",
+  "source_identity": "callscore-rr000008-reconciled-view-v2:538f80c3f1c2026011e1394705ca2a6dab6d17870e466cf1ee7f733da340b503",
+  "source_view": "market_data.candles_reconciled",
+  "unbounded_scan": false
+}

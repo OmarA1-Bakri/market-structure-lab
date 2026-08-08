@@ -1,0 +1,18 @@
+{
+  "candidate_inputs_original_sha256": "1ee7330e5ae5f6970ce3c68f38d029a64735b031967f961524bdaeed31f57deb",
+  "candidate_inputs_predicate_sha256": "207027d3ebd865ecd7cf77641c505a9e7364fd9ed95af24f1432668da0a76ac0",
+  "decision": "rejected_before_verifier_publication",
+  "development_boundary_file_sha256": "697c4b7e56da3eeba3ea0614e461f161cb848a9edd0f832751e096b00692d066",
+  "development_split_file_sha256": "25337323e98e6f131d857ec7916cd4c4f08f58a074918ef82a0d6f606b3daff5",
+  "final_scope_access": {
+    "attempts": 0,
+    "records": 0,
+    "rows": 0
+  },
+  "reason": "source_readable_and_derived_target_timeframes_were_conflated",
+  "reviewer_lane": "independent_source_verifier",
+  "schema_version": "phase5-source-candidate-review-rejection-v1",
+  "source_coverage_file_sha256": "293d9f984b274d08b011ea6cf5bb4a0f2645c7a3c217bb85512861604f9f42e0",
+  "source_rows_accessed": 0,
+  "verifier_evidence_published": false
+}

@@ -1,0 +1,148 @@
+{
+  "asset_holdout_symbols": [
+    "BNBUSDT",
+    "DOGEUSDT",
+    "LINKUSDT"
+  ],
+  "blocks": [
+    {
+      "block_sha256": "234f38423cb7c01f23139527da1a110f344d0c826fcb287f16a66e61167b1a5b",
+      "day_count": 137,
+      "end": "2024-08-27T00:00:00Z",
+      "index": 0,
+      "start": "2024-04-12T00:00:00Z"
+    },
+    {
+      "block_sha256": "246b9f2ac6597bc6f7d3d92f025fa6b6043e83d48fcc63eb0777e22aa52af4e0",
+      "day_count": 137,
+      "end": "2025-01-11T00:00:00Z",
+      "index": 1,
+      "start": "2024-08-27T00:00:00Z"
+    },
+    {
+      "block_sha256": "21ac2eaee492ed2a333fe847cd2aa57ed5f764c28284a637bc37d9993808d75b",
+      "day_count": 137,
+      "end": "2025-05-28T00:00:00Z",
+      "index": 2,
+      "start": "2025-01-11T00:00:00Z"
+    },
+    {
+      "block_sha256": "0a4095bdb6a3327d535333f5cc960ce4818b1b0a031c1267712b9ed15c28f0c5",
+      "day_count": 137,
+      "end": "2025-10-12T00:00:00Z",
+      "index": 3,
+      "start": "2025-05-28T00:00:00Z"
+    },
+    {
+      "block_sha256": "96ff61d93c1a728ae02bf36f8344c77ceee3b6ce7e0f31ca26e9d275b2629b6d",
+      "day_count": 137,
+      "end": "2026-02-26T00:00:00Z",
+      "index": 4,
+      "start": "2025-10-12T00:00:00Z"
+    },
+    {
+      "block_sha256": "1abf8507a931af4a38b2925f1c26a93b4d7edf4271265fe1812ee7ffb491942b",
+      "day_count": 137,
+      "end": "2026-07-13T00:00:00Z",
+      "index": 5,
+      "start": "2026-02-26T00:00:00Z"
+    }
+  ],
+  "coverage_identity": "SCV2-d040e41a90bb5fe49b5f0ee0363b34e12bd26e44b1e1de3b4988682cf8eb2679",
+  "development_symbols": [
+    "ADAUSDT",
+    "ALGOUSDT",
+    "DOTUSDT",
+    "IMXUSDT",
+    "INJUSDT",
+    "NEARUSDT",
+    "TAOUSDT",
+    "XLMUSDT",
+    "XRPUSDT",
+    "ZECUSDT"
+  ],
+  "eligible_symbols": [
+    "ADAUSDT",
+    "ALGOUSDT",
+    "BNBUSDT",
+    "DOGEUSDT",
+    "DOTUSDT",
+    "IMXUSDT",
+    "INJUSDT",
+    "LINKUSDT",
+    "NEARUSDT",
+    "TAOUSDT",
+    "XLMUSDT",
+    "XRPUSDT",
+    "ZECUSDT"
+  ],
+  "excluded_symbols": [
+    {
+      "reason": "insufficient_complete_days",
+      "symbol": "APTUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "ARUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "AVAXUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "BTCUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "ETHUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "FETUSDT"
+    },
+    {
+      "reason": "insufficient_complete_days",
+      "symbol": "FTMUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "PENDLEUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "RENDERUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "SOLUSDT"
+    },
+    {
+      "reason": "source_conflict",
+      "symbol": "SUIUSDT"
+    },
+    {
+      "reason": "insufficient_complete_days",
+      "symbol": "THETAUSDT"
+    }
+  ],
+  "policy": {
+    "asset_holdout_fraction_denominator": 5,
+    "asset_holdout_fraction_numerator": 1,
+    "asset_holdout_salt": "market-structure-lab-phase5-v2-public-salt",
+    "block_count": 6,
+    "derived_target_timeframes": [
+      "1h",
+      "4h"
+    ],
+    "embargo_hours": 24,
+    "minimum_complete_days": 730,
+    "purge_hours": 24,
+    "source_readable_timeframes": [
+      "1m"
+    ],
+    "timeframe_contract_version": "source-vs-derived-v2"
+  },
+  "schema_version": "phase5-validation-development-split-v2",
+  "split_identity": "DSV2-d62f7ca9f9a8f8941b2d9ac37df4582d0cfbf488010c65a3dd106adf23ea0606"
+}

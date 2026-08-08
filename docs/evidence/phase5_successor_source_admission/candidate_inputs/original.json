@@ -1,0 +1,77 @@
+{
+  "allowed_intervals": [
+    {
+      "end": "2024-08-27T00:00:00Z",
+      "start": "2024-04-12T00:00:00Z"
+    },
+    {
+      "end": "2025-01-11T00:00:00Z",
+      "start": "2024-08-27T00:00:00Z"
+    },
+    {
+      "end": "2025-05-28T00:00:00Z",
+      "start": "2025-01-11T00:00:00Z"
+    },
+    {
+      "end": "2025-10-12T00:00:00Z",
+      "start": "2025-05-28T00:00:00Z"
+    },
+    {
+      "end": "2026-02-26T00:00:00Z",
+      "start": "2025-10-12T00:00:00Z"
+    }
+  ],
+  "allowed_symbols": [
+    "ADAUSDT",
+    "BNBUSDT",
+    "DOGEUSDT",
+    "DOTUSDT",
+    "IMXUSDT",
+    "INJUSDT",
+    "TAOUSDT",
+    "XLMUSDT",
+    "XRPUSDT",
+    "ZECUSDT"
+  ],
+  "allowed_timeframes": [
+    "1m",
+    "1h",
+    "4h"
+  ],
+  "boundary_sha256": "5c61c8cb11330ea3775fffbaeda05ff828407c77682d3eb1cc60ec69416e3ee2",
+  "manifest_sha256": "e0b0cb435df6eefe4a44ee6eb47ce6703cb0eb3604c5a156660cb6b1c5222d56",
+  "predicate_enforcement": "partition-scope-before-open",
+  "read_only": true,
+  "schema_version": "phase5-development-scoped-source-manifest-v3",
+  "source_ancestry": {
+    "candle_table_toc_identity": "public.candles:table-data:e89de0356aa6bd1d7bc057a42d72afbb26244f23a092b30cc934f515b4620cfc",
+    "coverage_identity": "SCV2-9f49d71d91d27b44f8c48d3a67f1eae245828756fc1224412594a1ea5a74c3b0",
+    "pg_restore_list_sha256": "cb3ad52f984c86b19df2b9499dd88256dd18479b127d393d82255126955c488d",
+    "raw_dump_byte_count": 889379858,
+    "raw_dump_ctime_ns": 1784013613744024700,
+    "raw_dump_device": 8530562954324972673,
+    "raw_dump_identity_sha256": "0631f0a6be4908766a7a89ab18f3bdf0c54d9cb2bb27da45fa5ebb72cc96262a",
+    "raw_dump_inode": 8444249302347175,
+    "raw_dump_mtime_ns": 1784008625124909700,
+    "raw_dump_path": "D:\\market-structure-lab\\data\\dumps\\callscore.dump",
+    "raw_dump_sha256": "1b6bcb39af41048b53729e9b094f0229163eb6ff6af9563adb666c96f5fd4da4",
+    "reconciled_view_definition_path": "D:\\market-structure-lab\\src\\market_structure_lab\\data\\migrations\\0002_candle_reconciliation.sql",
+    "reconciled_view_definition_sha256": "29e3c173480c331f76619b41c6271445ef70a678a5e798c2b20d679ff2e84b34",
+    "reconciliation_identity_sha256": "78d470cf83b07781e059fb2d6f42c1d8c131ce4af877b7ffff5b231ada595496",
+    "recovery_manifest_path": "D:\\market-structure-lab\\data\\exports\\manifests\\recovery-callscore-20260714-validated.json",
+    "recovery_manifest_sha256": "482f3a09a4e24a62b0ad92f5bb90028eead67fe961eb1d3320dd38d13fd105d2",
+    "rr_promotion_receipt_path": "D:\\market-structure-lab\\data\\exports\\reconciliation\\promotions\\run_id=RR-000008\\receipt.json",
+    "rr_promotion_receipt_sha256": "cb399ac01d0beeea4666da071d9186e9a144f3f7fe5e4d1bf760696c631e8529",
+    "source_mapping_version": "callscore-candles-v1",
+    "source_view": "market_data.candles_reconciled",
+    "view_evidence_kind": "migration-definition-code-ancestry-not-live-state"
+  },
+  "source_identity": "callscore-rr000008-reconciled-view-v2:538f80c3f1c2026011e1394705ca2a6dab6d17870e466cf1ee7f733da340b503",
+  "use_policy": {
+    "commercial_use_authorized": false,
+    "data_rights_status": "not-established-by-this-evidence",
+    "redistribution_authorized": false,
+    "technical_use_only": true,
+    "use_class": "private-quantitative-research"
+  }
+}
