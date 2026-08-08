@@ -23,6 +23,9 @@ from market_structure_lab.research.models import (
     ValidationWorkDemand,
 )
 from market_structure_lab.research.outcomes import DevelopmentOutcomeRowV2
+from market_structure_lab.research.validation_family_b_execution import (
+    issue_family_a_inner_fold_evaluation,
+)
 from market_structure_lab.research.validation_v2 import (
     ValidationV2SourceBundle,
     derive_verified_vs0001_candidate_inputs_v2,
@@ -36,6 +39,8 @@ from market_structure_lab.research.validation_v2_costs import (
 )
 from market_structure_lab.research.validation_v2_inference import RawPrimaryOpportunityRowV2
 from market_structure_lab.research.validation_v2_models import (
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+    PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
     PHASE5_BOOTSTRAP_HOLM_POLICY_IDENTITY,
     PHASE5_VS0001_POPULATION_POLICY_IDENTITY,
     SourceCoverageIdentityV2,
@@ -235,7 +240,10 @@ def test_candidate_direction_is_not_misreported_as_persistence_donor_shortage() 
         input_sha256="d" * 64,
     )
     candidate = replace(candidate_inputs.rows[0], prior_completed_close_return=-0.01)
-    candidate_inputs = SimpleNamespace(**{**vars(candidate_inputs), "rows": (candidate,)})
+    candidate_inputs = cast(
+        Any,
+        SimpleNamespace(**{**vars(candidate_inputs), "rows": (candidate,)}),
+    )
 
     unconditional, persistence, unavailable = module._derive_vs0001_control_input_material_v2(  # noqa: SLF001
         candidate_inputs,
@@ -262,16 +270,22 @@ def test_control_stratum_rejects_distinct_aggregate_series_with_same_interval() 
             "series_identity": "f" * 64,
         }
     )
-    candidate_inputs = SimpleNamespace(**{**vars(candidate_inputs), "rows": (first, second)})
-    registration = SimpleNamespace(
-        **{
-            **vars(registration),
-            "signals": (
-                registration.signals[0],
-                SimpleNamespace(signal_id=second.event_id),
-            ),
-            "aggregate_series": (registration.aggregate_series[0], second_series),
-        }
+    candidate_inputs = cast(
+        Any,
+        SimpleNamespace(**{**vars(candidate_inputs), "rows": (first, second)}),
+    )
+    registration = cast(
+        Any,
+        SimpleNamespace(
+            **{
+                **vars(registration),
+                "signals": (
+                    registration.signals[0],
+                    SimpleNamespace(signal_id=second.event_id),
+                ),
+                "aggregate_series": (registration.aggregate_series[0], second_series),
+            }
+        ),
     )
 
     with pytest.raises(ValueError, match="aggregate series identity"):
@@ -1253,6 +1267,29 @@ def test_public_runner_executes_one_real_vs0001_development_outcome(
     assert result.p_value is None
     assert result.metrics["event_count"] == 1
     assert verify_original_validation_slot_result_v2(result) is result
+    inner_fold_evaluation = issue_family_a_inner_fold_evaluation(
+        result,
+        candidate_id="HC-A-001",
+        opportunity_population_sha256=candidate_inputs.input_set_sha256,
+        inner_validation_score=0.0,
+        outer_fold_id="outer-1",
+        inner_fold_id="inner-1",
+        development_split_sha256=sources.boundary.boundary_sha256,
+        purge_sha256="a" * 64,
+        embargo_sha256="b" * 64,
+        source_publication_sha256=hashlib.sha256(
+            sources.source_publication.canonical_bytes
+        ).hexdigest(),
+        cost_policy_sha256=sources.cost_authority.cost_identity.value.removeprefix(
+            "CSTV2-"
+        ),
+        control_policy_sha256="c" * 64,
+        statistical_policy_sha256="d" * 64,
+        amendment_id=PHASE5_BOOTSTRAP_HOLM_AMENDMENT_ID,
+        amendment_sha256=PHASE5_BOOTSTRAP_HOLM_AMENDMENT_SHA256,
+    )
+    assert inner_fold_evaluation.core_result_sha256 == result.result_sha256
+    assert inner_fold_evaluation.verify() is inner_fold_evaluation
     real_compute = module._compute_real_vs0001_material_v2  # noqa: SLF001
 
     def fabricated_replay(**kwargs: object) -> object:
